@@ -20,13 +20,14 @@ const BOARDS = {
 
 const ARCHIVE_TIME_MS = 3 * 24 * 60 * 60 * 1000;
 
-function json(data, status = 200) {
+function json(data, status = 200, extraHeaders = {}) {
     return new Response(JSON.stringify(data), {
         status,
         headers: {
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': '*'
+            'Access-Control-Allow-Headers': '*',
+            ...extraHeaders
         }
     });
 }
@@ -117,6 +118,29 @@ export async function onRequest(context) {
             if (!board || !BOARDS[board]) return json({ error: 'Invalid board' }, 400);
 
             const cutoff = Date.now() - ARCHIVE_TIME_MS;
+
+            // HTTP Caching & 304 Not Modified check via fast index lookup
+            let metaSql = 'SELECT MAX(bumped_at) as max_bump, COUNT(*) as count FROM threads WHERE board = ?';
+            if (isArchive) {
+                metaSql += ` AND bumped_at < ${cutoff}`;
+            }
+            const meta = await db.prepare(metaSql).bind(board).first();
+            const maxBump = meta?.max_bump || 0;
+            const count = meta?.count || 0;
+            const etag = `W/"th-${board}-${isArchive ? 'arch' : 'act'}-${count}-${maxBump}"`;
+
+            if (request.headers.get('if-none-match') === etag) {
+                return new Response(null, {
+                    status: 304,
+                    headers: {
+                        'ETag': etag,
+                        'Cache-Control': 'no-cache',
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Allow-Headers': '*'
+                    }
+                });
+            }
+
             let sql = `
                 SELECT t.*, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count
                 FROM threads t WHERE t.board = ?
@@ -130,15 +154,33 @@ export async function onRequest(context) {
             const list = await db.prepare(sql).bind(board).all();
             const threads = list.results || [];
 
-            // Attach preview replies
-            for (const th of threads) {
-                const prev = await db.prepare(
-                    'SELECT * FROM (SELECT * FROM replies WHERE thread_id = ? ORDER BY created_at DESC LIMIT 3) ORDER BY created_at ASC'
-                ).bind(th.id).all();
-                th.preview_replies = prev.results || [];
+            // Attach preview replies via single window function query (replaces N+1 loop)
+            if (threads.length > 0) {
+                const threadIds = threads.map(t => t.id);
+                const placeholders = threadIds.map(() => '?').join(',');
+                const prev = await db.prepare(`
+                    WITH ranked_replies AS (
+                        SELECT r.*,
+                               ROW_NUMBER() OVER (PARTITION BY r.thread_id ORDER BY r.created_at DESC) as rn
+                        FROM replies r
+                        WHERE r.thread_id IN (${placeholders})
+                    )
+                    SELECT * FROM ranked_replies
+                    WHERE rn <= 3
+                    ORDER BY created_at ASC
+                `).bind(...threadIds).all();
+
+                const replyMap = new Map();
+                for (const r of (prev.results || [])) {
+                    if (!replyMap.has(r.thread_id)) replyMap.set(r.thread_id, []);
+                    replyMap.get(r.thread_id).push(r);
+                }
+                for (const th of threads) {
+                    th.preview_replies = replyMap.get(th.id) || [];
+                }
             }
 
-            return json({ success: true, threads });
+            return json({ success: true, threads }, 200, { 'ETag': etag, 'Cache-Control': 'no-cache' });
         }
 
         // 3. GET /api/thread?id=...
@@ -149,8 +191,21 @@ export async function onRequest(context) {
             const thread = await db.prepare('SELECT * FROM threads WHERE id = ?').bind(id).first();
             if (!thread) return json({ error: 'Not found' }, 404);
 
+            const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}"`;
+            if (request.headers.get('if-none-match') === etag) {
+                return new Response(null, {
+                    status: 304,
+                    headers: {
+                        'ETag': etag,
+                        'Cache-Control': 'no-cache',
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Allow-Headers': '*'
+                    }
+                });
+            }
+
             const replies = await db.prepare('SELECT * FROM replies WHERE thread_id = ? ORDER BY created_at ASC').bind(id).all();
-            return json({ success: true, thread, replies: replies.results || [] });
+            return json({ success: true, thread, replies: replies.results || [] }, 200, { 'ETag': etag, 'Cache-Control': 'no-cache' });
         }
 
         // 4. POST /api/threads

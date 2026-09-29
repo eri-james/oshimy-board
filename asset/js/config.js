@@ -35,8 +35,12 @@ let isAutoUpdateEnabled = true;
 
 const ARCHIVE_TIME_MS = 3 * 24 * 60 * 60 * 1000; // 3 Days
 
-// Helper: API fetch wrapper with Auth header
+// In-memory cache for ETags to support HTTP 304 Not Modified caching across polling
+const etagCache = new Map();
+
+// Helper: API fetch wrapper with Auth header, ETag caching, and 304 Not Modified handling
 async function apiFetch(endpoint, options = {}) {
+    const isGet = !options.method || options.method === 'GET';
     const headers = options.headers || {};
     if (authToken) {
         headers['Authorization'] = `Bearer ${authToken}`;
@@ -45,12 +49,32 @@ async function apiFetch(endpoint, options = {}) {
         headers['Content-Type'] = 'application/json';
         options.body = JSON.stringify(options.body);
     }
+    // For GET requests, attach stored ETag if available
+    if (isGet && etagCache.has(endpoint)) {
+        headers['If-None-Match'] = etagCache.get(endpoint).etag;
+    }
     options.headers = headers;
 
     const response = await fetch(API_BASE + endpoint, options);
+
+    // 304 Not Modified: return cached data with notModified flag
+    if (response.status === 304) {
+        const cached = etagCache.get(endpoint);
+        return cached ? { ...cached.data, notModified: true } : { notModified: true };
+    }
+
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Request failed' }));
         throw new Error(errorData.error || `HTTP ${response.status}`);
     }
-    return response.json();
+
+    const data = await response.json();
+    const etag = response.headers.get('ETag');
+    if (isGet && etag) {
+        etagCache.set(endpoint, { etag, data });
+    } else if (!isGet) {
+        // Invalidate GET cache on mutation (POST/PUT/DELETE)
+        etagCache.clear();
+    }
+    return data;
 }

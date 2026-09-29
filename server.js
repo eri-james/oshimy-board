@@ -97,6 +97,23 @@ app.get('/api/threads', (req, res) => {
         const now = Date.now();
         const cutoff = now - ARCHIVE_TIME_MS;
 
+        // HTTP Caching & 304 Not Modified check using fast index lookup
+        let metaQuery = 'SELECT MAX(bumped_at) as max_bump, COUNT(*) as count FROM threads WHERE board = ?';
+        if (isArchive) {
+            metaQuery += ` AND bumped_at < ${cutoff}`;
+        }
+        const meta = db.prepare(metaQuery).get(board);
+        const maxBump = meta?.max_bump || 0;
+        const count = meta?.count || 0;
+        const etag = `W/"th-${board}-${isArchive ? 'arch' : 'act'}-${count}-${maxBump}"`;
+
+        res.set('ETag', etag);
+        res.set('Cache-Control', 'no-cache');
+
+        if (req.headers['if-none-match'] === etag) {
+            return res.status(304).end();
+        }
+
         let query = `
             SELECT t.*, 
                 (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count
@@ -113,18 +130,33 @@ app.get('/api/threads', (req, res) => {
 
         const threads = db.prepare(query).all(board);
 
-        // Fetch last 3 preview replies for each thread
-        const getPreviewReplies = db.prepare(`
-            SELECT * FROM (
-                SELECT * FROM replies
-                WHERE thread_id = ?
-                ORDER BY created_at DESC
-                LIMIT 3
-            ) ORDER BY created_at ASC
-        `);
+        // Fix N+1 query loop: Fetch 3 preview replies for ALL threads in a single query using window function
+        if (threads.length > 0) {
+            const threadIds = threads.map(t => t.id);
+            const placeholders = threadIds.map(() => '?').join(',');
+            const previewReplies = db.prepare(`
+                WITH ranked_replies AS (
+                    SELECT r.*,
+                           ROW_NUMBER() OVER (PARTITION BY r.thread_id ORDER BY r.created_at DESC) as rn
+                    FROM replies r
+                    WHERE r.thread_id IN (${placeholders})
+                )
+                SELECT * FROM ranked_replies
+                WHERE rn <= 3
+                ORDER BY created_at ASC
+            `).all(...threadIds);
 
-        for (const th of threads) {
-            th.preview_replies = getPreviewReplies.all(th.id);
+            const replyMap = new Map();
+            for (const r of previewReplies) {
+                if (!replyMap.has(r.thread_id)) {
+                    replyMap.set(r.thread_id, []);
+                }
+                replyMap.get(r.thread_id).push(r);
+            }
+
+            for (const th of threads) {
+                th.preview_replies = replyMap.get(th.id) || [];
+            }
         }
 
         res.json({ success: true, threads });
@@ -144,6 +176,15 @@ app.get('/api/thread', (req, res) => {
         const thread = db.prepare('SELECT * FROM threads WHERE id = ?').get(threadId);
         if (!thread) {
             return res.status(404).json({ error: 'Thread not found' });
+        }
+
+        // HTTP Caching & 304 Not Modified based on thread bumped_at and lock/pin status
+        const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}"`;
+        res.set('ETag', etag);
+        res.set('Cache-Control', 'no-cache');
+
+        if (req.headers['if-none-match'] === etag) {
+            return res.status(304).end();
         }
 
         const replies = db.prepare(`

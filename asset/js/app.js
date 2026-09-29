@@ -292,6 +292,9 @@ async function loadBoardView(isArchive = false, isSilent = false) {
     try {
         const viewParam = isArchive ? '&view=archive' : '';
         const res = await apiFetch(`/threads?b=${currentBoard}${viewParam}`);
+        if (res.notModified) {
+            return; // 304 Not Modified: server confirmed zero changes
+        }
         const threads = res.threads || [];
 
         if (threads.length === 0) {
@@ -471,6 +474,9 @@ async function loadThreadView(threadId, isSilent = false) {
 
     try {
         const data = await apiFetch(`/thread?id=${threadId}`);
+        if (data.notModified) {
+            return; // 304 Not Modified: server confirmed zero changes
+        }
         const th = data.thread;
         const replies = data.replies || [];
 

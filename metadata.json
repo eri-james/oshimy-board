@@ -1,8 +1,8 @@
 {
   "name": "OshiMY - Malaysian VTuber & Otaku Imageboard",
   "description": "The premier anonymous imageboard for the Malaysian Virtual YouTuber community and Otaku culture. Discuss streams, oshis, anime, and art on OshiMY.",
-  "permissions": [],
-  "capabilities": [
+  "requestFramePermissions": [],
+  "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }

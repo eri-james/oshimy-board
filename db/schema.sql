@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS threads (
 
 CREATE INDEX IF NOT EXISTS idx_threads_board_bumped ON threads(board, bumped_at DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_pinned ON threads(is_pinned DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_user_id ON threads(user_id);
 
 CREATE TABLE IF NOT EXISTS replies (
     id TEXT PRIMARY KEY,
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS replies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_replies_thread_created ON replies(thread_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_replies_user_id ON replies(user_id);
 
 CREATE TABLE IF NOT EXISTS watchlist (
     user_id TEXT NOT NULL,

@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS threads (
 
 CREATE INDEX IF NOT EXISTS idx_threads_board_bumped ON threads(board, bumped_at DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_pinned ON threads(is_pinned DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_user_id ON threads(user_id);
 
 CREATE TABLE IF NOT EXISTS replies (
     id TEXT PRIMARY KEY,
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS replies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_replies_thread_created ON replies(thread_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_replies_user_id ON replies(user_id);
 
 
 INSERT OR IGNORE INTO users (id, username, password_hash, role, display_title, created_at) VALUES ('user_admin_01', 'admin', '62dc8f73f44b13a45827211db1e056b7:10c9b56fd0f7b65a54cdb94c2fff1ef1b87eaa5917d8dc726ec456d02b719a1be7961e6f377410bc000de17bcfed3575727d1b11afbf3ee837182a171a08808b', 'admin', 'Admin 🛡️', 1790654700092);
