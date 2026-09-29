@@ -59,6 +59,7 @@
                 <span id="watchNav" style="display:none;">[ <a href="javascript:void(0)" onclick="openWatchlistModal()">⭐ Watchlist <span id="watchlistBadge" style="opacity:0.8; font-size:0.85em;">(0)</span></a> ]</span>
             </span>
             <span id="authStatus">[ <a href="javascript:void(0)" onclick="openAuthModal('login')">Login</a> ]</span>
+            <span>[ <a href="javascript:void(0)" onclick="openShortcutsModal()" title="Keyboard Shortcuts (?)">⌨️ Keys</a> ]</span>
             <span>[ <a href="#bottom">Bottom</a> ]</span>
         </div>
     </div>
@@ -102,7 +103,7 @@
     <div id="homeView" class="home-view-wrapper" style="display:none;">
         <!-- BANNER IMAGE SLOT -->
         <div class="home-banner-wrapper" id="homeBannerWrapper">
-            <img id="homeBannerImg" class="home-banner-img" src="https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=300&q=80" alt="OshiMY Community Banner">
+            <img id="homeBannerImg" class="home-banner-img" src="https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=300&q=80" alt="OshiMY Community Banner" loading="lazy" decoding="async">
             
             <!-- Admin Hover Controls -->
             <div id="bannerAdminControl" class="banner-admin-control" style="display:none;">
@@ -223,15 +224,31 @@
         </div>
     </div>
 
-    <!-- 4. VIEW: BOARD INDEX -->
+    <!-- 4. VIEW: BOARD INDEX & CATALOG -->
     <div id="boardView" style="display:none;">
+        <div id="catalogToolbar" class="catalog-toolbar" style="display:none;">
+            <div class="catalog-search-box">
+                <input type="text" id="catalogSearchInput" placeholder="🔍 Filter catalog (subject / text)..." oninput="handleCatalogSearch(this.value)">
+            </div>
+            <div class="catalog-sort-box">
+                <label for="catalogSortSelect">Sort:</label>
+                <select id="catalogSortSelect" onchange="handleCatalogSort(this.value)">
+                    <option value="bump">Recent Bump</option>
+                    <option value="date">Newest Thread</option>
+                    <option value="replies">Most Replies</option>
+                </select>
+            </div>
+            <div id="catalogStats" style="font-size:0.85em; opacity:0.85; font-weight:bold;"></div>
+        </div>
+        <div id="catalogGrid" class="catalog-grid" style="display:none;"></div>
         <div id="threadList"></div>
     </div>
 
     <!-- 5. VIEW: SINGLE THREAD -->
     <div id="threadView" style="display:none;">
-        <div style="max-width: 1000px; margin: 0 auto 15px auto;">
+        <div style="max-width: 1000px; margin: 0 auto 15px auto; display: flex; justify-content: space-between; align-items: center;">
             <a href="#" onclick="window.location.hash=''; return false;" class="reply-link" style="float:none; display:inline-block;"> ⬅ Return to Board</a>
+            <button type="button" onclick="openQuickReply(currentThreadId)" style="background:var(--main-accent); color:#fff; border:none; padding:5px 12px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:0.85em;">⚡ Quick Reply</button>
         </div>
         <div id="opContainer"></div>
         <div id="repliesContainer"></div>
@@ -254,8 +271,73 @@
         <div id="lightboxContent">
             <img id="lbImg" style="display:none">
             <video id="lbVideo" controls style="display:none"></video>
-            <iframe id="lbFrame" frameborder="0" allowfullscreen style="display:none"></iframe>
+            <iframe id="lbFrame" frameborder="0" allowfullscreen style="display:none" loading="lazy"></iframe>
             <div id="lbCustom" style="display:none;" onclick="event.stopPropagation()"></div>
+        </div>
+    </div>
+
+    <!-- FLOATING QUICK REPLY (QR) DOCK -->
+    <div id="quickReplyDock" class="qr-dock" style="display:none;">
+        <div class="qr-header" id="qrHeader">
+            <span class="qr-title" id="qrTitle">⚡ Quick Reply</span>
+            <div class="qr-controls">
+                <button type="button" class="qr-ctrl-btn" onclick="toggleQuickReplyMinimize()" title="Minimize / Expand" id="qrMinBtn">−</button>
+                <button type="button" class="qr-ctrl-btn" onclick="closeQuickReply()" title="Close (Esc)">✕</button>
+            </div>
+        </div>
+        <div class="qr-body" id="qrBody">
+            <input type="text" id="qrName" placeholder="Name (Anonymous)" value="Anonymous">
+            <input type="text" id="qrSubject" placeholder="Subject" style="display:none;">
+            <textarea id="qrComment" placeholder="Write your comment... (Ctrl+Enter to submit)" required></textarea>
+            <div style="display:flex; gap:6px; align-items:center;">
+                <input type="url" id="qrImage" placeholder="Media URL (X/YT/Reddit/Image/Video)" style="flex-grow:1;">
+                <button type="button" id="qrUploadBtn" class="qr-upload-btn">Upload</button>
+            </div>
+            <div id="qrMediaBadge" style="display:none; font-size:0.75em; padding:3px 6px; border-radius:4px; font-weight:bold;"></div>
+            <input type="file" id="qrHiddenFileInput" accept="image/*" style="display:none;">
+            <div class="qr-footer">
+                <div id="qrStatus" style="font-size:0.78em; opacity:0.85; flex:1; min-height:16px;"></div>
+                <button type="button" id="qrSubmitBtn" class="qr-submit-btn" onclick="submitQuickReply()">Submit</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- KEYBOARD SHORTCUTS MODAL -->
+    <div id="shortcutsModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:var(--card-bg); color:var(--text-color); border:1px solid var(--border-color); border-radius:var(--border-radius); padding:24px; width:92%; max-width:440px; box-shadow:var(--shadow);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+                <h3 style="margin:0; font-size:1.15rem; display:flex; align-items:center; gap:8px;">⌨️ Keyboard Shortcuts</h3>
+                <button onclick="closeShortcutsModal()" style="background:none; border:none; color:var(--text-color); font-size:18px; cursor:pointer;">✕</button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:10px; font-size:0.92em; line-height:1.6;">
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px dashed var(--border-color); padding-bottom:6px;">
+                    <span><b>Jump to next post / reply</b></span>
+                    <kbd style="background:var(--reply-bg); border:1px solid var(--border-color); border-radius:4px; padding:2px 8px; font-weight:bold;">J</kbd>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px dashed var(--border-color); padding-bottom:6px;">
+                    <span><b>Jump to previous post / reply</b></span>
+                    <kbd style="background:var(--reply-bg); border:1px solid var(--border-color); border-radius:4px; padding:2px 8px; font-weight:bold;">K</kbd>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px dashed var(--border-color); padding-bottom:6px;">
+                    <span><b>Open Quick Reply</b></span>
+                    <kbd style="background:var(--reply-bg); border:1px solid var(--border-color); border-radius:4px; padding:2px 8px; font-weight:bold;">R</kbd>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px dashed var(--border-color); padding-bottom:6px;">
+                    <span><b>Submit post</b></span>
+                    <kbd style="background:var(--reply-bg); border:1px solid var(--border-color); border-radius:4px; padding:2px 8px; font-weight:bold;">Ctrl + Enter</kbd>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px dashed var(--border-color); padding-bottom:6px;">
+                    <span><b>Close popups / Lightbox / QR</b></span>
+                    <kbd style="background:var(--reply-bg); border:1px solid var(--border-color); border-radius:4px; padding:2px 8px; font-weight:bold;">Esc</kbd>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span><b>Toggle shortcuts help</b></span>
+                    <kbd style="background:var(--reply-bg); border:1px solid var(--border-color); border-radius:4px; padding:2px 8px; font-weight:bold;">?</kbd>
+                </div>
+            </div>
+            <div style="margin-top:16px; text-align:right;">
+                <button onclick="closeShortcutsModal()" style="padding:6px 14px; background:var(--main-accent); color:#fff; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Close</button>
+            </div>
         </div>
     </div>
 

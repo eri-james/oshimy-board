@@ -44,28 +44,24 @@ function formatComment(text) {
 }
 
 function quotePost(postId, threadId) {
-    // Scenario 1: We are on the Board View (or a different thread)
-    // We need to jump to the correct thread first.
+    // If not in the thread, navigate to it first
     if (!currentThreadId || currentThreadId !== threadId) {
-        // Save the quote to browser memory
         sessionStorage.setItem('pending_quote', '>>' + postId);
-        
-        // Redirect to the correct thread
         window.location.hash = '#thread_' + threadId;
         return;
     }
 
-    // Scenario 2: We are already in the correct thread
+    // Modern Imageboard UX: Open floating Quick Reply dock right where the user is reading
+    if (typeof openQuickReply === 'function') {
+        openQuickReply(threadId, postId);
+    }
+
+    // Also populate static form textarea as fallback
     const box = document.getElementById('commentInput');
-    
-    // Add new line if box isn't empty
-    const prefix = box.value.length > 0 ? '\n' : '';
-    
-    box.value += `${prefix}>>${postId}\n`;
-    box.focus();
-    
-    // Scroll to form
-    document.getElementById('postForm').scrollIntoView();
+    if (box) {
+        const prefix = box.value.length > 0 && !box.value.endsWith('\n') ? '\n' : '';
+        box.value += `${prefix}>>${postId}\n`;
+    }
 }
 
 function highlightPost(id) { 

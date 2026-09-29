@@ -32,6 +32,8 @@ function acceptNSFW() {
 window.addEventListener('hashchange', router);
 window.addEventListener('load', () => {
     initAuth();
+    initQuickReply();
+    initKeyboardNavigation();
     loadSiteSettings();
     router();
     startAutoUpdate();
@@ -149,9 +151,16 @@ function renderBoardNav() {
         }
     }
 
-    // Add Archive Toggle if inside a board
+    // Add Index / Catalog / Archive Toggles if inside a board
     if (currentBoard && BOARDS[currentBoard]) {
         const isArch = new URLSearchParams(window.location.search).get('view') === 'archive';
+        const isCat = typeof isCatalogMode === 'function' ? isCatalogMode() : false;
+
+        const indexStyle = (!isCat && !isArch) ? 'style="font-weight:900; color:var(--main-accent); border-bottom:1px solid;"' : '';
+        const catStyle = (isCat && !isArch) ? 'style="font-weight:900; color:var(--main-accent); border-bottom:1px solid;"' : '';
+
+        html += ` [ <a href="javascript:void(0)" onclick="setBoardMode('index')" ${indexStyle}>📋 Index</a> | <a href="javascript:void(0)" onclick="setBoardMode('catalog')" ${catStyle}>🗂️ Catalog</a> ]`;
+
         const archLabel = isArch ? '⚡ Active' : '📦 Archive';
         const archHref = isArch ? `?b=${currentBoard}` : `?b=${currentBoard}&view=archive`;
         html += ` [ <a href="${archHref}" style="opacity:0.85; font-style:italic;">${archLabel}</a> ]`;
@@ -270,20 +279,249 @@ async function resetBannerUrl() {
 
 // --- LOAD BOARD VIEW ---
 let lastBoardSignature = "";
+let currentBoardViewMode = localStorage.getItem('oshimy_board_mode') || 'index';
+let cachedBoardThreads = [];
+let catalogFilterQuery = "";
+let catalogSortCriteria = "bump";
+
+function isCatalogMode() {
+    const urlParam = new URLSearchParams(window.location.search).get('view');
+    if (urlParam === 'catalog') return true;
+    if (urlParam === 'archive') return false;
+    return currentBoardViewMode === 'catalog';
+}
+
+function setBoardMode(mode) {
+    currentBoardViewMode = mode;
+    localStorage.setItem('oshimy_board_mode', mode);
+    renderBoardNav();
+    loadBoardView(false, false);
+}
+
+function handleCatalogSearch(val) {
+    catalogFilterQuery = val || "";
+    renderCatalogGrid(cachedBoardThreads);
+}
+
+function handleCatalogSort(val) {
+    catalogSortCriteria = val || "bump";
+    renderCatalogGrid(cachedBoardThreads);
+}
+
+function renderCatalogGrid(threads) {
+    const grid = document.getElementById('catalogGrid');
+    const stats = document.getElementById('catalogStats');
+    if (!grid) return;
+
+    let list = [...(threads || [])];
+
+    // Filter
+    if (catalogFilterQuery.trim()) {
+        const q = catalogFilterQuery.toLowerCase();
+        list = list.filter(t => 
+            (t.subject && t.subject.toLowerCase().includes(q)) ||
+            (t.comment && t.comment.toLowerCase().includes(q)) ||
+            (t.name && t.name.toLowerCase().includes(q))
+        );
+    }
+
+    // Sort
+    if (catalogSortCriteria === 'date') {
+        list.sort((a, b) => b.created_at - a.created_at);
+    } else if (catalogSortCriteria === 'replies') {
+        list.sort((a, b) => (b.reply_count || 0) - (a.reply_count || 0));
+    } // default is bump order (already sorted by server)
+
+    if (stats) {
+        stats.innerText = `${list.length} ${list.length === 1 ? 'thread' : 'threads'}`;
+    }
+
+    if (list.length === 0) {
+        grid.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; padding: 40px; opacity: 0.7;">No matching threads found in catalog.</div>`;
+        return;
+    }
+
+    let html = "";
+    for (const th of list) {
+        const thumb = getCatalogThumbnail(th.media_url);
+        const subject = escapeHtml(th.subject || 'No Subject');
+        const snippet = escapeHtml((th.comment || '').replace(/\n+/g, ' ')).substring(0, 90);
+        const replies = th.reply_count || 0;
+        const pinned = th.is_pinned ? '📌 ' : '';
+        const locked = th.is_locked ? '🔒 ' : '';
+        const dateStr = new Date(th.bumped_at || th.created_at).toLocaleDateString();
+
+        html += `
+            <a href="?b=${currentBoard}#thread_${th.id}" class="catalog-tile" id="cat_${th.id}">
+                <div class="catalog-thumb-container">
+                    ${thumb}
+                    <span class="catalog-badge-overlay">R: ${replies}</span>
+                </div>
+                <div class="catalog-info">
+                    <div class="catalog-subject">${pinned}${locked}${subject}</div>
+                    <div class="catalog-snippet">${snippet}</div>
+                </div>
+                <div class="catalog-meta">
+                    <span>No.${th.id.substring(1, 8)}</span>
+                    <span>${dateStr}</span>
+                </div>
+            </a>
+        `;
+    }
+
+    grid.innerHTML = html;
+}
+
+function getCatalogThumbnail(mediaUrl) {
+    if (!mediaUrl || !mediaUrl.trim()) {
+        return `<div class="catalog-placeholder-icon">💬</div>`;
+    }
+    const media = typeof getMediaType === 'function' ? getMediaType(mediaUrl) : null;
+    if (!media) {
+        return `<div class="catalog-placeholder-icon">💬</div>`;
+    }
+
+    if (media.type === 'youtube') {
+        const thumb = `https://img.youtube.com/vi/${media.id}/mqdefault.jpg`;
+        return `<img src="${thumb}" class="catalog-thumb" alt="YouTube Thumbnail" loading="lazy" decoding="async">`;
+    }
+    if (media.type === 'x') {
+        return `<div class="catalog-placeholder-icon" style="color:#1DA1F2;">𝕏</div>`;
+    }
+    if (media.type === 'reddit' || media.type === 'reddit_video') {
+        return `<div class="catalog-placeholder-icon" style="color:#FF4500;">🤖</div>`;
+    }
+    if (media.type === 'video') {
+        return `<div class="catalog-placeholder-icon">🎥</div>`;
+    }
+    if (media.type === 'audio') {
+        return `<div class="catalog-placeholder-icon">🎵</div>`;
+    }
+    return `<img src="${escapeHtml(media.url)}" class="catalog-thumb" alt="Thumbnail" loading="lazy" decoding="async" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\'>🖼️</div>';">`;
+}
+
+// Smart Diff: updates threads in place without wiping innerHTML
+function smartDiffBoard(container, threads) {
+    const existingCards = new Map();
+    for (const card of Array.from(container.querySelectorAll('.thread'))) {
+        const id = card.id.replace('thread_', '');
+        existingCards.set(id, card);
+    }
+
+    const targetIds = new Set(threads.map(t => t.id));
+
+    // 1. Remove deleted or archived threads
+    for (const [id, card] of existingCards.entries()) {
+        if (!targetIds.has(id)) {
+            const nextEl = card.nextElementSibling;
+            if (nextEl && nextEl.tagName === 'HR') nextEl.remove();
+            card.remove();
+        }
+    }
+
+    // 2. Insert or update existing cards preserving DOM nodes
+    let prevCard = null;
+    for (let i = 0; i < threads.length; i++) {
+        const th = threads[i];
+        let card = existingCards.get(th.id);
+
+        if (!card) {
+            const temp = document.createElement('div');
+            temp.innerHTML = renderThreadPreview(th);
+            card = temp.firstElementChild;
+            const hr = temp.querySelector('hr');
+
+            if (prevCard && prevCard.nextElementSibling) {
+                const anchor = prevCard.nextElementSibling.tagName === 'HR' ? prevCard.nextElementSibling.nextSibling : prevCard.nextSibling;
+                container.insertBefore(card, anchor);
+                if (hr) container.insertBefore(hr, card.nextSibling);
+            } else {
+                container.prepend(card);
+                if (hr) card.after(hr);
+            }
+            card.classList.add('new-thread-fade');
+        } else {
+            // Update reply count text in place
+            const replyCountLink = card.querySelector('.reply-count-link');
+            const replyCountText = th.reply_count > 0 
+                ? `${th.reply_count} ${th.reply_count === 1 ? 'reply' : 'replies'}` 
+                : `No replies yet`;
+            if (replyCountLink && replyCountLink.innerText !== replyCountText) {
+                replyCountLink.innerText = replyCountText;
+            }
+
+            // Update preview replies if new preview replies were posted
+            const repliesContainer = card.querySelector('.replies');
+            if (repliesContainer && th.preview_replies && th.preview_replies.length > 0) {
+                const existingReplyIds = new Set(
+                    Array.from(card.querySelectorAll('.reply-container')).map(el => el.id.replace('post_', ''))
+                );
+                for (const r of th.preview_replies) {
+                    if (!existingReplyIds.has(r.id)) {
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = renderReplyCard(r, th.id, true);
+                        const newReplyEl = tempDiv.firstElementChild;
+                        repliesContainer.appendChild(newReplyEl);
+                        newReplyEl.classList.add('new-reply-flash');
+                    }
+                }
+            }
+
+            // Re-order DOM element if bumped without recreating nodes
+            if (prevCard) {
+                const expectedTarget = prevCard.nextElementSibling?.tagName === 'HR' ? prevCard.nextElementSibling : prevCard;
+                if (card.previousElementSibling !== expectedTarget) {
+                    const hr = card.nextElementSibling?.tagName === 'HR' ? card.nextElementSibling : null;
+                    expectedTarget.after(card);
+                    if (hr) card.after(hr);
+                }
+            } else if (container.firstElementChild !== card) {
+                const hr = card.nextElementSibling?.tagName === 'HR' ? card.nextElementSibling : null;
+                container.prepend(card);
+                if (hr) card.after(hr);
+            }
+        }
+
+        prevCard = card;
+    }
+
+    generateBacklinks();
+}
 
 async function loadBoardView(isArchive = false, isSilent = false) {
     const container = document.getElementById('threadList');
+    const catalogToolbar = document.getElementById('catalogToolbar');
+    const catalogGrid = document.getElementById('catalogGrid');
+    const formWrapper = document.getElementById('formWrapper');
     if (!container) return;
-    
+
+    const isCatalog = isCatalogMode() && !isArchive;
+
+    if (isCatalog) {
+        container.style.display = 'none';
+        if (catalogToolbar) catalogToolbar.style.display = 'flex';
+        if (catalogGrid) catalogGrid.style.display = 'grid';
+        if (formWrapper) formWrapper.style.display = 'none';
+    } else {
+        container.style.display = 'block';
+        if (catalogToolbar) catalogToolbar.style.display = 'none';
+        if (catalogGrid) catalogGrid.style.display = 'none';
+        if (formWrapper) formWrapper.style.display = isArchive ? 'none' : 'block';
+    }
+
     if (!isSilent) {
-        container.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--text-color);">Loading ${isArchive ? 'archived ' : ''}threads...</div>`;
+        if (isCatalog && catalogGrid) {
+            catalogGrid.innerHTML = `<div style="grid-column: 1 / -1; text-align:center; padding: 30px; opacity:0.7;">Loading catalog...</div>`;
+        } else {
+            container.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--text-color);">Loading ${isArchive ? 'archived ' : ''}threads...</div>`;
+        }
     }
 
     // Configure form for new thread
     const formTitle = document.getElementById('formTitle');
     const subjectInput = document.getElementById('subjectInput');
     const submitBtn = document.getElementById('submitBtn');
-    if (!isSilent) {
+    if (!isSilent && !isCatalog) {
         if (formTitle) formTitle.innerText = isArchive ? "Board Archive" : "Create New Thread";
         if (subjectInput) subjectInput.style.display = "block";
         if (submitBtn) submitBtn.innerText = "Submit New Thread";
@@ -296,10 +534,13 @@ async function loadBoardView(isArchive = false, isSilent = false) {
             return; // 304 Not Modified: server confirmed zero changes
         }
         const threads = res.threads || [];
+        cachedBoardThreads = threads;
 
         if (threads.length === 0) {
             if (!isSilent) {
-                container.innerHTML = `<div style="text-align:center; padding: 40px; color: var(--text-color);">No ${isArchive ? 'archived ' : ''}threads found on /${currentBoard}/.</div>`;
+                const emptyMsg = `<div style="text-align:center; padding: 40px; color: var(--text-color);">No ${isArchive ? 'archived ' : ''}threads found on /${currentBoard}/.</div>`;
+                if (isCatalog && catalogGrid) catalogGrid.innerHTML = emptyMsg;
+                else container.innerHTML = emptyMsg;
             }
             lastBoardSignature = "";
             return;
@@ -315,15 +556,23 @@ async function loadBoardView(isArchive = false, isSilent = false) {
             (t.preview_replies || []).map(r => r.id)
         ]));
 
-        // If silent auto-update and no changes occurred: DO NOT TOUCH THE DOM!
-        // This completely prevents unnecessary layout shifts, image reloads, or scroll drifts.
         if (isSilent && lastBoardSignature === currentSignature) {
             return;
         }
         lastBoardSignature = currentSignature;
 
+        if (isCatalog) {
+            renderCatalogGrid(threads);
+            return;
+        }
+
+        // SMART DIFF: If container already has thread cards, update in place without full DOM wipe!
+        if (isSilent && container.querySelectorAll('.thread').length > 0) {
+            smartDiffBoard(container, threads);
+            return;
+        }
+
         // Viewport Anchor Preservation:
-        // Find which thread card is currently visible in the user's viewport so we lock directly onto it
         let anchorId = null;
         let anchorTop = 0;
         if (isSilent) {
@@ -358,7 +607,6 @@ async function loadBoardView(isArchive = false, isSilent = false) {
                 }
             };
             restoreAnchor();
-            // Safety re-check after images/fonts lay out
             requestAnimationFrame(restoreAnchor);
         }
     } catch (err) {
@@ -426,7 +674,7 @@ function renderThreadPreview(th) {
                         ${roleBadge}
                         <span class="name">${escapeHtml(th.name || 'Anonymous')}</span>
                         <span class="date">${dateStr}</span>
-                        <span class="post-id">No. <a href="?b=${currentBoard}#thread_${th.id}">${th.id.substring(1, 9)}</a></span>
+                        <span class="post-id">No. <a href="javascript:void(0)" onclick="quotePost('${th.id}', '${th.id}')">${th.id.substring(1, 9)}</a></span>
                         ${youTag}
                         <a href="?b=${currentBoard}#thread_${th.id}" class="reply-link">[Reply ➜]</a>
                         ${watchControl}
@@ -435,7 +683,7 @@ function renderThreadPreview(th) {
                     <div class="backlink-container" id="backlinks_${th.id}"></div>
                     <div class="comment">${formatComment(th.comment)}</div>
                     <div style="font-size:0.85em; color:var(--text-color); opacity:0.8; margin-top:8px;">
-                        [ <a href="?b=${currentBoard}#thread_${th.id}">${replyCountText}</a> ]
+                        [ <a href="?b=${currentBoard}#thread_${th.id}" class="reply-count-link">${replyCountText}</a> ]
                     </div>
                 </div>
             </div>
@@ -657,7 +905,7 @@ function renderReplyCard(r, threadId, isPreview = false) {
     const mediaHtml = renderMedia(r.media_url);
 
     let modControls = "";
-    if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'mod')) {
+    if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'mod') && !r.is_optimistic) {
         modControls = `
             <span style="margin-left: 8px; font-size: 0.85em;">
                 [<a href="#" onclick="adminDelete('reply', '${r.id}'); return false;" style="color:red;">Delete</a>]
@@ -665,8 +913,13 @@ function renderReplyCard(r, threadId, isPreview = false) {
         `;
     }
 
+    const optClass = r.is_optimistic ? ' reply-optimistic' : '';
+    const postIdHtml = r.is_optimistic 
+        ? `<span class="posting-badge">Posting</span>` 
+        : `No. <a href="javascript:void(0)" onclick="quotePost('${r.id}', '${threadId}')">${r.id.substring(1, 9)}</a>`;
+
     return `
-        <div class="reply-container" id="post_${r.id}" style="margin-bottom: 8px;">
+        <div class="reply-container${optClass}" id="post_${r.id}" style="margin-bottom: 8px;">
             <div class="reply">
                 ${mediaHtml}
                 <div class="post-content">
@@ -674,7 +927,7 @@ function renderReplyCard(r, threadId, isPreview = false) {
                         ${roleBadge}
                         <span class="name">${escapeHtml(r.name || 'Anonymous')}</span>
                         <span class="date">${dateStr}</span>
-                        <span class="post-id">No. <a href="javascript:void(0)" onclick="quotePost('${r.id}', '${threadId}')">${r.id.substring(1, 9)}</a></span>
+                        <span class="post-id" id="post_id_label_${r.id}">${postIdHtml}</span>
                         ${youTag}
                         ${modControls}
                     </div>
@@ -686,8 +939,491 @@ function renderReplyCard(r, threadId, isPreview = false) {
     `;
 }
 
+// --- FLOATING QUICK REPLY (QR) CONTROLLER ---
+let isQrDragging = false;
+let qrDragStartX = 0;
+let qrDragStartY = 0;
+let qrInitialLeft = 0;
+let qrInitialTop = 0;
+let activeQrThreadId = null;
+
+function openQuickReply(threadId, quoteId = null) {
+    const dock = document.getElementById('quickReplyDock');
+    const comment = document.getElementById('qrComment');
+    const title = document.getElementById('qrTitle');
+    const nameInput = document.getElementById('qrName');
+    if (!dock || !comment) return;
+
+    activeQrThreadId = threadId || currentThreadId;
+    dock.setAttribute('data-thread-id', activeQrThreadId || '');
+
+    if (title) {
+        const boardStr = currentBoard ? `/${currentBoard}/` : '';
+        const idStr = activeQrThreadId ? ` #${activeQrThreadId.substring(1, 9)}` : '';
+        title.innerText = `⚡ Quick Reply - ${boardStr}${idStr}`;
+    }
+
+    // Sync name from main form
+    const mainName = document.getElementById('nameInput');
+    if (mainName && mainName.value && nameInput) {
+        nameInput.value = mainName.value;
+    }
+
+    dock.style.display = 'flex';
+    dock.classList.remove('qr-minimized');
+    const minBtn = document.getElementById('qrMinBtn');
+    if (minBtn) minBtn.innerText = '−';
+
+    // Append quote if specified
+    if (quoteId) {
+        const prefix = comment.value.length > 0 && !comment.value.endsWith('\n') ? '\n' : '';
+        comment.value += `${prefix}>>${quoteId}\n`;
+    }
+
+    comment.focus();
+    comment.selectionStart = comment.selectionEnd = comment.value.length;
+}
+
+function closeQuickReply() {
+    const dock = document.getElementById('quickReplyDock');
+    if (dock) dock.style.display = 'none';
+}
+
+function toggleQuickReplyMinimize() {
+    const dock = document.getElementById('quickReplyDock');
+    const minBtn = document.getElementById('qrMinBtn');
+    if (!dock) return;
+    const isMin = dock.classList.toggle('qr-minimized');
+    if (minBtn) minBtn.innerText = isMin ? '+' : '−';
+}
+
+async function submitQuickReply() {
+    const commentInput = document.getElementById('qrComment');
+    const nameInput = document.getElementById('qrName');
+    const imageInput = document.getElementById('qrImage');
+    const dock = document.getElementById('quickReplyDock');
+
+    const threadId = activeQrThreadId || currentThreadId || dock?.getAttribute('data-thread-id');
+    if (!threadId) {
+        alert("Please select or open a thread to reply to.");
+        return;
+    }
+
+    await submitReplyCore({
+        threadId,
+        comment: commentInput ? commentInput.value : '',
+        name: nameInput ? nameInput.value : '',
+        media_url: imageInput ? imageInput.value : '',
+        source: 'qr'
+    });
+}
+
+function initQuickReply() {
+    const dock = document.getElementById('quickReplyDock');
+    const header = document.getElementById('qrHeader');
+    const uploadBtn = document.getElementById('qrUploadBtn');
+    const hiddenFileInput = document.getElementById('qrHiddenFileInput');
+    const imageInput = document.getElementById('qrImage');
+    const badge = document.getElementById('qrMediaBadge');
+    const comment = document.getElementById('qrComment');
+
+    if (!dock || !header) return;
+
+    // Restore saved position
+    try {
+        const savedPos = JSON.parse(localStorage.getItem('oshimy_qr_pos') || 'null');
+        if (savedPos && savedPos.left && savedPos.top) {
+            const maxLeft = window.innerWidth - 360;
+            const maxTop = window.innerHeight - 100;
+            const left = Math.max(10, Math.min(savedPos.left, maxLeft));
+            const top = Math.max(10, Math.min(savedPos.top, maxTop));
+            dock.style.left = `${left}px`;
+            dock.style.top = `${top}px`;
+            dock.style.bottom = 'auto';
+            dock.style.right = 'auto';
+        }
+    } catch (e) {}
+
+    // Mouse drag
+    header.addEventListener('mousedown', (e) => {
+        if (e.target.closest('.qr-controls')) return;
+        isQrDragging = true;
+        const rect = dock.getBoundingClientRect();
+        qrDragStartX = e.clientX;
+        qrDragStartY = e.clientY;
+        qrInitialLeft = rect.left;
+        qrInitialTop = rect.top;
+        dock.style.bottom = 'auto';
+        dock.style.right = 'auto';
+        e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isQrDragging) return;
+        const dx = e.clientX - qrDragStartX;
+        const dy = e.clientY - qrDragStartY;
+        let newLeft = qrInitialLeft + dx;
+        let newTop = qrInitialTop + dy;
+
+        const maxLeft = window.innerWidth - dock.offsetWidth - 10;
+        const maxTop = window.innerHeight - 50;
+        newLeft = Math.max(10, Math.min(newLeft, maxLeft));
+        newTop = Math.max(10, Math.min(newTop, maxTop));
+
+        dock.style.left = `${newLeft}px`;
+        dock.style.top = `${newTop}px`;
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (!isQrDragging) return;
+        isQrDragging = false;
+        const rect = dock.getBoundingClientRect();
+        localStorage.setItem('oshimy_qr_pos', JSON.stringify({ left: rect.left, top: rect.top }));
+    });
+
+    // Touch drag for mobile
+    header.addEventListener('touchstart', (e) => {
+        if (e.target.closest('.qr-controls')) return;
+        const touch = e.touches[0];
+        isQrDragging = true;
+        const rect = dock.getBoundingClientRect();
+        qrDragStartX = touch.clientX;
+        qrDragStartY = touch.clientY;
+        qrInitialLeft = rect.left;
+        qrInitialTop = rect.top;
+        dock.style.bottom = 'auto';
+        dock.style.right = 'auto';
+    }, { passive: true });
+
+    window.addEventListener('touchmove', (e) => {
+        if (!isQrDragging || !e.touches[0]) return;
+        const touch = e.touches[0];
+        const dx = touch.clientX - qrDragStartX;
+        const dy = touch.clientY - qrDragStartY;
+        dock.style.left = `${Math.max(10, qrInitialLeft + dx)}px`;
+        dock.style.top = `${Math.max(10, qrInitialTop + dy)}px`;
+    }, { passive: true });
+
+    window.addEventListener('touchend', () => {
+        isQrDragging = false;
+    });
+
+    // Double-click header toggles minimize
+    header.addEventListener('dblclick', (e) => {
+        if (e.target.closest('.qr-controls')) return;
+        toggleQuickReplyMinimize();
+    });
+
+    // Live media detector inside QR
+    if (imageInput && badge) {
+        const updateQrBadge = () => {
+            const val = imageInput.value.trim();
+            if (!val) {
+                badge.style.display = 'none';
+                badge.innerHTML = '';
+                return;
+            }
+            badge.style.display = 'block';
+            badge.style.background = 'rgba(0, 132, 255, 0.15)';
+            badge.style.color = 'var(--main-accent)';
+            badge.innerHTML = '✓ Media attached';
+        };
+        imageInput.addEventListener('input', updateQrBadge);
+        imageInput.addEventListener('change', updateQrBadge);
+    }
+
+    // Media upload inside QR
+    if (uploadBtn && hiddenFileInput && imageInput) {
+        uploadBtn.onclick = () => hiddenFileInput.click();
+        hiddenFileInput.onchange = async () => {
+            const file = hiddenFileInput.files[0];
+            if (!file) return;
+            uploadBtn.innerText = "⏳";
+            uploadBtn.disabled = true;
+            const formData = new FormData();
+            formData.append("image", file);
+            try {
+                const resp = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+                    method: "POST",
+                    body: formData
+                });
+                const result = await resp.json();
+                if (result.success && result.data && result.data.url) {
+                    imageInput.value = result.data.url;
+                    imageInput.dispatchEvent(new Event('input'));
+                }
+            } catch (e) {
+                console.error('Upload failed:', e);
+            } finally {
+                uploadBtn.innerText = "Upload";
+                uploadBtn.disabled = false;
+                hiddenFileInput.value = "";
+            }
+        };
+    }
+}
+
+// --- SMOOTH OPTIMISTIC POST INSERTION CORE ---
+async function submitReplyCore({ threadId, comment, name, media_url, source = 'main' }) {
+    if (!comment || !comment.trim()) return;
+
+    const qrStatus = document.getElementById('qrStatus');
+    const qrSubmitBtn = document.getElementById('qrSubmitBtn');
+    const mainSubmitBtn = document.getElementById('submitBtn');
+
+    if (qrSubmitBtn) { qrSubmitBtn.disabled = true; qrSubmitBtn.innerText = "Posting..."; }
+    if (mainSubmitBtn) { mainSubmitBtn.disabled = true; mainSubmitBtn.innerText = "Posting..."; }
+    if (qrStatus) { qrStatus.style.color = 'var(--text-color)'; qrStatus.innerText = "Sending..."; }
+
+    // Validate media URL if provided
+    const mediaVal = (media_url || '').trim();
+    if (mediaVal && typeof validateMediaUrl === 'function') {
+        const check = await validateMediaUrl(mediaVal);
+        if (!check.valid) {
+            const errMsg = check.error || "Invalid media or image URL.";
+            if (qrStatus) { qrStatus.style.color = '#ef4444'; qrStatus.innerText = errMsg; }
+            if (typeof showToast === 'function') showToast(errMsg);
+            else alert(errMsg);
+            if (qrSubmitBtn) { qrSubmitBtn.disabled = false; qrSubmitBtn.innerText = "Submit"; }
+            if (mainSubmitBtn) { mainSubmitBtn.disabled = false; mainSubmitBtn.innerText = "Submit Reply"; }
+            return;
+        }
+    }
+
+    // 1. Optimistic UI: Generate temporary ID and insert immediately into DOM
+    const tempId = 'opt_' + Date.now();
+    const optimisticReply = {
+        id: tempId,
+        thread_id: threadId,
+        board: currentBoard,
+        name: (name || '').trim() || 'Anonymous',
+        comment: comment.trim(),
+        media_url: mediaVal,
+        created_at: Date.now(),
+        role: currentUser?.role || null,
+        display_title: currentUser?.display_title || null,
+        is_optimistic: true
+    };
+
+    const repliesContainer = document.getElementById('repliesContainer');
+    let optimisticEl = null;
+
+    if (currentThreadId === threadId && repliesContainer) {
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = renderReplyCard(optimisticReply, threadId);
+        optimisticEl = tempDiv.firstElementChild;
+        repliesContainer.appendChild(optimisticEl);
+        optimisticEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // Clear comment inputs immediately for instant, fluid UI response
+    const qrComment = document.getElementById('qrComment');
+    const mainComment = document.getElementById('commentInput');
+    const qrImage = document.getElementById('qrImage');
+    const mainImage = document.getElementById('imageInput');
+    if (qrComment) qrComment.value = "";
+    if (mainComment) mainComment.value = "";
+    if (qrImage) qrImage.value = "";
+    if (mainImage) mainImage.value = "";
+
+    try {
+        const res = await apiFetch('/replies', {
+            method: 'POST',
+            body: {
+                thread_id: threadId,
+                board: currentBoard,
+                name: (name || '').trim() || 'Anonymous',
+                comment: comment.trim(),
+                media_url: mediaVal
+            }
+        });
+
+        if (res.success && res.reply) {
+            MY_POSTS.push(res.reply.id);
+            localStorage.setItem('my_posts', JSON.stringify(MY_POSTS));
+
+            // Sync optimistic element with real server data in place
+            if (optimisticEl) {
+                optimisticEl.id = `post_${res.reply.id}`;
+                optimisticEl.classList.remove('reply-optimistic');
+                optimisticEl.classList.add('new-reply-flash');
+
+                const postHeader = optimisticEl.querySelector('.post-header');
+                if (postHeader) {
+                    const idLabel = postHeader.querySelector('.post-id');
+                    if (idLabel) {
+                        idLabel.innerHTML = `No. <a href="javascript:void(0)" onclick="quotePost('${res.reply.id}', '${threadId}')">${res.reply.id.substring(1, 9)}</a> <span style="font-weight:bold; font-style:italic; font-size:0.9em;">(You)</span>`;
+                    }
+                }
+                generateBacklinks();
+            } else if (currentThreadId !== threadId) {
+                window.location.hash = `#thread_${threadId}`;
+            }
+
+            if (qrStatus) {
+                qrStatus.style.color = '#22c55e';
+                qrStatus.innerText = 'Posted!';
+                setTimeout(() => {
+                    if (qrStatus) qrStatus.innerText = '';
+                    closeQuickReply();
+                }, 900);
+            }
+        }
+    } catch (err) {
+        if (optimisticEl) {
+            const idLabel = optimisticEl.querySelector('.post-id');
+            if (idLabel) {
+                idLabel.innerHTML = `<span style="color:#ef4444; font-weight:bold;">⚠️ Failed to post</span>`;
+            }
+        }
+        if (qrStatus) {
+            qrStatus.style.color = '#ef4444';
+            qrStatus.innerText = err.message;
+        }
+        if (typeof showToast === 'function') {
+            showToast('Failed to post reply: ' + err.message);
+        }
+    } finally {
+        if (qrSubmitBtn) { qrSubmitBtn.disabled = false; qrSubmitBtn.innerText = "Submit"; }
+        if (mainSubmitBtn) { mainSubmitBtn.disabled = false; mainSubmitBtn.innerText = "Submit Reply"; }
+    }
+}
+
+// --- KEYBOARD SHORTCUTS NAVIGATION ---
+function initKeyboardNavigation() {
+    window.addEventListener('keydown', (e) => {
+        const tag = e.target.tagName;
+        const isTyping = ['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || e.target.isContentEditable;
+
+        // Esc key closes any open overlay or Quick Reply
+        if (e.key === 'Escape') {
+            const lb = document.getElementById('lightbox');
+            if (lb && lb.style.display === 'flex') {
+                closeLightbox(e);
+                return;
+            }
+            const shortcuts = document.getElementById('shortcutsModal');
+            if (shortcuts && shortcuts.style.display === 'flex') {
+                closeShortcutsModal();
+                return;
+            }
+            const auth = document.getElementById('authModal');
+            if (auth && auth.style.display === 'flex') {
+                closeAuthModal();
+                return;
+            }
+            const notif = document.getElementById('notificationsModal');
+            if (notif && notif.style.display === 'flex') {
+                closeNotificationsModal();
+                return;
+            }
+            const watch = document.getElementById('watchlistModal');
+            if (watch && watch.style.display === 'flex') {
+                closeWatchlistModal();
+                return;
+            }
+            const qr = document.getElementById('quickReplyDock');
+            if (qr && qr.style.display !== 'none') {
+                closeQuickReply();
+                return;
+            }
+            return;
+        }
+
+        // Ctrl/Cmd + Enter submits inside form or QR
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            if (e.target.id === 'qrComment') {
+                e.preventDefault();
+                submitQuickReply();
+                return;
+            }
+            if (e.target.id === 'commentInput') {
+                e.preventDefault();
+                const form = document.getElementById('postForm');
+                if (form) form.dispatchEvent(new Event('submit', { cancelable: true }));
+                return;
+            }
+        }
+
+        if (isTyping) return;
+
+        // ? Key opens Shortcuts Modal
+        if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+            e.preventDefault();
+            openShortcutsModal();
+            return;
+        }
+
+        // R Key opens Quick Reply
+        if (e.key === 'r' || e.key === 'R') {
+            e.preventDefault();
+            openQuickReply(currentThreadId);
+            return;
+        }
+
+        // J Key: Jump to next post/reply
+        if (e.key === 'j' || e.key === 'J') {
+            e.preventDefault();
+            navigatePosts(1);
+            return;
+        }
+
+        // K Key: Jump to previous post/reply
+        if (e.key === 'k' || e.key === 'K') {
+            e.preventDefault();
+            navigatePosts(-1);
+            return;
+        }
+    });
+}
+
+function navigatePosts(direction) {
+    const isThread = !!currentThreadId;
+    const selector = isThread ? '.op, .reply-container' : '.thread, .catalog-tile';
+    const items = Array.from(document.querySelectorAll(selector)).filter(el => el.offsetParent !== null);
+    if (items.length === 0) return;
+
+    const threshold = 60;
+    let targetIndex = -1;
+
+    if (direction > 0) {
+        targetIndex = items.findIndex(el => el.getBoundingClientRect().top > threshold);
+        if (targetIndex === -1) targetIndex = items.length - 1;
+    } else {
+        for (let i = items.length - 1; i >= 0; i--) {
+            if (items[i].getBoundingClientRect().top < -threshold) {
+                targetIndex = i;
+                break;
+            }
+        }
+        if (targetIndex === -1) targetIndex = 0;
+    }
+
+    const targetEl = items[targetIndex];
+    if (targetEl) {
+        targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        targetEl.classList.remove('post-keyboard-focus');
+        void targetEl.offsetWidth;
+        targetEl.classList.add('post-keyboard-focus');
+        setTimeout(() => targetEl.classList.remove('post-keyboard-focus'), 1500);
+    }
+}
+
+function openShortcutsModal() {
+    const modal = document.getElementById('shortcutsModal');
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeShortcutsModal() {
+    const modal = document.getElementById('shortcutsModal');
+    if (modal) modal.style.display = 'none';
+}
+
 // --- POST SUBMISSION ---
 document.addEventListener('DOMContentLoaded', () => {
+    initQuickReply();
+    initKeyboardNavigation();
+
     const postForm = document.getElementById('postForm');
     if (!postForm) return;
 
@@ -702,6 +1438,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!commentInput.value.trim()) return;
 
+        if (currentThreadId) {
+            // Reply via optimistic submit core
+            await submitReplyCore({
+                threadId: currentThreadId,
+                comment: commentInput.value,
+                name: nameInput.value,
+                media_url: imageInput.value,
+                source: 'main'
+            });
+            return;
+        }
+
+        // New Thread Creation
         submitBtn.disabled = true;
         submitBtn.innerText = "Posting...";
 
@@ -710,64 +1459,36 @@ document.addEventListener('DOMContentLoaded', () => {
         if (mediaVal && typeof validateMediaUrl === 'function') {
             const check = await validateMediaUrl(mediaVal);
             if (!check.valid) {
-                if (typeof showToast === 'function') {
-                    showToast(check.error || "Invalid media or image URL.");
-                } else {
-                    alert(check.error || "Invalid media or image URL.");
-                }
+                const errMsg = check.error || "Invalid media or image URL.";
+                if (typeof showToast === 'function') showToast(errMsg);
+                else alert(errMsg);
                 submitBtn.disabled = false;
-                submitBtn.innerText = currentThreadId ? "Submit Reply" : "Create Thread";
+                submitBtn.innerText = "Create Thread";
                 return;
             }
         }
 
         try {
-            if (currentThreadId) {
-                // Reply
-                const res = await apiFetch('/replies', {
-                    method: 'POST',
-                    body: {
-                        thread_id: currentThreadId,
-                        board: currentBoard,
-                        name: nameInput.value,
-                        comment: commentInput.value,
-                        media_url: imageInput.value
-                    }
-                });
-
-                if (res.success && res.reply) {
-                    MY_POSTS.push(res.reply.id);
-                    localStorage.setItem('my_posts', JSON.stringify(MY_POSTS));
-                    commentInput.value = "";
-                    imageInput.value = "";
-                    const badge = document.getElementById('mediaDetectedBadge');
-                    if (badge) { badge.style.display = 'none'; badge.innerHTML = ''; }
-                    await loadThreadView(currentThreadId);
+            const res = await apiFetch('/threads', {
+                method: 'POST',
+                body: {
+                    board: currentBoard,
+                    name: nameInput.value,
+                    subject: subjectInput.value,
+                    comment: commentInput.value,
+                    media_url: imageInput.value
                 }
-            } else {
-                // New Thread
-                const res = await apiFetch('/threads', {
-                    method: 'POST',
-                    body: {
-                        board: currentBoard,
-                        name: nameInput.value,
-                        subject: subjectInput.value,
-                        comment: commentInput.value,
-                        media_url: imageInput.value
-                    }
-                });
+            });
 
-                if (res.success && res.thread) {
-                    MY_POSTS.push(res.thread.id);
-                    localStorage.setItem('my_posts', JSON.stringify(MY_POSTS));
-                    subjectInput.value = "";
-                    commentInput.value = "";
-                    imageInput.value = "";
-                    const badge = document.getElementById('mediaDetectedBadge');
-                    if (badge) { badge.style.display = 'none'; badge.innerHTML = ''; }
-                    // Jump to new thread
-                    window.location.hash = `#thread_${res.thread.id}`;
-                }
+            if (res.success && res.thread) {
+                MY_POSTS.push(res.thread.id);
+                localStorage.setItem('my_posts', JSON.stringify(MY_POSTS));
+                subjectInput.value = "";
+                commentInput.value = "";
+                imageInput.value = "";
+                const badge = document.getElementById('mediaDetectedBadge');
+                if (badge) { badge.style.display = 'none'; badge.innerHTML = ''; }
+                window.location.hash = `#thread_${res.thread.id}`;
             }
         } catch (err) {
             alert("Posting Error: " + err.message);
