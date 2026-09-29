@@ -1,0 +1,56 @@
+/* =========================================
+   ASSETS/CSS/CORE.CSS
+   - Variables (Theming)
+   - Typography
+   - Global Resets
+   ========================================= */
+
+:root {
+    /* DEFAULT THEME: Persona 3 Reload (Surface) */
+    --bg-color: #e1f5fe;
+    --main-accent: #0084ff;   /* P3 Blue */
+    --sub-accent: #00e5ff;    /* P3 Cyan */
+    --card-bg: #ffffff;
+    --text-color: #003060;
+    --header-color: #001a35;
+    --reply-bg: #f0f8ff;
+    
+    /* UI Elements */
+    --border-radius: 14px;
+    --border-color: #b3e5fc;
+    --shadow: 0 4px 15px rgba(0, 132, 255, 0.15);
+}
+
+/* Scroll Behavior */
+html { 
+    scroll-behavior: smooth; 
+}
+
+/* Basic Body Setup */
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-size: 10pt;
+    margin: 0;
+    padding: 20px;
+    transition: background-color 0.4s ease, color 0.4s ease;
+    line-height: 1.5;
+}
+
+/* Links */
+a { 
+    color: var(--main-accent); 
+    text-decoration: none; 
+    transition: color 0.2s; 
+    cursor: pointer;
+}
+a:hover { 
+    color: var(--sub-accent); 
+}
+
+/* Utilities */
+hr { 
+    border: 0; 
+    border-bottom: 1px solid var(--border-color); 
+}

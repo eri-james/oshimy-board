@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OshiMY - Malaysian VTuber &amp; Otaku Imageboard</title>
+    <meta name="description" content="The premier anonymous imageboard for the Malaysian Virtual YouTuber community and Otaku culture. Discuss streams, oshis, anime, and art on OshiMY.">
+    <meta name="keywords" content="OshiMY, Malaysian VTuber, MY VTuber, VTuber Malaysia, anime imageboard, vtuber forum, chuuba, otaku malaysia, /myvt/, anime discussion, vstreamer">
+    <meta name="robots" content="index, follow">
+    
+    <!-- OpenGraph / Facebook / Discord -->
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="OshiMY">
+    <meta property="og:title" content="OshiMY - Malaysian VTuber &amp; Otaku Imageboard">
+    <meta property="og:description" content="The premier anonymous imageboard for the Malaysian Virtual YouTuber community and Otaku culture. Discuss streams, oshis, anime, and art on OshiMY.">
+    <meta property="og:image" content="https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=630&q=80">
+    
+    <!-- Twitter / X Cards -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:site" content="@OshiMY_board">
+    <meta name="twitter:title" content="OshiMY - Malaysian VTuber &amp; Otaku Imageboard">
+    <meta name="twitter:description" content="The premier anonymous imageboard for the Malaysian Virtual YouTuber community and Otaku culture. Discuss streams, oshis, anime, and art on OshiMY.">
+    <meta name="twitter:image" content="https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=630&q=80">
+
+    <!-- Schema.org JSON-LD Structured Data for Search Engine Crawlers -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "OshiMY",
+      "alternateName": ["OshiMY Board", "oshimai", "OshiMY Imageboard"],
+      "description": "The premier anonymous imageboard for the Malaysian Virtual YouTuber community and adjacent Otaku culture.",
+      "inLanguage": ["en", "ms"],
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": "https://oshimy.moe/?b={search_term_string}",
+        "query-input": "required name=search_term_string"
+      }
+    }
+    </script>
+    
+    <!-- LOAD CSS -->
+    <link rel="stylesheet" href="asset/css/core.css">
+    <link rel="stylesheet" href="asset/css/layout.css">
+    <link rel="stylesheet" href="asset/css/themes.css">
+</head>
+<body>
+    <!-- 1. HEADER -->
+    <div class="header">
+        <h1 id="boardTitle">OshiMY - Portal</h1>
+        <div class="nav-boards" id="navBoards">
+            <!-- Dynamic board links injected by JS -->
+        </div>
+        <div class="nav-site" style="display:flex; flex-wrap:wrap; justify-content:center; gap:8px; align-items:center; margin-top:6px;">
+            <span>[ <a href="index.html">Home</a> ]</span>
+            <span>[ <a href="javascript:void(0)" id="autoUpdateToggle" onclick="toggleAutoUpdate()">Auto-Update: On (15s)</a> ]</span>
+            <span id="userPerks" style="display:none; display:contents;">
+                <span id="notifNav" style="display:none;">[ <a href="javascript:void(0)" onclick="openNotificationsModal()">🔔 Replies <span id="replyBadge" style="display:none; background:#ef4444; color:white; padding:1px 6px; border-radius:9999px; font-size:0.75rem; font-weight:bold;">0</span></a> ]</span>
+                <span id="watchNav" style="display:none;">[ <a href="javascript:void(0)" onclick="openWatchlistModal()">⭐ Watchlist <span id="watchlistBadge" style="opacity:0.8; font-size:0.85em;">(0)</span></a> ]</span>
+            </span>
+            <span id="authStatus">[ <a href="javascript:void(0)" onclick="openAuthModal('login')">Login</a> ]</span>
+            <span>[ <a href="#bottom">Bottom</a> ]</span>
+        </div>
+    </div>
+
+    <!-- 2. POST FORM -->
+    <div id="formWrapper" class="post-box" style="display:none;">
+        <div class="form-header" id="formTitle">Create New Thread</div>
+        <form id="postForm">
+            <input type="text" id="nameInput" placeholder="Name (Anonymous)" value="Anonymous">
+            <input type="text" id="subjectInput" placeholder="Subject">
+            <textarea id="commentInput" placeholder="Write your comment..." required></textarea>
+            
+            <div style="display: flex; gap: 8px;">
+                <input type="url" id="imageInput" placeholder="Media URL (Reddit/X/YT/Direct Image or Video Link)" style="flex-grow: 1;">
+                <button type="button" id="uploadBtn">Upload Image</button>
+            </div>
+            <div id="mediaDetectedBadge" style="display:none; font-size:0.8em; margin-top:4px; margin-bottom:6px; padding:4px 8px; border-radius:4px; font-weight:bold;"></div>
+            
+            <!-- Collapsible Media Format Tips -->
+            <details class="media-help-drawer">
+                <summary><span>ℹ️ Supported Media &amp; Upload Formats</span></summary>
+                <div class="media-help-content">
+                    <ul>
+                        <li><b>Reddit:</b> Direct images (<code>i.redd.it</code>), videos (<code>v.redd.it</code>), or post links (<code>reddit.com/r/.../comments/...</code>, <code>redd.it/...</code>).</li>
+                        <li><b>X (Twitter):</b> Direct post URLs (<code>https://x.com/.../status/...</code>) and twimg images.</li>
+                        <li><b>YouTube:</b> <code>youtube.com/watch?v=...</code>, <code>youtu.be/...</code>, Shorts, or Music.</li>
+                        <li><b>Direct Images &amp; Video:</b> <code>.jpg</code>, <code>.png</code>, <code>.gif</code>, <code>.webp</code>, <code>.mp4</code>, <code>.webm</code>, <code>.mp3</code>.</li>
+                        <li><b>Upload Image:</b> Click <b>Upload Image</b> to upload directly from your device (free hosting via ImgBB).</li>
+                    </ul>
+                </div>
+            </details>
+            
+            <input type="file" id="hiddenFileInput" accept="image/*" style="display: none;">
+            <button type="submit" id="submitBtn">Submit Post</button>
+        </form>
+    </div>
+
+    <hr id="topDivider" style="display:none; border-color: var(--border-color); margin: 20px 0;">
+
+    <!-- 3. VIEW: HOME PAGE (Portal View) -->
+    <div id="homeView" class="home-view-wrapper" style="display:none;">
+        <!-- BANNER IMAGE SLOT -->
+        <div class="home-banner-wrapper" id="homeBannerWrapper">
+            <img id="homeBannerImg" class="home-banner-img" src="https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=300&q=80" alt="OshiMY Community Banner">
+            
+            <!-- Admin Hover Controls -->
+            <div id="bannerAdminControl" class="banner-admin-control" style="display:none;">
+                <button type="button" class="banner-edit-btn" onclick="toggleBannerEditor()">
+                    ✏️ Change Banner
+                </button>
+                <div id="bannerEditorBox" class="banner-editor-popover">
+                    <div style="font-weight:bold; font-size:0.85em; margin-bottom:6px; color:var(--text-color);">Custom Banner Image URL:</div>
+                    <input type="url" id="bannerUrlInput" placeholder="https://i.ibb.co/... / image url" style="width:100%; box-sizing:border-box; padding:6px 8px; border:1px solid var(--border-color); border-radius:4px; font-size:0.85em; margin-bottom:8px; background:var(--card-bg); color:var(--text-color);">
+                    <div style="display:flex; justify-content:space-between; gap:6px;">
+                        <button type="button" onclick="saveBannerUrl()" style="flex:1; padding:6px; background:var(--main-accent); color:#fff; border:none; border-radius:4px; font-size:0.8em; font-weight:bold; cursor:pointer;">Save</button>
+                        <button type="button" onclick="resetBannerUrl()" style="padding:6px 10px; background:none; border:1px solid var(--border-color); color:var(--text-color); border-radius:4px; font-size:0.8em; cursor:pointer;">Reset</button>
+                        <button type="button" onclick="toggleBannerEditor()" style="padding:6px 10px; background:none; border:1px solid var(--border-color); color:var(--text-color); border-radius:4px; font-size:0.8em; cursor:pointer;">Cancel</button>
+                    </div>
+                    <div id="bannerStatusMsg" style="font-size:0.75em; margin-top:6px; min-height:14px;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- MAIN (CENTER) BOX -->
+        <div class="home-container">
+            <div class="welcome-section">
+                <h2>Selamat Datang to OshiMY (おしまい)</h2>
+                <p>The premier anonymous imageboard for the Malaysian Virtual YouTuber community and adjacent Otaku culture.</p>
+                <div style="margin-top: 8px; font-size: 0.9em; opacity: 0.9; font-style: italic; color: var(--main-accent);">
+                    🏮 <i>"It's never oshimai for your oshi."</i>
+                </div>
+            </div>
+
+            <div class="instruction-grid">
+                <div class="ins-card">
+                    <h3>🍱 Board Directory</h3>
+                    <div class="home-links">
+                        <a href="?b=myvt">/myvt/ - MY VTuber <span id="stat_myvt" style="font-size:0.85em; opacity:0.8;"></span></a>
+                        <a href="?b=vt">/vt/ - SEA & Global VTuber <span id="stat_vt" style="font-size:0.85em; opacity:0.8;"></span></a>
+                        <a href="?b=vg">/vg/ - Video Games <span id="stat_vg" style="font-size:0.85em; opacity:0.8;"></span></a>
+                        <a href="?b=amg">/amg/ - Anime & Manga <span id="stat_amg" style="font-size:0.85em; opacity:0.8;"></span></a>
+                        <a href="?b=ca">/ca/ - Cosplay & Art <span id="stat_ca" style="font-size:0.85em; opacity:0.8;"></span></a>
+                        <a href="?b=tech">/tech/ - Tech Stuff <span id="stat_tech" style="font-size:0.85em; opacity:0.8;"></span></a>
+                        <a href="?b=mamak">/mamak/ - MY Stuff & Off-topic <span id="stat_mamak" style="font-size:0.85em; opacity:0.8;"></span></a>
+                        <a href="?b=rqr">/rqr/ - Board Request & Report <span id="stat_rqr" style="font-size:0.85em; opacity:0.8;"></span></a>
+                    </div>
+                </div>
+                
+                <div class="ins-card">
+                    <h3>📖 How to Use</h3>
+                    <div class="how-to-accordion">
+                        <details open>
+                            <summary>📌 Browsing &amp; Boards</summary>
+                            <div class="accordion-content">
+                                <ul>
+                                    <li><b>Board Directory:</b> Select a board above to browse active discussions.</li>
+                                    <li><b>Live Auto-Update:</b> New posts appear automatically every 15 seconds without losing your place.</li>
+                                    <li><b>Archive:</b> Click <b>[📦 Archive]</b> on any board to read discussions idle for over 3 days.</li>
+                                </ul>
+                            </div>
+                        </details>
+
+                        <details>
+                            <summary>💬 Posting &amp; Media Formatting</summary>
+                            <div class="accordion-content">
+                                <ul>
+                                    <li><b>Anonymous:</b> Posting is 100% anonymous by default.</li>
+                                    <li><b>Greentext:</b> Start any line with <code>&gt;</code> (e.g. <code>&gt;tfw my oshi is streaming</code>).</li>
+                                    <li><b>Quoting:</b> Click any <b>No.xxxx</b> to quote a post or reply.</li>
+                                    <li><b>Auto-Links:</b> Web URLs (http/https) are auto-linkified.</li>
+                                    <li><b>Media:</b> Click <b>Upload Image</b> for instant free hosting, or paste direct YouTube/X (Twitter) links.</li>
+                                </ul>
+                            </div>
+                        </details>
+
+                        <details>
+                            <summary>🔔 Cross-Device (You) &amp; Replies</summary>
+                            <div class="accordion-content">
+                                <ul>
+                                    <li><b>(You) Sync:</b> Log in on your phone and PC—all your authored threads and replies keep their <b>(You)</b> tags across devices!</li>
+                                    <li><b>Reply Counter:</b> A red badge <b>[🔔 Replies]</b> alerts you whenever someone quotes or replies to your post.</li>
+                                </ul>
+                            </div>
+                        </details>
+
+                        <details>
+                            <summary>⭐ Thread Watchlist</summary>
+                            <div class="accordion-content">
+                                <ul>
+                                    <li>Click <b>[⭐ Watch]</b> on any thread to follow it.</li>
+                                    <li>Open <b>[⭐ Watchlist]</b> in the top bar to track reply counts, bumps, and quickly jump into your discussions.</li>
+                                </ul>
+                            </div>
+                        </details>
+
+                        <details>
+                            <summary>🛡️ Accounts &amp; Verified Badges</summary>
+                            <div class="accordion-content">
+                                <ul>
+                                    <li><b>Optional:</b> You don't need an account to read or post.</li>
+                                    <li><b>Anti-Impersonation:</b> Registering reserves your handle. Verified VTubers and staff can display official badges (e.g. <code>Verified Talent ⭐</code>).</li>
+                                </ul>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rules-box">
+                <h3>📜 OshiMY Guidelines</h3>
+                <p>1. No illegal content (CSAM). 2. No spam or commercial advertising. 3. Be civil regarding local talents and their identities. 4. Post in the appropriate boards.</p>
+            </div>
+
+            <footer style="margin-top: 25px; padding-top: 15px; border-top: 1px dashed var(--border-color); text-align: center; font-size: 0.82em; opacity: 0.75;">
+                <p><b>OshiMY (おしまい)</b> • Malaysian VTuber &amp; Otaku Imageboard</p>
+                <p style="font-size: 0.9em; margin-top: 4px;">An independent community text &amp; imageboard created by and for Malaysian fans.</p>
+            </footer>
+
+            <div class="footer-secret">
+                <a href="?b=myvth" class="secret-link">.</a> <!-- Hidden entry point -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. VIEW: BOARD INDEX -->
+    <div id="boardView" style="display:none;">
+        <div id="threadList"></div>
+    </div>
+
+    <!-- 5. VIEW: SINGLE THREAD -->
+    <div id="threadView" style="display:none;">
+        <div style="max-width: 1000px; margin: 0 auto 15px auto;">
+            <a href="#" onclick="window.location.hash=''; return false;" class="reply-link" style="float:none; display:inline-block;"> ⬅ Return to Board</a>
+        </div>
+        <div id="opContainer"></div>
+        <div id="repliesContainer"></div>
+    </div>
+
+    <!-- 6. UTILS (NSFW Gate, Lightbox, Auth Modal) -->
+    <div id="nsfwGate" style="display:none;">
+        <div class="gate-box">
+            <h2>⚠️ 18+ ADULT CONTENT WARNING</h2>
+            <p>This board (/<span id="gateBoardName"></span>/) contains <b>Explicit Adult Content</b>.</p>
+            <p>You must be at least 18 years of age to enter.</p>
+            <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: center;">
+                <button onclick="acceptNSFW()" class="btn-enter">I am 18+ / Enter</button>
+                <button onclick="window.location.href='index.html'" class="btn-exit">Exit</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="lightbox" onclick="closeLightbox(event)">
+        <div id="lightboxContent">
+            <img id="lbImg" style="display:none">
+            <video id="lbVideo" controls style="display:none"></video>
+            <iframe id="lbFrame" frameborder="0" allowfullscreen style="display:none"></iframe>
+            <div id="lbCustom" style="display:none;" onclick="event.stopPropagation()"></div>
+        </div>
+    </div>
+
+    <!-- 7. AUTH MODAL (Login / Register) -->
+    <div id="authModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:var(--card-bg); color:var(--text-color); border:1px solid var(--border-color); border-radius:var(--border-radius); padding:25px; width:90%; max-width:380px; box-shadow:var(--shadow);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <h3 id="authModalTitle" style="margin:0;">Member / Staff Login</h3>
+                <button onclick="closeAuthModal()" style="background:none; border:none; color:var(--text-color); font-size:18px; cursor:pointer;">✕</button>
+            </div>
+            <form id="authForm" onsubmit="handleAuthSubmit(event)">
+                <div style="margin-bottom:12px;">
+                    <label style="display:block; font-size:0.9em; margin-bottom:4px;">Username:</label>
+                    <input type="text" id="authUsername" required style="width:100%; box-sizing:border-box; padding:8px; border:1px solid var(--border-color); border-radius:6px; background:var(--card-bg); color:var(--text-color);">
+                </div>
+                <div style="margin-bottom:15px;">
+                    <label style="display:block; font-size:0.9em; margin-bottom:4px;">Password:</label>
+                    <input type="password" id="authPassword" required style="width:100%; box-sizing:border-box; padding:8px; border:1px solid var(--border-color); border-radius:6px; background:var(--card-bg); color:var(--text-color);">
+                </div>
+                <div id="authMessage" style="color:#ef4444; font-size:0.85em; margin-bottom:10px; min-height:16px;"></div>
+                <button type="submit" id="authSubmitBtn" style="width:100%; padding:9px; background:var(--main-accent); color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Login</button>
+            </form>
+            <div id="authToggleText" style="margin-top:15px; text-align:center; font-size:0.85em;">
+                Don't have an account? <a href="javascript:void(0)" onclick="setAuthMode('register')">Register here</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- 8. NOTIFICATIONS MODAL -->
+    <div id="notificationsModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:var(--card-bg); color:var(--text-color); border:1px solid var(--border-color); border-radius:var(--border-radius); padding:20px; width:92%; max-width:550px; max-height:85vh; display:flex; flex-direction:column; box-shadow:var(--shadow);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+                <h3 style="margin:0; font-size:1.1rem;">🔔 Recent Replies to (You)</h3>
+                <button onclick="closeNotificationsModal()" style="background:none; border:none; color:var(--text-color); font-size:18px; cursor:pointer;">✕</button>
+            </div>
+            <div id="notificationsList" style="overflow-y:auto; flex-grow:1; display:flex; flex-direction:column; gap:10px; padding-right:4px;">
+                <div style="text-align:center; opacity:0.6; padding:20px;">Loading notifications...</div>
+            </div>
+            <div style="margin-top:12px; text-align:right;">
+                <button onclick="closeNotificationsModal()" style="padding:6px 14px; background:var(--main-accent); color:#fff; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 9. WATCHLIST MODAL -->
+    <div id="watchlistModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:var(--card-bg); color:var(--text-color); border:1px solid var(--border-color); border-radius:var(--border-radius); padding:20px; width:92%; max-width:600px; max-height:85vh; display:flex; flex-direction:column; box-shadow:var(--shadow);">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+                <h3 style="margin:0; font-size:1.1rem;">⭐ Watched Threads</h3>
+                <button onclick="closeWatchlistModal()" style="background:none; border:none; color:var(--text-color); font-size:18px; cursor:pointer;">✕</button>
+            </div>
+            <div id="watchlistContent" style="overflow-y:auto; flex-grow:1; display:flex; flex-direction:column; gap:10px; padding-right:4px;">
+                <div style="text-align:center; opacity:0.6; padding:20px;">Loading watchlist...</div>
+            </div>
+            <div style="margin-top:12px; text-align:right;">
+                <button onclick="closeWatchlistModal()" style="padding:6px 14px; background:var(--main-accent); color:#fff; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Back to Top Bubble -->
+    <button id="backToTopBtn" class="back-to-top-bubble" onclick="scrollToTop()" title="Back to Top" aria-label="Back to top">
+        <svg viewBox="0 0 24 24"><path d="M12 4l-8 8h5v8h6v-8h5z"/></svg>
+    </button>
+
+    <div id="bottom"></div>
+    
+    <!-- LOAD SCRIPTS (ORDER MATTERS) -->
+    <script src="asset/js/config.js"></script>
+    <script src="asset/js/utils.js"></script>
+    <script src="asset/js/media.js"></script>
+    <script src="asset/js/app.js"></script>
+</body>
+</html>

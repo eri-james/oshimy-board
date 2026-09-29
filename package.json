@@ -1,0 +1,14 @@
+{
+  "name": "myvt",
+  "version": "1.0.0",
+  "description": "MYVT - Malaysian VTuber Board",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "node -e \"console.log('Build OK')\""
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
