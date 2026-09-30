@@ -781,6 +781,86 @@ app.post('/api/admin/settings', (req, res) => {
     }
 });
 
+// Helper sanitizers for dynamic SSR SEO injection
+function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escapeAttr(str) {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escapeJson(str) {
+    if (!str) return '';
+    return String(str).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '');
+}
+
+const SFW_BOARDS = {
+    'myvt':  { title: '/myvt/ - MY VTuber', description: 'Malaysian Virtual YouTuber discussions, streams, talents, and community banter.' },
+    'vt':    { title: '/vt/ - SEA & Global VTuber', description: 'Southeast Asian and international VTuber discussion, talents, and agency updates.' },
+    'vg':    { title: '/vg/ - Video Games', description: 'Video games, gacha, co-op lobbies, gameplay clips, and gamer discussion.' },
+    'amg':   { title: '/amg/ - Anime & Manga', description: 'Anime, manga, light novels, season watchalongs, and otaku culture.' },
+    'ca':    { title: '/ca/ - Cosplay & Art', description: 'Cosplay photography, illustrations, artwork showcases, and craft discussion.' },
+    'tech':  { title: '/tech/ - Tech Stuff', description: 'Hardware, software, gadgets, PC building, streaming gear, and tech topics.' },
+    'mamak': { title: '/mamak/ - MY Stuff & Off-topic', description: 'Malaysian daily life, mamak session banter, food, and general off-topic lounge.' },
+    'rqr':   { title: '/rqr/ - Board Request & Report', description: 'Feedback, board requests, bug reports, and suggestions for OshiMY.' }
+};
+
+// --- SEARCH ENGINE OPTIMIZATION (SEO) ENDPOINTS ---
+app.get('/robots.txt', (req, res) => {
+    const origin = `${req.protocol}://${req.get('host')}`;
+    const robots = `User-agent: *
+Allow: /
+Disallow: /api/admin/
+Disallow: /api/auth/
+
+# Dynamic XML Sitemap
+Sitemap: ${origin}/sitemap.xml
+`;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(robots);
+});
+
+app.get('/sitemap.xml', (req, res) => {
+    const origin = `${req.protocol}://${req.get('host')}`;
+    const boardKeys = Object.keys(SFW_BOARDS);
+
+    let threadUrlsXml = '';
+    try {
+        const placeholders = boardKeys.map(() => '?').join(',');
+        const threads = db.prepare(
+            `SELECT id, board, bumped_at, created_at FROM threads WHERE board IN (${placeholders}) ORDER BY bumped_at DESC LIMIT 300`
+        ).all(...boardKeys);
+
+        if (threads && threads.length > 0) {
+            threadUrlsXml = threads.map(t => {
+                const lastmod = new Date(t.bumped_at || t.created_at || Date.now()).toISOString();
+                return `  <url>\n    <loc>${origin}/?b=${t.board}&amp;t=${t.id}</loc>\n    <lastmod>${lastmod}</lastmod>\n    <changefreq>daily</changefreq>\n    <priority>0.7</priority>\n  </url>`;
+            }).join('\n');
+        }
+    } catch (e) {
+        console.error('Error generating sitemap threads:', e);
+    }
+
+    const boardUrlsXml = boardKeys.map(b => `  <url>\n    <loc>${origin}/?b=${b}</loc>\n    <changefreq>hourly</changefreq>\n    <priority>0.8</priority>\n  </url>`).join('\n');
+
+    const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${origin}/</loc>
+    <changefreq>hourly</changefreq>
+    <priority>1.0</priority>
+  </url>
+${boardUrlsXml}
+${threadUrlsXml ? '\n' + threadUrlsXml : ''}
+</urlset>`.trim();
+
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(sitemap);
+});
+
 // --- STATIC ASSETS & DYNAMIC SSR METADATA ROUTING ---
 // Disable default index.html serving in express.static so root requests hit our dynamic SSR handler
 app.use(express.static(__dirname, { index: false }));
@@ -794,15 +874,109 @@ app.get('*', (req, res) => {
     try {
         const indexPath = path.join(__dirname, 'index.html');
         let html = fs.readFileSync(indexPath, 'utf8');
+        const origin = `${req.protocol}://${req.get('host')}`;
 
-        // Dynamically inject active banner into OpenGraph & Twitter tags for Discord/messenger embeds
-        const row = db.prepare('SELECT value FROM site_settings WHERE key = ?').get('banner_url');
-        if (row && row.value && row.value.trim()) {
-            const currentBanner = row.value.trim();
-            html = html
-                .replace(/<meta property="og:image" content="[^"]*">/g, `<meta property="og:image" content="${currentBanner}">`)
-                .replace(/<meta name="twitter:image" content="[^"]*">/g, `<meta name="twitter:image" content="${currentBanner}">`);
+        // Get default or custom site banner
+        let currentBanner = 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=300&q=80';
+        try {
+            const row = db.prepare('SELECT value FROM site_settings WHERE key = ?').get('banner_url');
+            if (row && row.value && row.value.trim()) {
+                currentBanner = row.value.trim();
+            }
+        } catch (_) {}
+
+        // Check if a specific thread is requested via query or path
+        let threadId = req.query.t || req.query.thread;
+        if (!threadId) {
+            const threadMatch = req.path.match(/^\/(?:boards\/[^\/]+\/thread|thread|t)\/([a-zA-Z0-9_\-]+)/);
+            if (threadMatch) threadId = threadMatch[1];
         }
+
+        if (threadId) {
+            try {
+                const thread = db.prepare('SELECT id, board, subject, comment, media_url, created_at, reply_count FROM threads WHERE id = ?').get(threadId);
+                if (thread) {
+                    const cleanComment = (thread.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
+                    const subjectTitle = thread.subject ? `${thread.subject} - ` : '';
+                    const pageTitle = `${subjectTitle}/${thread.board}/ #${thread.id} | OshiMY`;
+                    const pageDesc = cleanComment || `Thread #${thread.id} on /${thread.board}/ - OshiMY Malaysian VTuber & Otaku Imageboard`;
+                    const threadMedia = (thread.media_url && !thread.media_url.endsWith('.mp3')) ? thread.media_url : currentBanner;
+                    const canonicalUrl = `${origin}/?b=${thread.board}&t=${thread.id}`;
+
+                    // Replace SEO tags
+                    html = html
+                        .replace(/<title>.*?<\/title>/, `<title>${escapeHtml(pageTitle)}</title>`)
+                        .replace(/<meta name="description" content=".*?">/, `<meta name="description" content="${escapeAttr(pageDesc)}">`)
+                        .replace(/<meta property="og:title" content=".*?">/, `<meta property="og:title" content="${escapeAttr(pageTitle)}">`)
+                        .replace(/<meta property="og:description" content=".*?">/, `<meta property="og:description" content="${escapeAttr(pageDesc)}">`)
+                        .replace(/<meta property="og:image" content=".*?">/, `<meta property="og:image" content="${escapeAttr(threadMedia)}">`)
+                        .replace(/<meta property="og:url" content=".*?">/, `<meta property="og:url" content="${escapeAttr(canonicalUrl)}">`)
+                        .replace(/<meta name="twitter:title" content=".*?">/, `<meta name="twitter:title" content="${escapeAttr(pageTitle)}">`)
+                        .replace(/<meta name="twitter:description" content=".*?">/, `<meta name="twitter:description" content="${escapeAttr(pageDesc)}">`)
+                        .replace(/<meta name="twitter:image" content=".*?">/, `<meta name="twitter:image" content="${escapeAttr(threadMedia)}">`)
+                        .replace(/<link rel="canonical" href=".*?">/, `<link rel="canonical" href="${escapeAttr(canonicalUrl)}">`);
+
+                    // Add DiscussionForumPosting Schema.org LD-JSON
+                    const threadJsonLd = `
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "DiscussionForumPosting",
+      "headline": "${escapeJson(thread.subject || ('Thread #' + thread.id))}",
+      "articleBody": "${escapeJson(cleanComment)}",
+      "image": "${escapeJson(threadMedia)}",
+      "datePublished": "${new Date(thread.created_at || Date.now()).toISOString()}",
+      "url": "${escapeJson(canonicalUrl)}",
+      "interactionStatistic": {
+        "@type": "InteractionCounter",
+        "interactionType": "https://schema.org/CommentAction",
+        "userInteractionCount": ${thread.reply_count || 0}
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "OshiMY",
+        "url": "${origin}/"
+      }
+    }
+    </script>`;
+                    html = html.replace('</head>', `${threadJsonLd}\n</head>`);
+
+                    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+                    return res.send(html);
+                }
+            } catch (threadErr) {
+                console.warn('Could not render SSR thread meta:', threadErr.message);
+            }
+        }
+
+        // Check if a specific board is requested
+        const boardKey = req.query.b;
+        if (boardKey && SFW_BOARDS[boardKey]) {
+            const b = SFW_BOARDS[boardKey];
+            const pageTitle = `${b.title} | OshiMY`;
+            const pageDesc = `${b.description} Participate in anonymous discussions on /${boardKey}/ at OshiMY.`;
+            const canonicalUrl = `${origin}/?b=${boardKey}`;
+
+            html = html
+                .replace(/<title>.*?<\/title>/, `<title>${escapeHtml(pageTitle)}</title>`)
+                .replace(/<meta name="description" content=".*?">/, `<meta name="description" content="${escapeAttr(pageDesc)}">`)
+                .replace(/<meta property="og:title" content=".*?">/, `<meta property="og:title" content="${escapeAttr(pageTitle)}">`)
+                .replace(/<meta property="og:description" content=".*?">/, `<meta property="og:description" content="${escapeAttr(pageDesc)}">`)
+                .replace(/<meta property="og:image" content=".*?">/, `<meta property="og:image" content="${escapeAttr(currentBanner)}">`)
+                .replace(/<meta property="og:url" content=".*?">/, `<meta property="og:url" content="${escapeAttr(canonicalUrl)}">`)
+                .replace(/<meta name="twitter:title" content=".*?">/, `<meta name="twitter:title" content="${escapeAttr(pageTitle)}">`)
+                .replace(/<meta name="twitter:description" content=".*?">/, `<meta name="twitter:description" content="${escapeAttr(pageDesc)}">`)
+                .replace(/<meta name="twitter:image" content=".*?">/, `<meta name="twitter:image" content="${escapeAttr(currentBanner)}">`)
+                .replace(/<link rel="canonical" href=".*?">/, `<link rel="canonical" href="${escapeAttr(canonicalUrl)}">`);
+
+            res.setHeader('Content-Type', 'text/html; charset=utf-8');
+            return res.send(html);
+        }
+
+        // Default Homepage
+        html = html
+            .replace(/<meta property="og:image" content="[^"]*">/g, `<meta property="og:image" content="${escapeAttr(currentBanner)}">`)
+            .replace(/<meta name="twitter:image" content="[^"]*">/g, `<meta name="twitter:image" content="${escapeAttr(currentBanner)}">`);
 
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.send(html);

@@ -22,21 +22,52 @@
     <meta name="twitter:description" content="The premier anonymous imageboard for the Malaysian Virtual YouTuber community and Otaku culture. Discuss streams, oshis, anime, and art on OshiMY.">
     <meta name="twitter:image" content="https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=300&q=80">
 
+    <!-- Canonical & Sitemap -->
+    <link rel="canonical" href="https://oshimy.moe/">
+    <link rel="sitemap" type="application/xml" title="Sitemap" href="/sitemap.xml">
+
     <!-- Schema.org JSON-LD Structured Data for Search Engine Crawlers -->
     <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "WebSite",
-      "name": "OshiMY",
-      "alternateName": ["OshiMY Board", "oshimai", "OshiMY Imageboard"],
-      "description": "The premier anonymous imageboard for the Malaysian Virtual YouTuber community and adjacent Otaku culture.",
-      "inLanguage": ["en", "ms"],
-      "potentialAction": {
-        "@type": "SearchAction",
-        "target": "https://oshimy.moe/?b={search_term_string}",
-        "query-input": "required name=search_term_string"
+    [
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "@id": "https://oshimy.moe/#website",
+        "name": "OshiMY",
+        "alternateName": [
+          "MYVT",
+          "MYVT Imageboard",
+          "MY VTuber Imageboard",
+          "OshiMY Board",
+          "oshimai",
+          "OshiMY Imageboard"
+        ],
+        "url": "https://oshimy.moe/",
+        "description": "The premier anonymous imageboard for the Malaysian Virtual YouTuber community and adjacent Otaku culture.",
+        "inLanguage": ["en", "ms"],
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "https://oshimy.moe/?b={search_term_string}",
+          "query-input": "required name=search_term_string"
+        }
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "DiscussionForumPosting",
+        "@id": "https://oshimy.moe/#forum",
+        "headline": "OshiMY Malaysian VTuber & Otaku Discussion Board",
+        "description": "Community discussions covering Malaysian VTubers, Nijisanji, hololive, indies, anime, conventions, and otaku culture.",
+        "author": {
+          "@type": "Organization",
+          "name": "OshiMY Community"
+        },
+        "publisher": {
+          "@type": "Organization",
+          "name": "OshiMY",
+          "url": "https://oshimy.moe/"
+        }
       }
-    }
+    ]
     </script>
     
     <!-- LOAD CSS -->

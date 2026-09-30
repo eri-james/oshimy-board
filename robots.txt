@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /api/admin/
+Disallow: /api/auth/
+
+# Sitemap location
+Sitemap: https://oshimy.moe/sitemap.xml

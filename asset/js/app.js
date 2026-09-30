@@ -71,7 +71,45 @@ function router() {
 
     document.body.classList.remove('night-mode');
 
-    // 1. HOME PAGE (No Board Selected)
+    const urlParam = new URLSearchParams(window.location.search);
+    let targetThreadId = null;
+    let postPart = null;
+
+    if (hash.startsWith("#thread_")) {
+        let threadPart = hash.replace("#thread_", "");
+        if (threadPart.includes("#post_")) {
+            const splitHash = threadPart.split("#post_");
+            threadPart = splitHash[0];
+            postPart = splitHash[1];
+        }
+        targetThreadId = threadPart;
+    } else if (urlParam.get('t') || urlParam.get('thread')) {
+        targetThreadId = urlParam.get('t') || urlParam.get('thread');
+        if (hash.startsWith("#post_")) {
+            postPart = hash.replace("#post_", "");
+        }
+    }
+
+    // 1. DIRECT THREAD MODE (via hash #thread_ or search param ?t= or ?thread=)
+    if (targetThreadId) {
+        if (homeView) homeView.style.display = "none";
+        if (boardView) boardView.style.display = "none";
+        if (threadView) threadView.style.display = "block";
+        if (formWrapper) formWrapper.style.display = "block";
+        if (topDivider) topDivider.style.display = "block";
+        currentThreadId = targetThreadId;
+        lastThreadSignature = "";
+
+        if (postPart) {
+            sessionStorage.setItem('pending_scroll_post', postPart);
+        }
+
+        loadThreadView(currentThreadId);
+        renderBoardNav();
+        return;
+    }
+
+    // 2. HOME PAGE (No Board Selected)
     if (!currentBoard || !BOARDS[currentBoard]) {
         if (homeView) homeView.style.display = "block";
         if (boardView) boardView.style.display = "none";
@@ -84,7 +122,7 @@ function router() {
         return;
     }
 
-    // 2. BOARD / THREAD MODE
+    // 3. BOARD MODE
     if (homeView) homeView.style.display = "none";
     if (topDivider) topDivider.style.display = "block";
     
@@ -99,40 +137,13 @@ function router() {
     // Check Gate
     if (!checkNSFWGate()) return;
 
-    const urlParam = new URLSearchParams(window.location.search);
     const isArchiveView = urlParam.get('view') === 'archive';
-
-    if (hash.startsWith("#thread_")) {
-        // Parse thread and potential post anchor (e.g. #thread_123#post_456)
-        let threadPart = hash.replace("#thread_", "");
-        let postPart = null;
-        if (threadPart.includes("#post_")) {
-            const splitHash = threadPart.split("#post_");
-            threadPart = splitHash[0];
-            postPart = splitHash[1];
-        }
-
-        // Thread Mode
-        if (boardView) boardView.style.display = "none";
-        if (threadView) threadView.style.display = "block";
-        if (formWrapper) formWrapper.style.display = "block";
-        currentThreadId = threadPart;
-        lastThreadSignature = "";
-
-        if (postPart) {
-            sessionStorage.setItem('pending_scroll_post', postPart);
-        }
-
-        loadThreadView(currentThreadId);
-    } else {
-        // Board Mode
-        currentThreadId = null;
-        lastBoardSignature = "";
-        if (threadView) threadView.style.display = "none";
-        if (boardView) boardView.style.display = "block";
-        if (formWrapper) formWrapper.style.display = isArchiveView ? "none" : "block"; 
-        loadBoardView(isArchiveView);
-    }
+    currentThreadId = null;
+    lastBoardSignature = "";
+    if (threadView) threadView.style.display = "none";
+    if (boardView) boardView.style.display = "block";
+    if (formWrapper) formWrapper.style.display = isArchiveView ? "none" : "block"; 
+    loadBoardView(isArchiveView);
 
     renderBoardNav();
 }
