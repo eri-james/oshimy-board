@@ -46,14 +46,35 @@ export async function onRequest(context) {
         if (threadId) {
             const thread = await env.DB.prepare('SELECT id, board, subject, comment, media_url, created_at FROM threads WHERE id = ?').bind(threadId).first();
             if (thread) {
-                const cleanComment = (thread.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
-                const subjectTitle = thread.subject && thread.subject.trim() 
-                    ? `${thread.subject.trim()} - ` 
-                    : (cleanComment ? `${cleanComment.slice(0, 40)}... - ` : '');
-                const pageTitle = `${subjectTitle}/${thread.board}/ | OshiMY`;
-                const pageDesc = cleanComment || `Thread on /${thread.board}/ - OshiMY Malaysian VTuber & Otaku Imageboard`;
-                const threadMedia = (thread.media_url && !thread.media_url.endsWith('.mp3')) ? thread.media_url : currentBanner;
-                const canonicalUrl = `${origin}/?b=${thread.board}&t=${thread.id}`;
+                const replyId = url.searchParams.get('r') || url.searchParams.get('reply');
+                let reply = null;
+                if (replyId) {
+                    try {
+                        reply = await env.DB.prepare('SELECT id, thread_id, board, name, comment, media_url, created_at FROM replies WHERE id = ? AND thread_id = ?').bind(replyId, threadId).first();
+                    } catch (_) {}
+                }
+
+                let pageTitle, pageDesc, threadMedia, canonicalUrl;
+
+                if (reply) {
+                    const cleanReplyComment = (reply.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
+                    const cleanSubject = thread.subject && thread.subject.trim() ? `${thread.subject.trim()} - ` : '';
+                    pageTitle = `Reply >>${reply.id.substring(1, 9)} - ${cleanSubject}/${thread.board}/ | OshiMY`;
+                    pageDesc = cleanReplyComment || `Reply by ${reply.name || 'Anonymous'} in /${thread.board}/ thread #${thread.id.substring(1, 9)}`;
+                    threadMedia = (reply.media_url && !reply.media_url.endsWith('.mp3'))
+                        ? reply.media_url
+                        : ((thread.media_url && !thread.media_url.endsWith('.mp3')) ? thread.media_url : currentBanner);
+                    canonicalUrl = `${origin}/?b=${thread.board}&t=${thread.id}&r=${reply.id}`;
+                } else {
+                    const cleanComment = (thread.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
+                    const subjectTitle = thread.subject && thread.subject.trim() 
+                        ? `${thread.subject.trim()} - ` 
+                        : (cleanComment ? `${cleanComment.slice(0, 40)}... - ` : '');
+                    pageTitle = `${subjectTitle}/${thread.board}/ | OshiMY`;
+                    pageDesc = cleanComment || `Thread on /${thread.board}/ - OshiMY Malaysian VTuber & Otaku Imageboard`;
+                    threadMedia = (thread.media_url && !thread.media_url.endsWith('.mp3')) ? thread.media_url : currentBanner;
+                    canonicalUrl = `${origin}/?b=${thread.board}&t=${thread.id}`;
+                }
 
                 return new HTMLRewriter()
                     .on('title', { element(el) { el.setInnerContent(pageTitle); } })

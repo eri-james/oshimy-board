@@ -50,7 +50,11 @@ function copyPostLink(postId, threadId, board = null, event = null) {
     }
     const targetBoard = board || (typeof currentBoard !== 'undefined' ? currentBoard : '');
     const origin = window.location.origin;
-    const url = `${origin}/?b=${targetBoard}&t=${threadId}#post_${postId}`;
+    // If copying a reply link, use &r= so crawlers/Discord can embed the exact reply
+    const isReply = postId && threadId && postId !== threadId;
+    const url = isReply 
+        ? `${origin}/?b=${targetBoard}&t=${threadId}&r=${postId}#post_${postId}`
+        : `${origin}/?b=${targetBoard}&t=${threadId}#post_${postId}`;
 
     navigator.clipboard.writeText(url).then(() => {
         if (typeof showToast === 'function') {

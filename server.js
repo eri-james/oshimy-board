@@ -894,16 +894,40 @@ app.get('*', (req, res) => {
 
         if (threadId) {
             try {
-                const thread = db.prepare('SELECT id, board, subject, comment, media_url, created_at FROM threads WHERE id = ?').get(threadId);
+                const thread = db.prepare('SELECT id, board, subject, comment, media_url, created_at, reply_count FROM threads WHERE id = ?').get(threadId);
                 if (thread) {
-                    const cleanComment = (thread.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
-                    const subjectTitle = thread.subject && thread.subject.trim() 
-                        ? `${thread.subject.trim()} - ` 
-                        : (cleanComment ? `${cleanComment.slice(0, 40)}... - ` : '');
-                    const pageTitle = `${subjectTitle}/${thread.board}/ | OshiMY`;
-                    const pageDesc = cleanComment || `Thread on /${thread.board}/ - OshiMY Malaysian VTuber & Otaku Imageboard`;
-                    const threadMedia = (thread.media_url && !thread.media_url.endsWith('.mp3')) ? thread.media_url : currentBanner;
-                    const canonicalUrl = `${origin}/?b=${thread.board}&t=${thread.id}`;
+                    const replyId = req.query.r || req.query.reply;
+                    let reply = null;
+                    if (replyId) {
+                        try {
+                            reply = db.prepare('SELECT id, thread_id, board, name, comment, media_url, created_at FROM replies WHERE id = ? AND thread_id = ?').get(replyId, threadId);
+                        } catch (_) {}
+                    }
+
+                    let pageTitle, pageDesc, embedMedia, canonicalUrl;
+
+                    if (reply) {
+                        // Embed specific reply!
+                        const cleanReplyComment = (reply.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
+                        const cleanSubject = thread.subject && thread.subject.trim() ? `${thread.subject.trim()} - ` : '';
+                        pageTitle = `Reply >>${reply.id.substring(1, 9)} - ${cleanSubject}/${thread.board}/ | OshiMY`;
+                        pageDesc = cleanReplyComment || `Reply by ${reply.name || 'Anonymous'} in /${thread.board}/ thread #${thread.id.substring(1, 9)}`;
+                        // If reply has its own media, use it; otherwise fallback to thread OP media or banner
+                        embedMedia = (reply.media_url && !reply.media_url.endsWith('.mp3'))
+                            ? reply.media_url 
+                            : ((thread.media_url && !thread.media_url.endsWith('.mp3')) ? thread.media_url : currentBanner);
+                        canonicalUrl = `${origin}/?b=${thread.board}&t=${thread.id}&r=${reply.id}`;
+                    } else {
+                        // Standard Thread Embed
+                        const cleanComment = (thread.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
+                        const subjectTitle = thread.subject && thread.subject.trim() 
+                            ? `${thread.subject.trim()} - ` 
+                            : (cleanComment ? `${cleanComment.slice(0, 40)}... - ` : '');
+                        pageTitle = `${subjectTitle}/${thread.board}/ | OshiMY`;
+                        pageDesc = cleanComment || `Thread on /${thread.board}/ - OshiMY Malaysian VTuber & Otaku Imageboard`;
+                        embedMedia = (thread.media_url && !thread.media_url.endsWith('.mp3')) ? thread.media_url : currentBanner;
+                        canonicalUrl = `${origin}/?b=${thread.board}&t=${thread.id}`;
+                    }
 
                     // Replace SEO tags
                     html = html
@@ -911,29 +935,27 @@ app.get('*', (req, res) => {
                         .replace(/<meta name="description" content=".*?">/, `<meta name="description" content="${escapeAttr(pageDesc)}">`)
                         .replace(/<meta property="og:title" content=".*?">/, `<meta property="og:title" content="${escapeAttr(pageTitle)}">`)
                         .replace(/<meta property="og:description" content=".*?">/, `<meta property="og:description" content="${escapeAttr(pageDesc)}">`)
-                        .replace(/<meta property="og:image" content=".*?">/, `<meta property="og:image" content="${escapeAttr(threadMedia)}">`)
+                        .replace(/<meta property="og:image" content=".*?">/, `<meta property="og:image" content="${escapeAttr(embedMedia)}">`)
                         .replace(/<meta property="og:url" content=".*?">/, `<meta property="og:url" content="${escapeAttr(canonicalUrl)}">`)
                         .replace(/<meta name="twitter:title" content=".*?">/, `<meta name="twitter:title" content="${escapeAttr(pageTitle)}">`)
                         .replace(/<meta name="twitter:description" content=".*?">/, `<meta name="twitter:description" content="${escapeAttr(pageDesc)}">`)
-                        .replace(/<meta name="twitter:image" content=".*?">/, `<meta name="twitter:image" content="${escapeAttr(threadMedia)}">`)
+                        .replace(/<meta name="twitter:image" content=".*?">/, `<meta name="twitter:image" content="${escapeAttr(embedMedia)}">`)
                         .replace(/<link rel="canonical" href=".*?">/, `<link rel="canonical" href="${escapeAttr(canonicalUrl)}">`);
 
-                    // Add DiscussionForumPosting Schema.org LD-JSON
+                    // Add DiscussionForumPosting / Comment Schema.org LD-JSON
+                    const jsonLdType = reply ? "Comment" : "DiscussionForumPosting";
+                    const jsonLdBody = reply ? (reply.comment || '') : (thread.comment || '');
+                    const jsonLdTitle = reply ? `Reply to #${thread.id.substring(1, 9)}` : (thread.subject || ('Thread #' + thread.id));
                     const threadJsonLd = `
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
-      "@type": "DiscussionForumPosting",
-      "headline": "${escapeJson(thread.subject || ('Thread #' + thread.id))}",
-      "articleBody": "${escapeJson(cleanComment)}",
-      "image": "${escapeJson(threadMedia)}",
-      "datePublished": "${new Date(thread.created_at || Date.now()).toISOString()}",
+      "@type": "${jsonLdType}",
+      "headline": "${escapeJson(jsonLdTitle)}",
+      "text": "${escapeJson(jsonLdBody.slice(0, 300))}",
+      "image": "${escapeJson(embedMedia)}",
+      "datePublished": "${new Date((reply ? reply.created_at : thread.created_at) || Date.now()).toISOString()}",
       "url": "${escapeJson(canonicalUrl)}",
-      "interactionStatistic": {
-        "@type": "InteractionCounter",
-        "interactionType": "https://schema.org/CommentAction",
-        "userInteractionCount": ${thread.reply_count || 0}
-      },
       "publisher": {
         "@type": "Organization",
         "name": "OshiMY",
@@ -947,7 +969,7 @@ app.get('*', (req, res) => {
                     return res.send(html);
                 }
             } catch (threadErr) {
-                console.warn('Could not render SSR thread meta:', threadErr.message);
+                console.warn('Could not render SSR thread/reply meta:', threadErr.message);
             }
         }
 
