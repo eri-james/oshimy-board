@@ -318,6 +318,175 @@ app.get('/api/pixiv/artwork', async (req, res) => {
     }
 });
 
+// In-memory cache for Twitter tweet details
+const tweetCache = new Map();
+
+// Twitter / 𝕏 Tweet Details Resolver via vxTwitter & fxTwitter proxy helpers
+app.get('/api/twitter/tweet', async (req, res) => {
+    const id = req.query.id;
+    const handle = req.query.handle || 'i';
+    if (!id || !/^\d+$/.test(String(id).trim())) {
+        return res.status(400).json({ error: 'Invalid tweet id' });
+    }
+
+    const cleanId = String(id).trim();
+    if (tweetCache.has(cleanId)) {
+        return res.json({ success: true, tweet: tweetCache.get(cleanId) });
+    }
+
+    try {
+        let tweetData = null;
+
+        // 1. Try vxtwitter API first
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4000);
+            const vxResp = await fetch(`https://api.vxtwitter.com/${handle}/status/${cleanId}`, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+            });
+            clearTimeout(timeout);
+            if (vxResp.ok) {
+                tweetData = await vxResp.json();
+            }
+        } catch (_) {}
+
+        // 2. Fallback to fxtwitter API
+        if (!tweetData) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 4000);
+                const fxResp = await fetch(`https://api.fxtwitter.com/${handle}/status/${cleanId}`, {
+                    signal: controller.signal,
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                });
+                clearTimeout(timeout);
+                if (fxResp.ok) {
+                    const fxJson = await fxResp.json();
+                    if (fxJson && fxJson.tweet) {
+                        const t = fxJson.tweet;
+                        tweetData = {
+                            tweetID: t.id,
+                            tweetURL: t.url,
+                            text: t.text,
+                            user_name: t.author?.name || handle,
+                            user_screen_name: t.author?.screen_name || handle,
+                            user_profile_image_url: t.author?.avatar_url,
+                            likes: t.likes || 0,
+                            retweets: t.retweets || 0,
+                            media_extended: (t.media?.all || []).map(m => ({
+                                type: m.type === 'video' ? 'video' : 'image',
+                                url: m.url,
+                                thumbnail_url: m.thumbnail_url || m.url,
+                                size: { width: m.width, height: m.height }
+                            }))
+                        };
+                    }
+                }
+            } catch (_) {}
+        }
+
+        if (!tweetData) {
+            return res.status(404).json({ error: 'Tweet not found or could not be retrieved' });
+        }
+
+        // Process media items (videos, multi-images)
+        const mediaList = tweetData.media_extended || [];
+        const videoItem = mediaList.find(m => m.type === 'video' || m.type === 'gif');
+        const imageItems = mediaList.filter(m => m.type === 'image');
+
+        const pages = imageItems.map((img, idx) => ({
+            pageIndex: idx,
+            displayUrl: img.url,
+            helperUrl: img.url,
+            originalUrl: img.url
+        }));
+
+        const tweet = {
+            id: cleanId,
+            url: tweetData.tweetURL || `https://x.com/${tweetData.user_screen_name || handle}/status/${cleanId}`,
+            text: tweetData.text || '',
+            authorName: tweetData.user_name || handle,
+            authorHandle: tweetData.user_screen_name || handle,
+            avatar: tweetData.user_profile_image_url || '',
+            likes: tweetData.likes || 0,
+            retweets: tweetData.retweets || 0,
+            hasMedia: mediaList.length > 0,
+            mediaType: videoItem ? 'video' : (imageItems.length > 0 ? 'image' : 'none'),
+            videoUrl: videoItem ? videoItem.url : null,
+            videoThumbnail: videoItem ? (videoItem.thumbnail_url || videoItem.url) : null,
+            imageUrl: imageItems.length > 0 ? imageItems[0].url : null,
+            pages,
+            pageCount: pages.length
+        };
+
+        tweetCache.set(cleanId, tweet);
+        if (tweetCache.size > 500) {
+            const firstKey = tweetCache.keys().next().value;
+            tweetCache.delete(firstKey);
+        }
+
+        res.json({ success: true, tweet });
+    } catch (err) {
+        console.error('Twitter lookup error:', err);
+        res.status(500).json({ error: 'Failed to fetch tweet details' });
+    }
+});
+
+// In-memory cache for Reddit post details
+const redditPostCache = new Map();
+
+// Reddit Post Details Resolver via official Reddit oEmbed
+app.get('/api/reddit/post', async (req, res) => {
+    const postUrl = req.query.url;
+    if (!postUrl) {
+        return res.status(400).json({ error: 'Missing Reddit post url' });
+    }
+
+    const cleanUrl = String(postUrl).trim();
+    if (redditPostCache.has(cleanUrl)) {
+        return res.json({ success: true, post: redditPostCache.get(cleanUrl) });
+    }
+
+    try {
+        const oembedUrl = `https://www.reddit.com/oembed?url=${encodeURIComponent(cleanUrl)}`;
+        const resp = await fetch(oembedUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+        });
+
+        if (!resp.ok) {
+            return res.status(resp.status).json({ error: 'Reddit post not found or removed' });
+        }
+
+        const data = await resp.json();
+        
+        const subMatch = cleanUrl.match(/reddit\.com\/r\/([a-zA-Z0-9_]+)(?:\/comments\/([a-zA-Z0-9_]+))?/i);
+        const subreddit = subMatch ? subMatch[1] : (data.author_name || 'reddit');
+        const postId = subMatch ? subMatch[2] : '';
+
+        const post = {
+            url: cleanUrl,
+            title: data.title || 'Reddit Post',
+            author: data.author_name || 'Reddit User',
+            subreddit,
+            postId,
+            html: data.html || '',
+            thumbnailUrl: data.thumbnail_url || null
+        };
+
+        redditPostCache.set(cleanUrl, post);
+        if (redditPostCache.size > 500) {
+            const firstKey = redditPostCache.keys().next().value;
+            redditPostCache.delete(firstKey);
+        }
+
+        res.json({ success: true, post });
+    } catch (err) {
+        console.error('Reddit oembed error:', err);
+        res.status(500).json({ error: 'Failed to fetch Reddit post details' });
+    }
+});
+
 // 1. Boards List & Stats
 app.get('/api/boards', (req, res) => {
     try {

@@ -396,6 +396,135 @@ export async function onRequest(context) {
             }
         }
 
+        // Twitter / 𝕏 Tweet Details Resolver via vxTwitter & fxTwitter proxy helpers
+        if (route === 'twitter' && path[1] === 'tweet' && method === 'GET') {
+            const id = url.searchParams.get('id');
+            const handle = url.searchParams.get('handle') || 'i';
+            if (!id || !/^\d+$/.test(String(id).trim())) {
+                return json({ error: 'Invalid tweet id' }, 400);
+            }
+
+            const cleanId = String(id).trim();
+            try {
+                let tweetData = null;
+
+                try {
+                    const vxResp = await fetch(`https://api.vxtwitter.com/${handle}/status/${cleanId}`, {
+                        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                    });
+                    if (vxResp.ok) {
+                        tweetData = await vxResp.json();
+                    }
+                } catch (_) {}
+
+                if (!tweetData) {
+                    try {
+                        const fxResp = await fetch(`https://api.fxtwitter.com/${handle}/status/${cleanId}`, {
+                            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                        });
+                        if (fxResp.ok) {
+                            const fxJson = await fxResp.json();
+                            if (fxJson && fxJson.tweet) {
+                                const t = fxJson.tweet;
+                                tweetData = {
+                                    tweetID: t.id,
+                                    tweetURL: t.url,
+                                    text: t.text,
+                                    user_name: t.author?.name || handle,
+                                    user_screen_name: t.author?.screen_name || handle,
+                                    user_profile_image_url: t.author?.avatar_url,
+                                    likes: t.likes || 0,
+                                    retweets: t.retweets || 0,
+                                    media_extended: (t.media?.all || []).map(m => ({
+                                        type: m.type === 'video' ? 'video' : 'image',
+                                        url: m.url,
+                                        thumbnail_url: m.thumbnail_url || m.url,
+                                        size: { width: m.width, height: m.height }
+                                    }))
+                                };
+                            }
+                        }
+                    } catch (_) {}
+                }
+
+                if (!tweetData) {
+                    return json({ error: 'Tweet not found or could not be retrieved' }, 404);
+                }
+
+                const mediaList = tweetData.media_extended || [];
+                const videoItem = mediaList.find(m => m.type === 'video' || m.type === 'gif');
+                const imageItems = mediaList.filter(m => m.type === 'image');
+
+                const pages = imageItems.map((img, idx) => ({
+                    pageIndex: idx,
+                    displayUrl: img.url,
+                    helperUrl: img.url,
+                    originalUrl: img.url
+                }));
+
+                const tweet = {
+                    id: cleanId,
+                    url: tweetData.tweetURL || `https://x.com/${tweetData.user_screen_name || handle}/status/${cleanId}`,
+                    text: tweetData.text || '',
+                    authorName: tweetData.user_name || handle,
+                    authorHandle: tweetData.user_screen_name || handle,
+                    avatar: tweetData.user_profile_image_url || '',
+                    likes: tweetData.likes || 0,
+                    retweets: tweetData.retweets || 0,
+                    hasMedia: mediaList.length > 0,
+                    mediaType: videoItem ? 'video' : (imageItems.length > 0 ? 'image' : 'none'),
+                    videoUrl: videoItem ? videoItem.url : null,
+                    videoThumbnail: videoItem ? (videoItem.thumbnail_url || videoItem.url) : null,
+                    imageUrl: imageItems.length > 0 ? imageItems[0].url : null,
+                    pages,
+                    pageCount: pages.length
+                };
+
+                return json({ success: true, tweet });
+            } catch (err) {
+                return json({ error: 'Failed to fetch tweet details' }, 500);
+            }
+        }
+
+        // Reddit Post Details Resolver via official Reddit oEmbed
+        if (route === 'reddit' && path[1] === 'post' && method === 'GET') {
+            const postUrl = url.searchParams.get('url');
+            if (!postUrl) {
+                return json({ error: 'Missing Reddit post url' }, 400);
+            }
+
+            const cleanUrl = String(postUrl).trim();
+            try {
+                const oembedUrl = `https://www.reddit.com/oembed?url=${encodeURIComponent(cleanUrl)}`;
+                const resp = await fetch(oembedUrl, {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                });
+
+                if (!resp.ok) {
+                    return json({ error: 'Reddit post not found or removed' }, resp.status);
+                }
+
+                const data = await resp.json();
+                const subMatch = cleanUrl.match(/reddit\.com\/r\/([a-zA-Z0-9_]+)(?:\/comments\/([a-zA-Z0-9_]+))?/i);
+                const subreddit = subMatch ? subMatch[1] : (data.author_name || 'reddit');
+                const postId = subMatch ? subMatch[2] : '';
+
+                const post = {
+                    url: cleanUrl,
+                    title: data.title || 'Reddit Post',
+                    author: data.author_name || 'Reddit User',
+                    subreddit,
+                    postId,
+                    html: data.html || '',
+                    thumbnailUrl: data.thumbnail_url || null
+                };
+
+                return json({ success: true, post });
+            } catch (err) {
+                return json({ error: 'Failed to fetch Reddit post details' }, 500);
+            }
+        }
+
         // 1. GET /api/boards
         if (route === 'boards' && method === 'GET') {
             const stats = await db.prepare(

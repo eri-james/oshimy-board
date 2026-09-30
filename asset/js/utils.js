@@ -206,6 +206,9 @@ function generateBacklinks(scopeElement = null) {
     if (typeof hydratePixivEmbeds === 'function') {
         hydratePixivEmbeds();
     }
+    if (typeof hydrateTwitterEmbeds === 'function') {
+        hydrateTwitterEmbeds();
+    }
 }
 
 // ==========================================

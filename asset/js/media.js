@@ -18,13 +18,15 @@ function getMediaType(url) {
         return { type: 'youtube', id: ytMatch[1], url: cleanUrl };
     }
 
-    // 2. Twitter / X Detection (handles status URLs with username/handle & tweet ID)
-    const xRegex = /(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/(?:#!\/)?(?:([a-zA-Z0-9_]+)\/status\/|status\/)(\d+)/i;
+    // 2. Twitter / X Detection (handles twitter.com, x.com, vxtwitter, fxtwitter, fixupx, /status/ and /i/status/)
+    const xRegex = /(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com|vxtwitter\.com|fxtwitter\.com|fixupx\.com)\/(?:#!\/)?(?:([a-zA-Z0-9_]+)\/status\/|status\/|i\/status\/)(\d+)/i;
     const xMatch = cleanUrl.match(xRegex);
     if (xMatch) {
+        const rawHandle = xMatch[1];
+        const isNotHandle = !rawHandle || ['status', 'i', 'intent'].includes(rawHandle.toLowerCase());
         return { 
             type: 'x', 
-            handle: xMatch[1] && xMatch[1].toLowerCase() !== 'status' ? xMatch[1] : null, 
+            handle: isNotHandle ? null : rawHandle, 
             id: xMatch[2], 
             url: cleanUrl 
         };
@@ -114,12 +116,15 @@ function renderMedia(url) {
 
     // 2. Twitter / X Card
     if (media.type === 'x') {
-        const handleLabel = media.handle ? `@${escapeHtml(media.handle)}` : 'Post';
+        const handleLabel = media.handle ? `@${escapeHtml(media.handle)}` : '𝕏 Post';
+        const cleanHandle = media.handle || 'i';
         return `
-            <div class="media-container file-placeholder x-placeholder" onclick="openLightbox('x', '${media.id}')" title="Click to view Tweet by ${handleLabel}">
-                <div class="file-ext" style="color:#1DA1F2;">𝕏</div>
-                <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px;">${handleLabel}</div>
-                <div style="font-size:10px; color:#aaa; margin-top:2px;">View Tweet &amp; Media</div>
+            <div class="media-container file-placeholder x-placeholder" data-tweet-id="${media.id}" data-tweet-handle="${escapeHtml(cleanHandle)}" onclick="openLightbox('x', '${media.id}', '${escapeHtml(cleanHandle)}')" title="Click to view Tweet by ${handleLabel}">
+                <div class="tweet-thumb-slot" id="tweet_slot_${media.id}" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
+                    <div class="file-ext" style="color:#1DA1F2; font-size:24px; font-weight:900;">𝕏</div>
+                    <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px;">${handleLabel}</div>
+                    <div style="font-size:10px; color:#aaa; margin-top:2px;">View Tweet &amp; Media</div>
+                </div>
             </div>
         `;
     }
@@ -247,6 +252,62 @@ async function hydratePixivEmbeds() {
                         `;
                     }
                     placeholder.title = `${art.isR18 ? '[R-18] ' : ''}${art.title} by ${art.author}${art.pageCount > 1 ? ` (${art.pageCount} images)` : ''} - Click to expand`;
+                }
+            }
+        } catch (_) {}
+    }
+}
+
+async function hydrateTwitterEmbeds() {
+    const slots = document.querySelectorAll('.x-placeholder[data-tweet-id]');
+    if (!slots || slots.length === 0) return;
+
+    for (const placeholder of slots) {
+        const id = placeholder.getAttribute('data-tweet-id');
+        const handle = placeholder.getAttribute('data-tweet-handle') || 'i';
+        if (!id || placeholder.getAttribute('data-hydrated') === 'true') continue;
+        placeholder.setAttribute('data-hydrated', 'true');
+
+        try {
+            const resp = await fetch(`/api/twitter/tweet?id=${id}&handle=${encodeURIComponent(handle)}`);
+            const data = await resp.json();
+            if (data.success && data.tweet) {
+                const t = data.tweet;
+                const slot = placeholder.querySelector('.tweet-thumb-slot');
+                if (slot) {
+                    const thumb = t.videoThumbnail || t.imageUrl;
+                    if (thumb) {
+                        const isVideo = t.mediaType === 'video';
+                        const multiBadge = (t.pageCount && t.pageCount > 1) 
+                            ? `<div class="pixiv-pages-badge" style="background:rgba(29,161,242,0.95);">📚 ${t.pageCount}P</div>` 
+                            : '';
+                        const playOverlay = isVideo 
+                            ? `<div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>` 
+                            : '';
+
+                        slot.innerHTML = `
+                            <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+                                <img src="${escapeHtml(thumb)}" class="thread-image" loading="lazy" decoding="async" alt="Tweet media" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                                ${playOverlay}
+                                ${multiBadge}
+                                <div class="pixiv-badge" style="background:#1DA1F2;">𝕏 @${escapeHtml(t.authorHandle)}</div>
+                            </div>
+                        `;
+                        placeholder.classList.add('x-thumb-loaded');
+                    } else if (t.text) {
+                        slot.innerHTML = `
+                            <div style="padding:8px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; width:100%;">
+                                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; width:100%;">
+                                    ${t.avatar ? `<img src="${escapeHtml(t.avatar)}" style="width:18px; height:18px; border-radius:50%; object-fit:cover;">` : '<span style="color:#1DA1F2; font-weight:bold; font-size:12px;">𝕏</span>'}
+                                    <span style="font-size:11px; font-weight:bold; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">@${escapeHtml(t.authorHandle)}</span>
+                                </div>
+                                <div style="font-size:10px; color:#ccc; line-height:1.3; max-height:60px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;">
+                                    ${escapeHtml(t.text)}
+                                </div>
+                            </div>
+                        `;
+                    }
+                    placeholder.title = `@${t.authorHandle}: "${t.text.slice(0, 100)}..." - Click to open`;
                 }
             }
         } catch (_) {}
@@ -487,11 +548,108 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         frame.src = `https://www.youtube.com/embed/${content}?autoplay=1`;
         frame.style.display = 'block';
     } 
-    else if (type === 'x' && frame) {
-        frame.src = `https://platform.twitter.com/embed/Tweet.html?id=${content}&theme=${theme}`;
-        frame.style.display = 'block';
-        frame.style.width = "550px";
-        frame.style.height = "520px";
+    else if (type === 'x') {
+        const tweetId = content;
+        const handle = extra1 || 'i';
+
+        if (custom) {
+            custom.innerHTML = `
+                <div style="background:#111827; color:#fff; border-radius:12px; padding:24px 20px; text-align:center; min-width:280px; max-width:600px; border:2px solid #1DA1F2; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
+                    <div style="font-size:1.1em; color:#1DA1F2; font-weight:bold; margin-bottom:8px;">𝕏 Loading Tweet...</div>
+                    <div style="font-size:0.85em; opacity:0.7;">Fetching tweet media and contents...</div>
+                </div>
+            `;
+            custom.style.display = 'block';
+        }
+
+        fetch(`/api/twitter/tweet?id=${tweetId}&handle=${encodeURIComponent(handle)}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.tweet) {
+                    const t = data.tweet;
+
+                    // 1. If it has a video: play native HTML5 video with controls and audio!
+                    if (t.mediaType === 'video' && t.videoUrl) {
+                        if (custom) custom.style.display = 'none';
+                        if (vid) {
+                            vid.src = t.videoUrl;
+                            vid.style.display = 'block';
+                            vid.controls = true;
+                            vid.play().catch(() => {});
+                        }
+                        return;
+                    }
+
+                    // 2. If it has multiple images: open in multi-page carousel with ◀ ▶ keys!
+                    if (t.pages && t.pages.length > 1) {
+                        currentPixivGallery = {
+                            pages: t.pages,
+                            currentIndex: 0,
+                            title: t.text.slice(0, 80) || `Tweet by @${t.authorHandle}`,
+                            author: `${t.authorName} (@${t.authorHandle})`,
+                            artworkUrl: t.url,
+                            isR18: false
+                        };
+                        renderPixivCarouselModal();
+                        return;
+                    }
+
+                    // 3. If single image: open directly in lightbox
+                    if (t.imageUrl) {
+                        if (custom) custom.style.display = 'none';
+                        if (img) {
+                            img.src = t.imageUrl;
+                            img.style.display = 'block';
+                        }
+                        return;
+                    }
+
+                    // 4. If text-only tweet: show clean, high-fidelity dark-mode card
+                    if (custom) {
+                        custom.innerHTML = `
+                            <div style="background:#111827; color:#fff; border-radius:12px; padding:20px 24px; text-align:left; max-width:min(90vw, 550px); border:1.5px solid #1DA1F2; box-shadow:0 8px 36px rgba(0,0,0,0.9);">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px; gap:10px;">
+                                    <div style="display:flex; align-items:center; gap:10px;">
+                                        ${t.avatar ? `<img src="${escapeHtml(t.avatar)}" style="width:38px; height:38px; border-radius:50%; object-fit:cover;">` : '<span style="font-size:24px; color:#1DA1F2;">𝕏</span>'}
+                                        <div>
+                                            <div style="font-weight:bold; font-size:15px; color:#fff;">${escapeHtml(t.authorName)}</div>
+                                            <div style="font-size:12px; color:#9ca3af;">@${escapeHtml(t.authorHandle)}</div>
+                                        </div>
+                                    </div>
+                                    <a href="${escapeHtml(t.url)}" target="_blank" rel="noopener noreferrer" style="background:#1DA1F2; color:#fff; font-size:12px; font-weight:bold; padding:5px 12px; border-radius:6px; text-decoration:none; white-space:nowrap;">View on 𝕏 ↗</a>
+                                </div>
+                                <div style="font-size:15px; line-height:1.5; color:#f3f4f6; margin-bottom:12px; white-space:pre-wrap;">${escapeHtml(t.text)}</div>
+                                ${t.likes || t.retweets ? `
+                                    <div style="font-size:12px; color:#9ca3af; border-top:1px solid rgba(255,255,255,0.08); padding-top:8px; display:flex; gap:14px;">
+                                        ${t.likes ? `<span>❤️ ${t.likes.toLocaleString()}</span>` : ''}
+                                        ${t.retweets ? `<span>🔁 ${t.retweets.toLocaleString()}</span>` : ''}
+                                    </div>
+                                ` : ''}
+                            </div>
+                        `;
+                        custom.style.display = 'block';
+                        return;
+                    }
+                }
+
+                // Fallback to official iframe embed
+                if (frame) {
+                    if (custom) custom.style.display = 'none';
+                    frame.src = `https://platform.twitter.com/embed/Tweet.html?id=${tweetId}&theme=${theme}`;
+                    frame.style.display = 'block';
+                    frame.style.width = "550px";
+                    frame.style.height = "520px";
+                }
+            })
+            .catch(() => {
+                if (frame) {
+                    if (custom) custom.style.display = 'none';
+                    frame.src = `https://platform.twitter.com/embed/Tweet.html?id=${tweetId}&theme=${theme}`;
+                    frame.style.display = 'block';
+                    frame.style.width = "550px";
+                    frame.style.height = "520px";
+                }
+            });
     }
     else if (type === 'pixiv' && custom) {
         const artworkId = content;
@@ -596,34 +754,96 @@ function openLightbox(type, content, extra1, extra2, extra3) {
             });
     }
     else if (type === 'reddit') {
+        const postUrl = content;
         const subreddit = extra1 || 'reddit';
         const postId = extra2 || '';
         const isShare = typeof extra3 !== 'undefined' && Boolean(extra3);
 
-        if (isShare && custom) {
+        if (custom) {
             custom.innerHTML = `
-                <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:28px 24px; text-align:center; max-width:440px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.8);">
-                    <div style="display:inline-flex; align-items:center; justify-content:center; width:56px; height:56px; border-radius:50%; background:rgba(255,69,0,0.15); margin-bottom:14px;">
-                        <svg width="34" height="34" viewBox="0 0 24 24" fill="#FF4500">
-                            <path d="M12 0C5.373 0 0 5.373 0 12c0 3.314 1.343 6.314 3.515 8.485l-1.03 3.09a.75.75 0 00.95.95l3.09-1.03C8.686 22.657 11.686 24 15 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm5.01 13.5c0 .825-.675 1.5-1.5 1.5-.412 0-.788-.168-1.06-.44-.825.562-1.95.915-3.2.94l.544-2.548 1.77.375c.026.685.586 1.233 1.286 1.233.714 0 1.29-.576 1.29-1.29 0-.714-.576-1.29-1.29-1.29-.488 0-.915.27-1.14.667l-2.01-.426a.375.375 0 00-.442.29l-.66 3.09c-1.32-.025-2.512-.39-3.375-.97a1.49 1.49 0 01-.983.37c-.825 0-1.5-.675-1.5-1.5 0-.585.34-1.09.83-1.332-.045-.22-.07-.446-.07-.668 0-2.348 2.73-4.25 6.1-4.25s6.1 1.902 6.1 4.25c0 .222-.025.448-.07.668.49.242.83.747.83 1.332z"/>
-                        </svg>
-                    </div>
-                    <div style="font-size:1.15em; font-weight:bold; color:#fff; margin-bottom:6px;">Reddit Video &amp; Post</div>
-                    <div style="font-size:0.9em; color:#bbb; margin-bottom:18px;">From <b>r/${escapeHtml(subreddit)}</b> (Shared via Reddit Mobile)</div>
-                    <a href="${escapeHtml(content)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:#FF4500; color:#fff; font-weight:bold; font-size:1em; padding:10px 22px; border-radius:8px; text-decoration:none; transition:background 0.15s ease;" onmouseover="this.style.background='#ff5722'" onmouseout="this.style.background='#FF4500'">
-                        Watch / View on Reddit ↗
-                    </a>
-                    <div style="font-size:0.75em; color:#888; margin-top:14px;">Opens directly in your Reddit app or browser</div>
+                <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px 20px; text-align:center; min-width:280px; max-width:600px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
+                    <div style="font-size:1.1em; color:#FF4500; font-weight:bold; margin-bottom:8px;">Reddit Loading Post...</div>
+                    <div style="font-size:0.85em; opacity:0.7;">Fetching post details and media...</div>
                 </div>
             `;
             custom.style.display = 'block';
-        } else if (frame) {
-            const embedUrl = `https://embed.reddit.com/r/${encodeURIComponent(subreddit)}/comments/${encodeURIComponent(postId)}/?embed=true&theme=${theme}`;
-            frame.src = embedUrl;
-            frame.style.display = 'block';
-            frame.style.width = "650px";
-            frame.style.height = "540px";
         }
+
+        fetch(`/api/reddit/post?url=${encodeURIComponent(postUrl)}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.post && custom) {
+                    const p = data.post;
+                    custom.innerHTML = `
+                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:20px 24px; text-align:left; max-width:min(90vw, 580px); border:2px solid #FF4500; box-shadow:0 8px 36px rgba(0,0,0,0.9);">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px; gap:10px;">
+                                <div>
+                                    <div style="font-weight:bold; font-size:15px; color:#FF4500;">r/${escapeHtml(p.subreddit)}</div>
+                                    <div style="font-size:12px; color:#9ca3af;">Posted by ${escapeHtml(p.author)}</div>
+                                </div>
+                                <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="background:#FF4500; color:#fff; font-size:12px; font-weight:bold; padding:5px 12px; border-radius:6px; text-decoration:none; white-space:nowrap;">View on Reddit ↗</a>
+                            </div>
+                            <div style="font-size:16px; font-weight:bold; line-height:1.4; color:#f3f4f6; margin-bottom:14px;">
+                                ${escapeHtml(p.title)}
+                            </div>
+                            ${p.thumbnailUrl ? `
+                                <div style="text-align:center; margin-bottom:14px;">
+                                    <img src="${escapeHtml(p.thumbnailUrl)}" style="max-width:100%; max-height:280px; border-radius:8px; object-fit:contain;">
+                                </div>
+                            ` : ''}
+                            <div style="text-align:center;">
+                                <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:rgba(255,69,0,0.15); border:1px solid #FF4500; color:#FF4500; font-weight:bold; font-size:13px; padding:8px 18px; border-radius:6px; text-decoration:none;">
+                                    Open Full Post &amp; Comments ↗
+                                </a>
+                            </div>
+                        </div>
+                    `;
+                    custom.style.display = 'block';
+                    return;
+                }
+
+                // Fallback to official embed or share modal
+                if (isShare && custom) {
+                    custom.innerHTML = `
+                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:28px 24px; text-align:center; max-width:440px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.8);">
+                            <div style="font-size:1.15em; font-weight:bold; color:#fff; margin-bottom:6px;">Reddit Video &amp; Post</div>
+                            <div style="font-size:0.9em; color:#bbb; margin-bottom:18px;">From <b>r/${escapeHtml(subreddit)}</b> (Shared via Reddit Mobile)</div>
+                            <a href="${escapeHtml(postUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:#FF4500; color:#fff; font-weight:bold; font-size:1em; padding:10px 22px; border-radius:8px; text-decoration:none;">
+                                Watch / View on Reddit ↗
+                            </a>
+                        </div>
+                    `;
+                    custom.style.display = 'block';
+                } else if (frame) {
+                    if (custom) custom.style.display = 'none';
+                    const embedUrl = `https://embed.reddit.com/r/${encodeURIComponent(subreddit)}/comments/${encodeURIComponent(postId)}/?embed=true&theme=${theme}`;
+                    frame.src = embedUrl;
+                    frame.style.display = 'block';
+                    frame.style.width = "650px";
+                    frame.style.height = "540px";
+                }
+            })
+            .catch(() => {
+                if (isShare && custom) {
+                    custom.innerHTML = `
+                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:28px 24px; text-align:center; max-width:440px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.8);">
+                            <div style="font-size:1.15em; font-weight:bold; color:#fff; margin-bottom:6px;">Reddit Video &amp; Post</div>
+                            <div style="font-size:0.9em; color:#bbb; margin-bottom:18px;">From <b>r/${escapeHtml(subreddit)}</b></div>
+                            <a href="${escapeHtml(postUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:#FF4500; color:#fff; font-weight:bold; font-size:1em; padding:10px 22px; border-radius:8px; text-decoration:none;">
+                                Watch / View on Reddit ↗
+                            </a>
+                        </div>
+                    `;
+                    custom.style.display = 'block';
+                } else if (frame) {
+                    if (custom) custom.style.display = 'none';
+                    const embedUrl = `https://embed.reddit.com/r/${encodeURIComponent(subreddit)}/comments/${encodeURIComponent(postId)}/?embed=true&theme=${theme}`;
+                    frame.src = embedUrl;
+                    frame.style.display = 'block';
+                    frame.style.width = "650px";
+                    frame.style.height = "540px";
+                }
+            });
     }
     else if (type === 'reddit_video' && frame) {
         frame.src = `https://embed.reddit.com/video/${encodeURIComponent(content)}/?embed=true&theme=${theme}`;
