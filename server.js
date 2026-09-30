@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'url';
 import { db, hashPassword, verifyPassword, hashIp, generateId } from './server/db.js';
@@ -756,17 +757,59 @@ app.post('/api/admin/settings', (req, res) => {
     try {
         db.prepare('INSERT INTO site_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?')
           .run(key, value || '', value || '');
+
+        // If banner_url is updated, also synchronize index.html on disk for static deployments
+        if (key === 'banner_url' && value && value.trim()) {
+            try {
+                const indexPath = path.join(__dirname, 'index.html');
+                if (fs.existsSync(indexPath)) {
+                    let indexHtml = fs.readFileSync(indexPath, 'utf8');
+                    const cleanUrl = value.trim();
+                    indexHtml = indexHtml
+                        .replace(/<meta property="og:image" content="[^"]*">/g, `<meta property="og:image" content="${cleanUrl}">`)
+                        .replace(/<meta name="twitter:image" content="[^"]*">/g, `<meta name="twitter:image" content="${cleanUrl}">`);
+                    fs.writeFileSync(indexPath, indexHtml, 'utf8');
+                }
+            } catch (fsErr) {
+                console.warn('Could not sync banner to index.html:', fsErr.message);
+            }
+        }
+
         res.json({ success: true, key, value });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// --- STATIC ASSETS & SPA ROUTING ---
-app.use(express.static(__dirname));
+// --- STATIC ASSETS & DYNAMIC SSR METADATA ROUTING ---
+// Disable default index.html serving in express.static so root requests hit our dynamic SSR handler
+app.use(express.static(__dirname, { index: false }));
 
 app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    // If request path is an API route, return 404 JSON
+    if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'API route not found' });
+    }
+
+    try {
+        const indexPath = path.join(__dirname, 'index.html');
+        let html = fs.readFileSync(indexPath, 'utf8');
+
+        // Dynamically inject active banner into OpenGraph & Twitter tags for Discord/messenger embeds
+        const row = db.prepare('SELECT value FROM site_settings WHERE key = ?').get('banner_url');
+        if (row && row.value && row.value.trim()) {
+            const currentBanner = row.value.trim();
+            html = html
+                .replace(/<meta property="og:image" content="[^"]*">/g, `<meta property="og:image" content="${currentBanner}">`)
+                .replace(/<meta name="twitter:image" content="[^"]*">/g, `<meta name="twitter:image" content="${currentBanner}">`);
+        }
+
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(html);
+    } catch (err) {
+        console.error('Error rendering dynamic page metadata:', err);
+        res.sendFile(path.join(__dirname, 'index.html'));
+    }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
