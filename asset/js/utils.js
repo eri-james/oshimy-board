@@ -209,6 +209,9 @@ function generateBacklinks(scopeElement = null) {
     if (typeof hydrateTwitterEmbeds === 'function') {
         hydrateTwitterEmbeds();
     }
+    if (typeof hydrateRedditEmbeds === 'function') {
+        hydrateRedditEmbeds();
+    }
 }
 
 // ==========================================

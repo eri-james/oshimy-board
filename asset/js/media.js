@@ -161,14 +161,16 @@ function renderMedia(url) {
     if (media.type === 'reddit') {
         const isShareParam = media.isShare ? 'true' : 'false';
         return `
-            <div class="media-container file-placeholder reddit-placeholder" onclick="openLightbox('reddit', '${escapeHtml(media.url)}', '${escapeHtml(media.subreddit)}', '${escapeHtml(media.id)}', ${isShareParam})" title="Click to view Reddit post on r/${escapeHtml(media.subreddit)}">
-                <div style="display:flex; align-items:center; justify-content:center; width:44px; height:44px; border-radius:50%; background:rgba(255, 69, 0, 0.15); margin-bottom:8px;">
-                    <svg width="26" height="26" viewBox="0 0 24 24" fill="#FF4500">
-                        <path d="M12 0C5.373 0 0 5.373 0 12c0 3.314 1.343 6.314 3.515 8.485l-1.03 3.09a.75.75 0 00.95.95l3.09-1.03C8.686 22.657 11.686 24 15 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm5.01 13.5c0 .825-.675 1.5-1.5 1.5-.412 0-.788-.168-1.06-.44-.825.562-1.95.915-3.2.94l.544-2.548 1.77.375c.026.685.586 1.233 1.286 1.233.714 0 1.29-.576 1.29-1.29 0-.714-.576-1.29-1.29-1.29-.488 0-.915.27-1.14.667l-2.01-.426a.375.375 0 00-.442.29l-.66 3.09c-1.32-.025-2.512-.39-3.375-.97a1.49 1.49 0 01-.983.37c-.825 0-1.5-.675-1.5-1.5 0-.585.34-1.09.83-1.332-.045-.22-.07-.446-.07-.668 0-2.348 2.73-4.25 6.1-4.25s6.1 1.902 6.1 4.25c0 .222-.025.448-.07.668.49.242.83.747.83 1.332z"/>
-                    </svg>
+            <div class="media-container file-placeholder reddit-placeholder" data-reddit-url="${escapeHtml(media.url)}" onclick="openLightbox('reddit', '${escapeHtml(media.url)}', '${escapeHtml(media.subreddit)}', '${escapeHtml(media.id)}', ${isShareParam})" title="Click to view Reddit post on r/${escapeHtml(media.subreddit)}">
+                <div class="reddit-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                    <div style="display:flex; align-items:center; justify-content:center; width:44px; height:44px; border-radius:50%; background:rgba(255, 69, 0, 0.15); margin-bottom:8px;">
+                        <svg width="26" height="26" viewBox="0 0 24 24" fill="#FF4500">
+                            <path d="M12 0C5.373 0 0 5.373 0 12c0 3.314 1.343 6.314 3.515 8.485l-1.03 3.09a.75.75 0 00.95.95l3.09-1.03C8.686 22.657 11.686 24 15 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm5.01 13.5c0 .825-.675 1.5-1.5 1.5-.412 0-.788-.168-1.06-.44-.825.562-1.95.915-3.2.94l.544-2.548 1.77.375c.026.685.586 1.233 1.286 1.233.714 0 1.29-.576 1.29-1.29 0-.714-.576-1.29-1.29-1.29-.488 0-.915.27-1.14.667l-2.01-.426a.375.375 0 00-.442.29l-.66 3.09c-1.32-.025-2.512-.39-3.375-.97a1.49 1.49 0 01-.983.37c-.825 0-1.5-.675-1.5-1.5 0-.585.34-1.09.83-1.332-.045-.22-.07-.446-.07-.668 0-2.348 2.73-4.25 6.1-4.25s6.1 1.902 6.1 4.25c0 .222-.025.448-.07.668.49.242.83.747.83 1.332z"/>
+                        </svg>
+                    </div>
+                    <div style="font-size:12px; font-weight:bold; color:#fff; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.2;">r/${escapeHtml(media.subreddit)}</div>
+                    <div style="font-size:10px; color:#ff8c5a; margin-top:4px; font-weight:600; line-height:1.2;">${media.isShare ? 'Reddit Video / Post' : 'View Post &amp; Media'}</div>
                 </div>
-                <div style="font-size:12px; font-weight:bold; color:#fff; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.2;">r/${escapeHtml(media.subreddit)}</div>
-                <div style="font-size:10px; color:#ff8c5a; margin-top:4px; font-weight:600; line-height:1.2;">${media.isShare ? 'Reddit Video / Post' : 'View Post &amp; Media'}</div>
             </div>
         `;
     }
@@ -308,6 +310,58 @@ async function hydrateTwitterEmbeds() {
                         `;
                     }
                     placeholder.title = `@${t.authorHandle}: "${t.text.slice(0, 100)}..." - Click to open`;
+                }
+            }
+        } catch (_) {}
+    }
+}
+
+// Hydrates Reddit post card placeholders with actual thumbnails from /api/reddit/post
+async function hydrateRedditEmbeds() {
+    const slots = document.querySelectorAll('.reddit-placeholder[data-reddit-url]');
+    if (!slots || slots.length === 0) return;
+
+    for (const placeholder of slots) {
+        const postUrl = placeholder.getAttribute('data-reddit-url');
+        if (!postUrl || placeholder.getAttribute('data-hydrated') === 'true') continue;
+        placeholder.setAttribute('data-hydrated', 'true');
+
+        try {
+            const resp = await fetch(`/api/reddit/post?url=${encodeURIComponent(postUrl)}`);
+            const data = await resp.json();
+            if (data.success && data.post) {
+                const p = data.post;
+                const slot = placeholder.querySelector('.reddit-thumb-slot');
+                if (slot) {
+                    const thumb = p.thumbnailUrl || p.imageUrl || p.videoUrl;
+                    if (thumb && (p.mediaType === 'image' || p.mediaType === 'video')) {
+                        const isVideo = p.mediaType === 'video';
+                        const playOverlay = isVideo 
+                            ? `<div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>` 
+                            : '';
+
+                        slot.innerHTML = `
+                            <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+                                <img src="${escapeHtml(thumb)}" referrerpolicy="no-referrer" class="thread-image" loading="lazy" decoding="async" alt="Reddit media" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                                ${playOverlay}
+                                <div class="pixiv-badge" style="background:#FF4500;">r/${escapeHtml(p.subreddit)}</div>
+                            </div>
+                        `;
+                        placeholder.classList.add('reddit-thumb-loaded');
+                    } else if (p.title) {
+                        slot.innerHTML = `
+                            <div style="padding:8px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; width:100%;">
+                                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; width:100%;">
+                                    <span style="color:#FF4500; font-weight:bold; font-size:11px;">r/${escapeHtml(p.subreddit)}</span>
+                                    <span style="font-size:10px; color:#9ca3af; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">by ${escapeHtml(p.author)}</span>
+                                </div>
+                                <div style="font-size:11px; font-weight:bold; color:#fff; line-height:1.3; max-height:60px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;">
+                                    ${escapeHtml(p.title)}
+                                </div>
+                            </div>
+                        `;
+                    }
+                    placeholder.title = `r/${p.subreddit}: "${p.title}" - Click to open`;
                 }
             }
         } catch (_) {}
@@ -798,34 +852,59 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         fetch(`/api/reddit/post?url=${encodeURIComponent(postUrl)}`)
             .then(r => r.json())
             .then(data => {
-                if (data.success && data.post && custom) {
+                if (data.success && data.post) {
                     const p = data.post;
-                    custom.innerHTML = `
-                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:20px 24px; text-align:left; max-width:min(90vw, 580px); border:2px solid #FF4500; box-shadow:0 8px 36px rgba(0,0,0,0.9);">
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px; gap:10px;">
-                                <div>
-                                    <div style="font-weight:bold; font-size:15px; color:#FF4500;">r/${escapeHtml(p.subreddit)}</div>
-                                    <div style="font-size:12px; color:#9ca3af;">Posted by ${escapeHtml(p.author)}</div>
+
+                    // 1. Direct Video Post: Stream immediately through proxy in HTML5 native player
+                    if (p.mediaType === 'video' && p.videoUrl) {
+                        if (custom) custom.style.display = 'none';
+                        if (vid) {
+                            const streamUrl = `/api/proxy/video?url=${encodeURIComponent(p.videoUrl)}`;
+                            vid.referrerPolicy = "no-referrer";
+                            vid.style.display = 'block';
+                            vid.controls = true;
+                            vid.src = streamUrl;
+                            vid.load();
+                            vid.play().catch(() => {});
+                        }
+                        return;
+                    }
+
+                    // 2. Rich Card (Image or Text Discussion)
+                    if (custom) {
+                        custom.innerHTML = `
+                            <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:20px 24px; text-align:left; max-width:min(90vw, 600px); border:2px solid #FF4500; box-shadow:0 8px 36px rgba(0,0,0,0.9);">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px; gap:10px;">
+                                    <div>
+                                        <div style="font-weight:bold; font-size:15px; color:#FF4500;">r/${escapeHtml(p.subreddit)}</div>
+                                        <div style="font-size:12px; color:#9ca3af;">Posted by ${escapeHtml(p.author)}</div>
+                                    </div>
+                                    <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="background:#FF4500; color:#fff; font-size:12px; font-weight:bold; padding:5px 12px; border-radius:6px; text-decoration:none; white-space:nowrap;">View on Reddit ↗</a>
                                 </div>
-                                <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="background:#FF4500; color:#fff; font-size:12px; font-weight:bold; padding:5px 12px; border-radius:6px; text-decoration:none; white-space:nowrap;">View on Reddit ↗</a>
-                            </div>
-                            <div style="font-size:16px; font-weight:bold; line-height:1.4; color:#f3f4f6; margin-bottom:14px;">
-                                ${escapeHtml(p.title)}
-                            </div>
-                            ${p.thumbnailUrl ? `
-                                <div style="text-align:center; margin-bottom:14px;">
-                                    <img src="${escapeHtml(p.thumbnailUrl)}" style="max-width:100%; max-height:280px; border-radius:8px; object-fit:contain;">
+                                <div style="font-size:16px; font-weight:bold; line-height:1.4; color:#f3f4f6; margin-bottom:14px;">
+                                    ${escapeHtml(p.title)}
                                 </div>
-                            ` : ''}
-                            <div style="text-align:center;">
-                                <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:rgba(255,69,0,0.15); border:1px solid #FF4500; color:#FF4500; font-weight:bold; font-size:13px; padding:8px 18px; border-radius:6px; text-decoration:none;">
-                                    Open Full Post &amp; Comments ↗
-                                </a>
+                                ${p.imageUrl ? `
+                                    <div style="text-align:center; margin-bottom:14px;">
+                                        <img src="${escapeHtml(p.imageUrl)}" referrerpolicy="no-referrer" onclick="openLightbox('image', '${escapeHtml(p.imageUrl)}')" style="max-width:100%; max-height:450px; border-radius:8px; object-fit:contain; cursor:pointer; box-shadow:0 4px 16px rgba(0,0,0,0.5);" title="Click to view full image">
+                                        <div style="font-size:11px; color:#ff8c5a; margin-top:4px;">🔍 Click image to expand</div>
+                                    </div>
+                                ` : ''}
+                                ${p.description ? `
+                                    <div style="font-size:13px; line-height:1.45; color:#d1d5db; margin-bottom:14px; white-space:pre-wrap; max-height:140px; overflow-y:auto; padding:8px 12px; background:rgba(255,255,255,0.04); border-radius:6px;">
+                                        ${escapeHtml(p.description)}
+                                    </div>
+                                ` : ''}
+                                <div style="text-align:center;">
+                                    <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:rgba(255,69,0,0.15); border:1px solid #FF4500; color:#FF4500; font-weight:bold; font-size:13px; padding:8px 18px; border-radius:6px; text-decoration:none;">
+                                        Open Full Post &amp; Comments ↗
+                                    </a>
+                                </div>
                             </div>
-                        </div>
-                    `;
-                    custom.style.display = 'block';
-                    return;
+                        `;
+                        custom.style.display = 'block';
+                        return;
+                    }
                 }
 
                 // Fallback to official embed or share modal

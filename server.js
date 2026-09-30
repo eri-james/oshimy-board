@@ -188,7 +188,7 @@ app.get('/api/proxy/video', async (req, res) => {
 
     try {
         const target = new URL(rawUrl);
-        const allowedHosts = ['video.twimg.com', 'pbs.twimg.com', 'v.redd.it', 'packaged-media.redd.it'];
+        const allowedHosts = ['video.twimg.com', 'pbs.twimg.com', 'v.redd.it', 'packaged-media.redd.it', 'embedez.com', 'redditez.com'];
         const isAllowed = allowedHosts.some(h => target.hostname === h || target.hostname.endsWith('.' + h));
         if (!isAllowed) {
             return res.status(403).send('Host not allowed for video proxy');
@@ -523,7 +523,7 @@ app.get('/api/twitter/tweet', async (req, res) => {
 // In-memory cache for Reddit post details
 const redditPostCache = new Map();
 
-// Reddit Post Details Resolver via official Reddit oEmbed
+// Reddit Post Details Resolver with rich media extraction (images, videos) and oEmbed fallback
 app.get('/api/reddit/post', async (req, res) => {
     const postUrl = req.query.url;
     if (!postUrl) {
@@ -536,29 +536,100 @@ app.get('/api/reddit/post', async (req, res) => {
     }
 
     try {
-        const oembedUrl = `https://www.reddit.com/oembed?url=${encodeURIComponent(cleanUrl)}`;
-        const resp = await fetch(oembedUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-        });
-
-        if (!resp.ok) {
-            return res.status(resp.status).json({ error: 'Reddit post not found or removed' });
-        }
-
-        const data = await resp.json();
-        
         const subMatch = cleanUrl.match(/reddit\.com\/r\/([a-zA-Z0-9_]+)(?:\/comments\/([a-zA-Z0-9_]+))?/i);
-        const subreddit = subMatch ? subMatch[1] : (data.author_name || 'reddit');
-        const postId = subMatch ? subMatch[2] : '';
+        let subreddit = subMatch ? subMatch[1] : 'reddit';
+        const postId = subMatch ? (subMatch[2] || '') : '';
 
+        let title = '';
+        let author = '';
+        let imageUrl = null;
+        let videoUrl = null;
+        let description = '';
+        let html = '';
+
+        // 1. Query redditez helper with Discordbot User-Agent to extract OpenGraph media
+        try {
+            const u = new URL(cleanUrl);
+            const redditezUrl = 'https://redditez.com' + u.pathname;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4000);
+            const ezResp = await fetch(redditezUrl, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' }
+            });
+            clearTimeout(timeout);
+
+            if (ezResp.ok) {
+                const ezHtml = await ezResp.text();
+                const ogTitle = ezHtml.match(/<meta property="og:title" content="([^"]+)"/i);
+                const ogImg = ezHtml.match(/<meta property="og:image" content="([^"]+)"/i);
+                const ogVid = ezHtml.match(/<meta property="og:video[^"]*" content="([^"]+)"/i);
+                const ogDesc = ezHtml.match(/<meta property="og:description" content="([^"]+)"/i);
+
+                if (ogTitle && ogTitle[1]) title = ogTitle[1].trim();
+                if (ogDesc && ogDesc[1]) description = ogDesc[1].trim();
+                if (ogVid && ogVid[1]) videoUrl = ogVid[1].trim();
+
+                if (ogImg && ogImg[1]) {
+                    let rawImg = ogImg[1].trim();
+                    // Resolve embedez redirect to get direct i.redd.it / image URL
+                    if (rawImg.includes('embedez.com/api/v2/redirect')) {
+                        try {
+                            const headController = new AbortController();
+                            const headTimeout = setTimeout(() => headController.abort(), 2500);
+                            const headResp = await fetch(rawImg, {
+                                method: 'HEAD',
+                                redirect: 'follow',
+                                signal: headController.signal
+                            });
+                            clearTimeout(headTimeout);
+                            if (headResp && headResp.url) {
+                                rawImg = headResp.url;
+                            }
+                        } catch (_) {}
+                    }
+                    imageUrl = rawImg;
+                }
+            }
+        } catch (_) {}
+
+        // 2. Query official Reddit oEmbed for authoritative title, author, and official interactive embed HTML
+        try {
+            const oembedUrl = `https://www.reddit.com/oembed?url=${encodeURIComponent(cleanUrl)}`;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3500);
+            const oResp = await fetch(oembedUrl, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+            });
+            clearTimeout(timeout);
+
+            if (oResp.ok) {
+                const oData = await oResp.json();
+                if (oData.title && (!title || title.startsWith('['))) title = oData.title;
+                if (oData.author_name) author = oData.author_name;
+                if (oData.html) html = oData.html;
+                if (!imageUrl && oData.thumbnail_url) imageUrl = oData.thumbnail_url;
+            }
+        } catch (_) {}
+
+        // Default fallbacks if empty
+        if (!title) title = `Reddit Post in r/${subreddit}`;
+        if (!author) author = 'Reddit User';
+
+        const mediaType = videoUrl ? 'video' : (imageUrl ? 'image' : 'none');
         const post = {
             url: cleanUrl,
-            title: data.title || 'Reddit Post',
-            author: data.author_name || 'Reddit User',
+            title,
+            author,
             subreddit,
             postId,
-            html: data.html || '',
-            thumbnailUrl: data.thumbnail_url || null
+            description,
+            mediaType,
+            videoUrl,
+            imageUrl,
+            thumbnailUrl: imageUrl || videoUrl || null,
+            html
         };
 
         redditPostCache.set(cleanUrl, post);
@@ -569,7 +640,7 @@ app.get('/api/reddit/post', async (req, res) => {
 
         res.json({ success: true, post });
     } catch (err) {
-        console.error('Reddit oembed error:', err);
+        console.error('Reddit lookup error:', err);
         res.status(500).json({ error: 'Failed to fetch Reddit post details' });
     }
 });
