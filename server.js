@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'url';
 import { db, hashPassword, verifyPassword, hashIp, generateId } from './server/db.js';
 import { 
@@ -137,14 +138,20 @@ app.get('/api/proxy/pixiv', async (req, res) => {
         const contentType = upstreamResp.headers.get('content-type') || 'image/jpeg';
         res.setHeader('Content-Type', contentType);
         res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+        res.setHeader('Access-Control-Allow-Origin', '*');
 
         const contentLength = upstreamResp.headers.get('content-length');
         if (contentLength) {
             res.setHeader('Content-Length', contentLength);
         }
 
-        const arrayBuffer = await upstreamResp.arrayBuffer();
-        res.send(Buffer.from(arrayBuffer));
+        if (upstreamResp.body) {
+            const stream = Readable.fromWeb(upstreamResp.body);
+            stream.pipe(res);
+        } else {
+            const arrayBuffer = await upstreamResp.arrayBuffer();
+            res.send(Buffer.from(arrayBuffer));
+        }
     } catch (err) {
         console.error('Pixiv proxy error:', err);
         res.status(502).send('Error proxying Pixiv image');
@@ -181,7 +188,23 @@ app.get('/api/pixiv/artwork', async (req, res) => {
         }
 
         const body = data.body;
-        const imageUrl = body.urls?.regular || body.urls?.small || body.urls?.original || '';
+        let imageUrl = body.urls?.regular || body.urls?.small || body.urls?.original || '';
+        const isR18 = (body.xRestrict === 1 || body.xRestrict === 2);
+
+        // Fallback for R-18 and age-restricted works where Pixiv masks public urls
+        if (!imageUrl) {
+            const userIllust = body.userIllusts?.[cleanId] || 
+                (body.noLoginData?.zengoIdWorks || []).find(w => String(w.id) === String(cleanId));
+            const dt = userIllust?.createDate || body.createDate;
+            if (dt) {
+                const m = dt.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+                if (m) {
+                    const [_, y, mo, d, h, mi, s] = m;
+                    imageUrl = `https://i.pximg.net/img-master/img/${y}/${mo}/${d}/${h}/${mi}/${s}/${cleanId}_p0_master1200.jpg`;
+                }
+            }
+        }
+
         const proxyUrl = imageUrl ? `/api/proxy/pixiv?url=${encodeURIComponent(imageUrl)}` : '';
 
         const artwork = {
@@ -190,6 +213,7 @@ app.get('/api/pixiv/artwork', async (req, res) => {
             author: body.userName || 'Artist',
             authorId: body.userId || '',
             pageCount: body.pageCount || 1,
+            isR18,
             imageUrl,
             proxyUrl,
             artworkUrl: `https://www.pixiv.net/artworks/${cleanId}`

@@ -211,14 +211,24 @@ async function hydratePixivEmbeds() {
                 const art = data.artwork;
                 const slot = placeholder.querySelector('.pixiv-thumb-slot');
                 if (slot) {
-                    slot.innerHTML = `
-                        <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">
-                            <img src="${art.proxyUrl}" class="thread-image" loading="lazy" decoding="async" alt="${escapeHtml(art.title)}" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
-                            <div class="pixiv-badge">pixiv</div>
-                        </div>
-                    `;
-                    placeholder.classList.add('pixiv-thumb-loaded');
-                    placeholder.title = `${art.title} by ${art.author} - Click to expand`;
+                    if (art.proxyUrl) {
+                        const badgeText = art.isR18 ? 'pixiv • R-18' : 'pixiv';
+                        const badgeStyle = art.isR18 ? 'background:rgba(225, 29, 72, 0.95);' : '';
+                        slot.innerHTML = `
+                            <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">
+                                <img src="${art.proxyUrl}" class="thread-image" loading="lazy" decoding="async" alt="${escapeHtml(art.title)}" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                                <div class="pixiv-badge" style="${badgeStyle}">${badgeText}</div>
+                            </div>
+                        `;
+                        placeholder.classList.add('pixiv-thumb-loaded');
+                    } else {
+                        slot.innerHTML = `
+                            <div class="file-ext" style="color:${art.isR18 ? '#e11d48' : '#0096fa'}; font-size:22px; font-weight:900;">${art.isR18 ? 'R-18' : 'pixiv'}</div>
+                            <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(art.title)}</div>
+                            <div style="font-size:10px; color:#aaa; margin-top:2px;">By ${escapeHtml(art.author)}</div>
+                        `;
+                    }
+                    placeholder.title = `${art.isR18 ? '[R-18] ' : ''}${art.title} by ${art.author} - Click to expand`;
                 }
             }
         } catch (_) {}
@@ -231,8 +241,8 @@ async function validateMediaUrl(url) {
     const media = getMediaType(url);
     if (!media) return { valid: true };
     
-    // Video, Audio, YouTube, Twitter, Reddit are accepted without image pre-loading
-    if (['video', 'audio', 'youtube', 'x', 'reddit', 'reddit_video'].includes(media.type)) {
+    // Video, Audio, YouTube, Twitter, Reddit, Pixiv are accepted directly without blocking image pre-loading
+    if (['video', 'audio', 'youtube', 'x', 'reddit', 'reddit_video', 'pixiv', 'pixiv_image'].includes(media.type)) {
         return { valid: true, type: media.type };
     }
 
@@ -352,20 +362,30 @@ function openLightbox(type, content, extra1, extra2, extra3) {
             .then(data => {
                 if (data.success && data.artwork) {
                     const art = data.artwork;
+                    const r18Tag = art.isR18 ? '<span style="background:#e11d48; color:#fff; font-size:0.75em; padding:2px 6px; border-radius:4px; font-weight:bold; margin-right:6px;">R-18</span>' : '';
+                    const imageBody = art.proxyUrl ? `
+                        <div style="max-height:calc(85vh - 120px); overflow:auto; display:flex; justify-content:center; align-items:center; width:100%;">
+                            <img src="${art.proxyUrl}" style="max-width:100%; max-height:calc(85vh - 120px); object-fit:contain; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5);" alt="${escapeHtml(art.title)}">
+                        </div>
+                    ` : `
+                        <div style="padding:40px 20px; text-align:center;">
+                            <div style="font-size:2em; margin-bottom:10px;">🔞</div>
+                            <div style="color:#aaa; font-size:0.95em; margin-bottom:16px;">This R-18 artwork requires a direct Pixiv session to view on Pixiv.</div>
+                        </div>
+                    `;
+
                     custom.innerHTML = `
-                        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(92vw, 850px); max-height:88vh; display:flex; flex-direction:column; align-items:center; border:2px solid #0096fa; box-shadow:0 8px 32px rgba(0,0,0,0.9); overflow-y:auto;">
+                        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(92vw, 850px); max-height:88vh; display:flex; flex-direction:column; align-items:center; border:2px solid ${art.isR18 ? '#e11d48' : '#0096fa'}; box-shadow:0 8px 32px rgba(0,0,0,0.9); overflow-y:auto;">
                             <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px;">
                                 <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:12px;">
-                                    <div style="font-weight:bold; font-size:1.1em; color:#fff;">${escapeHtml(art.title)}</div>
+                                    <div style="font-weight:bold; font-size:1.1em; color:#fff;">${r18Tag}${escapeHtml(art.title)}</div>
                                     <div style="font-size:0.85em; color:#9ca3af;">By <b>${escapeHtml(art.author)}</b> ${art.pageCount > 1 ? `• ${art.pageCount} Pages` : ''}</div>
                                 </div>
-                                <a href="${escapeHtml(art.artworkUrl)}" target="_blank" rel="noopener noreferrer" style="background:#0096fa; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:background 0.15s ease;" onmouseover="this.style.background='#3bb3ff'" onmouseout="this.style.background='#0096fa'">
+                                <a href="${escapeHtml(art.artworkUrl)}" target="_blank" rel="noopener noreferrer" style="background:${art.isR18 ? '#e11d48' : '#0096fa'}; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:opacity 0.15s ease;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
                                     View on Pixiv ↗
                                 </a>
                             </div>
-                            <div style="max-height:calc(85vh - 120px); overflow:auto; display:flex; justify-content:center; align-items:center; width:100%;">
-                                <img src="${art.proxyUrl}" style="max-width:100%; max-height:calc(85vh - 120px); object-fit:contain; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5);" alt="${escapeHtml(art.title)}">
-                            </div>
+                            ${imageBody}
                         </div>
                     `;
                 } else {
