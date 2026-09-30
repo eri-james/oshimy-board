@@ -43,13 +43,14 @@ export const OMIKUJI_FORTUNES = [
 ];
 
 export const ALLOWED_OSHI_BADGES = [
+    'VOGI',
+    'Project Orbit',
+    'Hoshizora Entertainment',
+    'VGakuenLive',
+    'Indie',
     'Hololive',
     'Nijisanji',
-    'Indie',
-    'Mamak Gang',
-    'Phase Connect',
-    'VShojo',
-    'Brave Group'
+    'Phase Connect'
 ];
 
 export function calculateLevel(xp) {

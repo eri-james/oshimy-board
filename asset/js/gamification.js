@@ -45,14 +45,15 @@ const CLIENT_FORTUNES = [
     }
 ];
 
-const OSHI_BADGE_OPTIONS = [
-    { id: 'Hololive', name: 'Hololive 🏮' },
-    { id: 'Nijisanji', name: 'Nijisanji 🌈' },
-    { id: 'Indie', name: 'Indie VTubers 🌸' },
-    { id: 'Mamak Gang', name: 'Mamak Gang ☕' },
-    { id: 'Phase Connect', name: 'Phase Connect ☕' },
-    { id: 'VShojo', name: 'VShojo ⚡' },
-    { id: 'Brave Group', name: 'Brave Group 🎮' }
+const FACTION_OPTIONS = [
+    { id: 'VOGI', name: '❌ VOGI' },
+    { id: 'Project Orbit', name: '🪐 Project Orbit' },
+    { id: 'Hoshizora Entertainment', name: '✨ Hoshizora Entertainment' },
+    { id: 'VGakuenLive', name: '🏫 VGakuenLive' },
+    { id: 'Indie', name: '🌺 Indie' },
+    { id: 'Hololive', name: '▶️ Hololive' },
+    { id: 'Nijisanji', name: '🌈 Nijisanji' },
+    { id: 'Phase Connect', name: '🔗 Phase Connect' }
 ];
 
 // Current active profile cache
@@ -181,8 +182,9 @@ function updateGamificationNav() {
     if (rankDisplay) {
         const badge = currentGamificationState.rankBadge;
         const lvl = currentGamificationState.level;
-        const oshi = currentGamificationState.oshi_badge ? ` [${currentGamificationState.oshi_badge}]` : '';
-        rankDisplay.innerHTML = `${badge} Lv.${lvl} ${escapeHtml(currentGamificationState.rankTitle)}${oshi}`;
+        const selectedFaction = FACTION_OPTIONS.find(f => f.id === currentGamificationState.oshi_badge);
+        const factionText = selectedFaction ? ` [${selectedFaction.name}]` : (currentGamificationState.oshi_badge ? ` [${currentGamificationState.oshi_badge}]` : '');
+        rankDisplay.innerHTML = `${badge} Lv.${lvl} ${escapeHtml(currentGamificationState.rankTitle)}${factionText}`;
     }
 
     if (omikujiBadge) {
@@ -487,20 +489,20 @@ function renderProfileModalContent() {
             </div>
         </div>
 
-        <!-- OSHI FACTION STAMP SELECTOR -->
+        <!-- FACTION STAMP SELECTOR -->
         <div style="border-top:1px dashed var(--border-color); padding-top:14px; margin-bottom:16px;">
             <label style="font-size:0.85rem; font-weight:bold; display:block; margin-bottom:6px;">
-                🏮 Select Your Oshi Faction / Stamp:
+                🚩 Select Your Faction / Stamp:
             </label>
             <div style="display:flex; gap:8px;">
-                <select id="oshiBadgeSelect" style="flex:1; padding:6px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--card-bg); color:var(--text-color); font-size:0.88rem;">
-                    <option value="">-- No Stamp (None) --</option>
-                    ${OSHI_BADGE_OPTIONS.map(opt => `
+                <select id="factionBadgeSelect" style="flex:1; padding:6px 8px; border-radius:6px; border:1px solid var(--border-color); background:var(--card-bg); color:var(--text-color); font-size:0.88rem;">
+                    <option value="">-- No Faction (None) --</option>
+                    ${FACTION_OPTIONS.map(opt => `
                         <option value="${opt.id}" ${s.oshi_badge === opt.id ? 'selected' : ''}>${opt.name}</option>
                     `).join('')}
                 </select>
-                <button type="button" onclick="saveOshiBadgeSelection()" style="padding:6px 14px; background:var(--main-accent); color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer; font-size:0.85rem;">
-                    Save Stamp
+                <button type="button" onclick="saveFactionSelection()" style="padding:6px 14px; background:var(--main-accent); color:#fff; border:none; border-radius:6px; font-weight:bold; cursor:pointer; font-size:0.85rem;">
+                    Save Faction
                 </button>
             </div>
         </div>
@@ -518,8 +520,8 @@ function renderProfileModalContent() {
     `;
 }
 
-async function saveOshiBadgeSelection() {
-    const sel = document.getElementById('oshiBadgeSelect');
+async function saveFactionSelection() {
+    const sel = document.getElementById('factionBadgeSelect');
     if (!sel) return;
     const newBadge = sel.value || null;
 
@@ -533,7 +535,8 @@ async function saveOshiBadgeSelection() {
                 currentGamificationState.oshi_badge = newBadge;
                 updateGamificationNav();
                 renderProfileModalContent();
-                showGamificationToast('Stamp Saved!', `Updated to ${newBadge || 'None'}`, '🏮');
+                const opt = FACTION_OPTIONS.find(f => f.id === newBadge);
+                showGamificationToast('Faction Saved!', `Joined ${opt ? opt.name : 'None'}`, '🚩');
             }
         } else {
             const guest = loadGuestGamification();
@@ -542,10 +545,11 @@ async function saveOshiBadgeSelection() {
             currentGamificationState.oshi_badge = newBadge;
             updateGamificationNav();
             renderProfileModalContent();
-            showGamificationToast('Stamp Saved!', `Updated to ${newBadge || 'None'}`, '🏮');
+            const opt = FACTION_OPTIONS.find(f => f.id === newBadge);
+            showGamificationToast('Faction Saved!', `Joined ${opt ? opt.name : 'None'}`, '🚩');
         }
     } catch (err) {
-        alert('Failed to save stamp: ' + err.message);
+        alert('Failed to save faction: ' + err.message);
     }
 }
 
