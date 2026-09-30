@@ -279,6 +279,45 @@ export async function onRequest(context) {
             }
         }
 
+        // Video Streaming Proxy route supporting HTTP Range (scrubbing, streaming)
+        if (route === 'proxy' && path[1] === 'video' && method === 'GET') {
+            const rawUrl = url.searchParams.get('url');
+            if (!rawUrl) return new Response('Missing video url', { status: 400 });
+
+            try {
+                const target = new URL(rawUrl);
+                const allowedHosts = ['video.twimg.com', 'pbs.twimg.com', 'v.redd.it', 'packaged-media.redd.it'];
+                const isAllowed = allowedHosts.some(h => target.hostname === h || target.hostname.endsWith('.' + h));
+                if (!isAllowed) {
+                    return new Response('Host not allowed for video proxy', { status: 403 });
+                }
+
+                const headers = new Headers();
+                headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+                headers.set('Referer', target.hostname.includes('twimg.com') ? 'https://x.com/' : 'https://www.reddit.com/');
+
+                const clientRange = request.headers.get('Range');
+                if (clientRange) {
+                    headers.set('Range', clientRange);
+                }
+
+                const upstream = await fetch(rawUrl, { headers });
+                const responseHeaders = new Headers(upstream.headers);
+                responseHeaders.set('Access-Control-Allow-Origin', '*');
+                responseHeaders.set('Accept-Ranges', 'bytes');
+                if (!responseHeaders.has('Content-Type')) {
+                    responseHeaders.set('Content-Type', 'video/mp4');
+                }
+
+                return new Response(upstream.body, {
+                    status: upstream.status,
+                    headers: responseHeaders
+                });
+            } catch (err) {
+                return new Response('Error proxying video', { status: 502 });
+            }
+        }
+
         // Pixiv Artwork Metadata resolver
         if (route === 'pixiv' && path[1] === 'artwork' && method === 'GET') {
             const illustId = url.searchParams.get('id');

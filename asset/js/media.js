@@ -572,9 +572,12 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                     if (t.mediaType === 'video' && t.videoUrl) {
                         if (custom) custom.style.display = 'none';
                         if (vid) {
-                            vid.src = t.videoUrl;
+                            const streamUrl = `/api/proxy/video?url=${encodeURIComponent(t.videoUrl)}`;
+                            vid.referrerPolicy = "no-referrer";
                             vid.style.display = 'block';
                             vid.controls = true;
+                            vid.src = streamUrl;
+                            vid.load();
                             vid.play().catch(() => {});
                         }
                         return;

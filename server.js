@@ -181,6 +181,53 @@ app.get('/api/proxy/pixiv', async (req, res) => {
     }
 });
 
+// Video Streaming Proxy route supporting HTTP Range (scrubbing, streaming)
+app.get('/api/proxy/video', async (req, res) => {
+    const rawUrl = req.query.url;
+    if (!rawUrl) return res.status(400).send('Missing video url');
+
+    try {
+        const target = new URL(rawUrl);
+        const allowedHosts = ['video.twimg.com', 'pbs.twimg.com', 'v.redd.it', 'packaged-media.redd.it'];
+        const isAllowed = allowedHosts.some(h => target.hostname === h || target.hostname.endsWith('.' + h));
+        if (!isAllowed) {
+            return res.status(403).send('Host not allowed for video proxy');
+        }
+
+        const headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Referer': target.hostname.includes('twimg.com') ? 'https://x.com/' : 'https://www.reddit.com/'
+        };
+
+        if (req.headers.range) {
+            headers['Range'] = req.headers.range;
+        }
+
+        const upstream = await fetch(rawUrl, { headers });
+        const contentType = upstream.headers.get('content-type') || 'video/mp4';
+        const contentRange = upstream.headers.get('content-range');
+        const contentLength = upstream.headers.get('content-length');
+        const acceptRanges = upstream.headers.get('accept-ranges') || 'bytes';
+
+        res.status(upstream.status);
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Accept-Ranges', acceptRanges);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        if (contentRange) res.setHeader('Content-Range', contentRange);
+        if (contentLength) res.setHeader('Content-Length', contentLength);
+
+        if (upstream.body) {
+            const stream = Readable.fromWeb(upstream.body);
+            stream.pipe(res);
+        } else {
+            res.end();
+        }
+    } catch (err) {
+        console.error('Video proxy streaming error:', err);
+        res.status(502).send('Error proxying video');
+    }
+});
+
 // Pixiv Artwork Metadata resolver with robust fallback to pixiv.re helper
 app.get('/api/pixiv/artwork', async (req, res) => {
     const illustId = req.query.id;

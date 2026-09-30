@@ -21,6 +21,7 @@
     <meta name="twitter:title" content="OshiMY - Malaysian VTuber &amp; Otaku Imageboard">
     <meta name="twitter:description" content="The premier anonymous imageboard for the Malaysian Virtual YouTuber community and Otaku culture. Discuss streams, oshis, anime, and art on OshiMY.">
     <meta name="twitter:image" content="https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=300&q=80">
+    <meta name="referrer" content="no-referrer-when-downgrade">
 
     <!-- Canonical & Sitemap -->
     <link rel="canonical" href="https://oshimy.moe/">
@@ -317,7 +318,7 @@
     <div id="lightbox" onclick="closeLightbox(event)">
         <div id="lightboxContent">
             <img id="lbImg" style="display:none">
-            <video id="lbVideo" controls style="display:none"></video>
+            <video id="lbVideo" controls playsinline referrerpolicy="no-referrer" style="display:none"></video>
             <iframe id="lbFrame" frameborder="0" allowfullscreen style="display:none" loading="lazy"></iframe>
             <div id="lbCustom" style="display:none;" onclick="event.stopPropagation()"></div>
         </div>
@@ -485,10 +486,10 @@
     <div id="bottom"></div>
     
     <!-- LOAD SCRIPTS (ORDER MATTERS) -->
-    <script src="asset/js/config.js?v=6"></script>
-    <script src="asset/js/utils.js?v=6"></script>
-    <script src="asset/js/media.js?v=6"></script>
-    <script src="asset/js/gamification.js?v=6"></script>
-    <script src="asset/js/app.js?v=6"></script>
+    <script src="asset/js/config.js?v=7"></script>
+    <script src="asset/js/utils.js?v=7"></script>
+    <script src="asset/js/media.js?v=7"></script>
+    <script src="asset/js/gamification.js?v=7"></script>
+    <script src="asset/js/app.js?v=7"></script>
 </body>
 </html>
