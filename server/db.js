@@ -18,6 +18,19 @@ db.exec('PRAGMA foreign_keys = ON;');
 const schemaSql = fs.readFileSync(path.join(rootDir, 'db', 'schema.sql'), 'utf-8');
 db.exec(schemaSql);
 
+// Safe auto-migrations for gamification fields on users table
+try {
+    const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+    if (!userCols.includes('xp')) db.exec("ALTER TABLE users ADD COLUMN xp INTEGER NOT NULL DEFAULT 0;");
+    if (!userCols.includes('level')) db.exec("ALTER TABLE users ADD COLUMN level INTEGER NOT NULL DEFAULT 1;");
+    if (!userCols.includes('streak')) db.exec("ALTER TABLE users ADD COLUMN streak INTEGER NOT NULL DEFAULT 0;");
+    if (!userCols.includes('last_active_date')) db.exec("ALTER TABLE users ADD COLUMN last_active_date TEXT;");
+    if (!userCols.includes('last_omikuji_date')) db.exec("ALTER TABLE users ADD COLUMN last_omikuji_date TEXT;");
+    if (!userCols.includes('oshi_badge')) db.exec("ALTER TABLE users ADD COLUMN oshi_badge TEXT;");
+} catch (err) {
+    console.error('[DB] Auto-migration error:', err);
+}
+
 // Security Helpers
 export function hashPassword(password) {
     const salt = crypto.randomBytes(16).toString('hex');

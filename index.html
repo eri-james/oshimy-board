@@ -54,6 +54,8 @@
         <div class="nav-site" style="display:flex; flex-wrap:wrap; justify-content:center; gap:8px; align-items:center; margin-top:6px;">
             <span>[ <a href="index.html">Home</a> ]</span>
             <span>[ <a href="javascript:void(0)" id="autoUpdateToggle" onclick="toggleAutoUpdate()">Auto-Update: On (15s)</a> ]</span>
+            <span>[ <a href="javascript:void(0)" id="omikujiNavBtn" onclick="openOmikujiModal()">🥠 Fortune <span id="omikujiBadge" style="display:none; background:#10b981; color:white; padding:1px 6px; border-radius:9999px; font-size:0.75rem; font-weight:bold;">Ready!</span></a> ]</span>
+            <span>[ <a href="javascript:void(0)" id="gamificationRankBtn" onclick="openProfileModal()"><span id="userRankDisplay">🌱 Lv.1 DD Lurker</span></a> ]</span>
             <span id="userPerks" style="display:none; display:contents;">
                 <span id="notifNav" style="display:none;">[ <a href="javascript:void(0)" onclick="openNotificationsModal()">🔔 Replies <span id="replyBadge" style="display:none; background:#ef4444; color:white; padding:1px 6px; border-radius:9999px; font-size:0.75rem; font-weight:bold;">0</span></a> ]</span>
                 <span id="watchNav" style="display:none;">[ <a href="javascript:void(0)" onclick="openWatchlistModal()">⭐ Watchlist <span id="watchlistBadge" style="opacity:0.8; font-size:0.85em;">(0)</span></a> ]</span>
@@ -411,6 +413,38 @@
         </div>
     </div>
 
+    <!-- 10. DAILY OSHI OMIKUJI MODAL -->
+    <div id="omikujiModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.65); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:var(--card-bg); color:var(--text-color); border:1px solid var(--border-color); border-radius:var(--border-radius); padding:22px; width:92%; max-width:480px; max-height:85vh; display:flex; flex-direction:column; box-shadow:var(--shadow); position:relative;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+                <h3 style="margin:0; font-size:1.15rem; color:var(--main-accent);">🏮 Daily Oshi Omikuji</h3>
+                <button onclick="closeOmikujiModal()" style="background:none; border:none; color:var(--text-color); font-size:18px; cursor:pointer;">✕</button>
+            </div>
+            <div id="omikujiModalContent" style="overflow-y:auto; flex-grow:1; display:flex; flex-direction:column;">
+                <!-- Injected by gamification.js -->
+            </div>
+            <div style="margin-top:14px; text-align:right;">
+                <button onclick="closeOmikujiModal()" style="padding:6px 16px; background:var(--card-bg); border:1px solid var(--border-color); color:var(--text-color); border-radius:4px; font-weight:bold; cursor:pointer;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 11. FAN RANK & PROGRESSION MODAL -->
+    <div id="profileModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.65); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:var(--card-bg); color:var(--text-color); border:1px solid var(--border-color); border-radius:var(--border-radius); padding:22px; width:92%; max-width:500px; max-height:85vh; display:flex; flex-direction:column; box-shadow:var(--shadow); position:relative;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid var(--border-color); padding-bottom:8px;">
+                <h3 style="margin:0; font-size:1.15rem;">⭐ Fan Rank &amp; Progression</h3>
+                <button onclick="closeProfileModal()" style="background:none; border:none; color:var(--text-color); font-size:18px; cursor:pointer;">✕</button>
+            </div>
+            <div id="profileModalContent" style="overflow-y:auto; flex-grow:1; display:flex; flex-direction:column;">
+                <!-- Injected by gamification.js -->
+            </div>
+            <div style="margin-top:14px; text-align:right;">
+                <button onclick="closeProfileModal()" style="padding:6px 16px; background:var(--card-bg); border:1px solid var(--border-color); color:var(--text-color); border-radius:4px; font-weight:bold; cursor:pointer;">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Floating Back to Top Bubble -->
     <button id="backToTopBtn" class="back-to-top-bubble" onclick="scrollToTop()" title="Back to Top" aria-label="Back to top">
         <svg viewBox="0 0 24 24"><path d="M12 4l-8 8h5v8h6v-8h5z"/></svg>
@@ -422,6 +456,7 @@
     <script src="asset/js/config.js"></script>
     <script src="asset/js/utils.js"></script>
     <script src="asset/js/media.js"></script>
+    <script src="asset/js/gamification.js"></script>
     <script src="asset/js/app.js"></script>
 </body>
 </html>

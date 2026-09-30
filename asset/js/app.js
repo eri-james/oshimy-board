@@ -32,6 +32,7 @@ function acceptNSFW() {
 window.addEventListener('hashchange', router);
 window.addEventListener('load', () => {
     initAuth();
+    if (typeof initGamification === 'function') initGamification();
     initQuickReply();
     initKeyboardNavigation();
     loadSiteSettings();
@@ -1242,6 +1243,10 @@ async function submitReplyCore({ threadId, comment, name, media_url, source = 'm
             MY_POSTS.push(res.reply.id);
             localStorage.setItem('my_posts', JSON.stringify(MY_POSTS));
 
+            if (typeof handleGamificationPostHook === 'function') {
+                handleGamificationPostHook(false);
+            }
+
             // Sync optimistic element with real server data in place
             if (optimisticEl) {
                 optimisticEl.id = `post_${res.reply.id}`;
@@ -1483,6 +1488,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (res.success && res.thread) {
                 MY_POSTS.push(res.thread.id);
                 localStorage.setItem('my_posts', JSON.stringify(MY_POSTS));
+
+                if (typeof handleGamificationPostHook === 'function') {
+                    handleGamificationPostHook(true);
+                }
+
                 subjectInput.value = "";
                 commentInput.value = "";
                 imageInput.value = "";
@@ -1547,6 +1557,7 @@ async function initAuth() {
     if (!authToken) {
         updateAuthUI(null);
         syncUserPerks();
+        if (typeof initGamification === 'function') initGamification();
         return;
     }
 
@@ -1555,12 +1566,14 @@ async function initAuth() {
         currentUser = data.user;
         updateAuthUI(currentUser);
         syncUserPerks();
+        if (typeof initGamification === 'function') initGamification();
     } catch {
         localStorage.removeItem('myvt_token');
         authToken = null;
         currentUser = null;
         updateAuthUI(null);
         syncUserPerks();
+        if (typeof initGamification === 'function') initGamification();
     }
 }
 
@@ -1641,6 +1654,7 @@ async function handleAuthSubmit(e) {
             updateAuthUI(currentUser);
             closeAuthModal();
             syncUserPerks();
+            if (typeof initGamification === 'function') initGamification();
             router();
         }
     } catch (err) {
@@ -1657,6 +1671,7 @@ async function logout() {
     currentUser = null;
     updateAuthUI(null);
     syncUserPerks();
+    if (typeof initGamification === 'function') initGamification();
     router();
 }
 

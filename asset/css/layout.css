@@ -1005,3 +1005,140 @@ body.night-mode .back-to-top-bubble:hover {
     transition: box-shadow 0.2s ease;
     border-radius: 8px;
 }
+
+/* =========================================
+   GAMIFICATION & DAILY OMIKUJI WIDGETS
+   ========================================= */
+
+/* Floating XP Toasts */
+.gamification-toast-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 100000;
+    pointer-events: none;
+}
+
+.gamification-toast-item {
+    pointer-events: auto;
+    background: var(--card-bg);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--main-accent);
+    border-radius: 8px;
+    padding: 10px 14px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 260px;
+    max-width: 380px;
+    animation: toastSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.gamification-toast-item .toast-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+}
+
+.gamification-toast-item .toast-title {
+    font-weight: 800;
+    font-size: 0.88rem;
+    color: var(--main-accent);
+}
+
+.gamification-toast-item .toast-desc {
+    font-size: 0.8rem;
+    opacity: 0.85;
+    margin-top: 1px;
+}
+
+.toast-fade-out {
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+@keyframes toastSlideIn {
+    0% { opacity: 0; transform: translateY(20px) scale(0.95); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Omikuji Shrine Box & Cylinder */
+.omikuji-draw-box {
+    text-align: center;
+    padding: 20px 15px;
+    background: rgba(0, 0, 0, 0.02);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+}
+
+.omikuji-shrine-cylinder {
+    transition: transform 0.2s ease;
+}
+
+.shrine-shake {
+    animation: shrineVibrate 0.6s infinite ease-in-out;
+}
+
+@keyframes shrineVibrate {
+    0% { transform: translate(0, 0) rotate(0deg); }
+    20% { transform: translate(-3px, 2px) rotate(-4deg); }
+    40% { transform: translate(3px, -2px) rotate(4deg); }
+    60% { transform: translate(-3px, -2px) rotate(-3deg); }
+    80% { transform: translate(2px, 2px) rotate(3deg); }
+    100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+.btn-draw-omikuji {
+    padding: 10px 24px;
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    color: #fff;
+    font-weight: 800;
+    font-size: 0.95rem;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
+    transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.btn-draw-omikuji:hover:not(:disabled) {
+    transform: translateY(-2px);
+    filter: brightness(1.1);
+}
+
+.btn-draw-omikuji:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Omikuji Fortune Slip (Japanese Shrine Style) */
+.omikuji-slip-card {
+    background: #fffdf5;
+    color: #1f2937;
+    border: 2px solid #b91c1c;
+    border-radius: 8px;
+    padding: 18px 16px;
+    text-align: center;
+    position: relative;
+    box-shadow: 0 8px 24px rgba(185, 28, 28, 0.12);
+}
+
+.fortune-revealed {
+    background-image: repeating-linear-gradient(0deg, transparent, transparent 20px, rgba(185, 28, 28, 0.04) 20px, rgba(185, 28, 28, 0.04) 21px);
+}
+
+.omikuji-kanji-stamp {
+    font-size: 2.5rem;
+    margin-bottom: 2px;
+}
+
+@keyframes slipPop {
+    0% { transform: scale(0.85); opacity: 0; }
+    50% { transform: scale(1.03); }
+    100% { transform: scale(1); opacity: 1; }
+}

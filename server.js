@@ -3,12 +3,21 @@ import path from 'path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'url';
 import { db, hashPassword, verifyPassword, hashIp, generateId } from './server/db.js';
+import { 
+    calculateLevel, 
+    getRank, 
+    awardUserXP, 
+    drawRandomOmikuji, 
+    getTodayDateStr, 
+    XP_RULES, 
+    ALLOWED_OSHI_BADGES 
+} from './server/gamification.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.APP_PORT || 3000;
+const PORT = process.env.PORT || process.env.APP_PORT || 3000;
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -230,6 +239,11 @@ app.post('/api/threads', (req, res) => {
         `).run(id, board, posterName, posterSubject, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now, now);
 
         const created = db.prepare('SELECT * FROM threads WHERE id = ?').get(id);
+
+        if (userId) {
+            awardUserXP(db, userId, XP_RULES.THREAD_CREATION);
+        }
+
         res.json({ success: true, thread: created });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -277,6 +291,11 @@ app.post('/api/replies', (req, res) => {
         db.prepare('UPDATE threads SET bumped_at = ? WHERE id = ?').run(now, thread_id);
 
         const created = db.prepare('SELECT * FROM replies WHERE id = ?').get(id);
+
+        if (userId) {
+            awardUserXP(db, userId, XP_RULES.REPLY_CREATION);
+        }
+
         res.json({ success: true, reply: created });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -447,6 +466,109 @@ app.post('/api/user/watchlist/toggle', (req, res) => {
             db.prepare('INSERT INTO watchlist (user_id, thread_id, created_at) VALUES (?, ?, ?)').run(req.user.user_id, thread_id, Date.now());
             return res.json({ success: true, watched: true });
         }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 9e. Gamification: User Profile Stats (XP, Level, Rank, Streak, Oshi Badge)
+app.get('/api/user/profile', (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized: login required' });
+    try {
+        const user = db.prepare(`
+            SELECT id, username, role, display_title, xp, level, streak, last_active_date, last_omikuji_date, oshi_badge 
+            FROM users WHERE id = ?
+        `).get(req.user.user_id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        const level = calculateLevel(user.xp || 0);
+        const rank = getRank(level);
+        const today = getTodayDateStr();
+        const canDrawOmikuji = user.last_omikuji_date !== today;
+
+        res.json({
+            success: true,
+            user: {
+                id: user.id,
+                username: user.username,
+                role: user.role,
+                display_title: user.display_title,
+                xp: user.xp || 0,
+                level,
+                rankTitle: rank.title,
+                rankBadge: rank.badge,
+                streak: user.streak || 0,
+                oshi_badge: user.oshi_badge || null,
+                can_draw_omikuji: canDrawOmikuji,
+                last_omikuji_date: user.last_omikuji_date
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 9f. Gamification: Daily Oshi Omikuji Draw
+app.post('/api/user/omikuji', (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized: login required' });
+    try {
+        const user = db.prepare('SELECT id, xp, level, streak, last_active_date, last_omikuji_date FROM users WHERE id = ?').get(req.user.user_id);
+        if (!user) return res.status(404).json({ error: 'User not found' });
+
+        const today = getTodayDateStr();
+        if (user.last_omikuji_date === today) {
+            return res.status(400).json({ error: 'Already drawn today' });
+        }
+
+        // Calculate consecutive daily streak
+        let newStreak = 1;
+        if (user.last_active_date) {
+            const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+            if (user.last_active_date === yesterday) {
+                newStreak = (user.streak || 0) + 1;
+            } else if (user.last_active_date === today) {
+                newStreak = user.streak || 1;
+            }
+        }
+
+        const fortune = drawRandomOmikuji();
+        const streakBonus = (newStreak > 1) ? XP_RULES.DAILY_STREAK : 0;
+        const xpAwarded = XP_RULES.OMIKUJI_DRAW + streakBonus;
+        const newXp = (user.xp || 0) + xpAwarded;
+        const newLevel = calculateLevel(newXp);
+
+        db.prepare(`
+            UPDATE users 
+            SET xp = ?, level = ?, streak = ?, last_active_date = ?, last_omikuji_date = ?
+            WHERE id = ?
+        `).run(newXp, newLevel, newStreak, today, today, user.id);
+
+        const rank = getRank(newLevel);
+        res.json({
+            success: true,
+            fortune,
+            xp_awarded: xpAwarded,
+            total_xp: newXp,
+            level: newLevel,
+            rankTitle: rank.title,
+            rankBadge: rank.badge,
+            streak: newStreak
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 9g. Gamification: Update Custom Oshi Badge
+app.post('/api/user/badge', (req, res) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized: login required' });
+    const { badge } = req.body;
+    if (badge && !ALLOWED_OSHI_BADGES.includes(badge)) {
+        return res.status(400).json({ error: 'Invalid oshi badge option' });
+    }
+    try {
+        db.prepare('UPDATE users SET oshi_badge = ? WHERE id = ?').run(badge || null, req.user.user_id);
+        res.json({ success: true, oshi_badge: badge || null });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

@@ -4,7 +4,13 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
     display_title TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    xp INTEGER NOT NULL DEFAULT 0,
+    level INTEGER NOT NULL DEFAULT 1,
+    streak INTEGER NOT NULL DEFAULT 0,
+    last_active_date TEXT,
+    last_omikuji_date TEXT,
+    oshi_badge TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
