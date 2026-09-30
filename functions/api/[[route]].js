@@ -340,6 +340,46 @@ export async function onRequest(context) {
                     } catch (_) {}
                 }
 
+                // If pageCount is 1 or body was not retrieved, probe if multiple pages exist via helper
+                if (pageCount <= 1) {
+                    try {
+                        const p2Check = await fetch(`https://pixiv.re/${cleanId}-2.jpg`, { method: 'HEAD' });
+                        if (p2Check.ok) {
+                            const probes = await Promise.all([3, 4, 5, 6, 7, 8].map(async p => {
+                                try {
+                                    const r = await fetch(`https://pixiv.re/${cleanId}-${p}.jpg`, { method: 'HEAD' });
+                                    return r.ok ? p : 0;
+                                } catch (_) { return 0; }
+                            }));
+                            pageCount = Math.max(2, ...probes);
+                            if (!imageUrl) imageUrl = `https://pixiv.re/${cleanId}.jpg`;
+                        }
+                    } catch (_) {}
+                }
+
+                // If title or author is still generic fallback, scrape from Pixiv artwork page HTML
+                if (title === `Artwork #${cleanId}`) {
+                    try {
+                        const pageResp = await fetch(`https://www.pixiv.net/artworks/${cleanId}`, {
+                            headers: {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                            }
+                        });
+                        if (pageResp.ok) {
+                            const html = await pageResp.text();
+                            const titleMatch = html.match(/<meta property="twitter:title" content="([^"]+)"/i) || html.match(/<meta property="og:title" content="([^"]+)"/i);
+                            if (titleMatch && titleMatch[1]) {
+                                title = titleMatch[1].replace(/ - pixiv$/i, '').trim();
+                            }
+                            const authorMatch = html.match(/\/users\/(\d+)"[^>]*>([^<]+)<\/a>/i);
+                            if (authorMatch && authorMatch[2]) {
+                                author = authorMatch[2].trim();
+                                authorId = authorMatch[1];
+                            }
+                        }
+                    } catch (_) {}
+                }
+
                 let proxyUrl = '';
                 if (imageUrl) {
                     if (imageUrl.includes('pixiv.re')) {

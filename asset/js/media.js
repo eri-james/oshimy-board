@@ -685,6 +685,29 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                     };
 
                     renderPixivCarouselModal();
+
+                    // If server only returned 1 page, actively probe for additional pages via helper
+                    if (pages.length === 1) {
+                        const probeNextPage = (p) => {
+                            const testImg = new Image();
+                            testImg.onload = () => {
+                                if (!currentPixivGallery || !currentPixivGallery.artworkUrl.includes(artworkId)) return;
+                                const exists = currentPixivGallery.pages.some(pg => pg.pageIndex === p - 1);
+                                if (!exists) {
+                                    currentPixivGallery.pages.push({
+                                        pageIndex: p - 1,
+                                        displayUrl: `https://pixiv.re/${artworkId}-${p}.jpg`,
+                                        helperUrl: `https://pixiv.re/${artworkId}-${p}.jpg`,
+                                        originalUrl: `https://pixiv.re/${artworkId}-${p}.jpg`
+                                    });
+                                    renderPixivCarouselModal();
+                                    if (p < 25) probeNextPage(p + 1);
+                                }
+                            };
+                            testImg.src = `https://pixiv.re/${artworkId}-${p}.jpg`;
+                        };
+                        probeNextPage(2);
+                    }
                 } else {
                     // Fallback: check if page 2 exists via community helper to enable carousel even on API fallback
                     const fallbackPages = [{
