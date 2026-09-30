@@ -818,6 +818,19 @@ async function loadThreadView(threadId, isSilent = false) {
         const th = data.thread;
         const replies = data.replies || [];
 
+        if (th && th.board && (!currentBoard || currentBoard !== th.board)) {
+            currentBoard = th.board;
+            renderBoardNav();
+        }
+
+        // Keep browser URL clean and easily shareable for Discord/social previews
+        if (!isSilent && th && th.board) {
+            const threadUrl = `?b=${th.board}&t=${th.id}`;
+            if (window.location.search !== `?b=${th.board}&t=${th.id}` && !window.location.hash.includes('#post_')) {
+                history.replaceState(null, '', threadUrl);
+            }
+        }
+
         // If delta update arrived, only append brand-new replies without full re-render
         if (data.is_delta) {
             if (th) {

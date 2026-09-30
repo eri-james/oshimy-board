@@ -44,7 +44,7 @@ export async function onRequest(context) {
         // Check if thread is requested
         const threadId = url.searchParams.get('t') || url.searchParams.get('thread');
         if (threadId) {
-            const thread = await env.DB.prepare('SELECT id, board, subject, comment, media_url, created_at, reply_count FROM threads WHERE id = ?').bind(threadId).first();
+            const thread = await env.DB.prepare('SELECT id, board, subject, comment, media_url, created_at FROM threads WHERE id = ?').bind(threadId).first();
             if (thread) {
                 const cleanComment = (thread.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
                 const subjectTitle = thread.subject ? `${thread.subject} - ` : '';

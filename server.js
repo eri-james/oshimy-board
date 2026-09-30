@@ -894,7 +894,7 @@ app.get('*', (req, res) => {
 
         if (threadId) {
             try {
-                const thread = db.prepare('SELECT id, board, subject, comment, media_url, created_at, reply_count FROM threads WHERE id = ?').get(threadId);
+                const thread = db.prepare('SELECT id, board, subject, comment, media_url, created_at FROM threads WHERE id = ?').get(threadId);
                 if (thread) {
                     const cleanComment = (thread.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
                     const subjectTitle = thread.subject ? `${thread.subject} - ` : '';
