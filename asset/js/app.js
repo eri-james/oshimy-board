@@ -511,10 +511,15 @@ async function loadBoardView(isArchive = false, isSilent = false) {
     }
 
     if (!isSilent) {
-        if (isCatalog && catalogGrid) {
-            catalogGrid.innerHTML = `<div style="grid-column: 1 / -1; text-align:center; padding: 30px; opacity:0.7;">Loading catalog...</div>`;
-        } else {
-            container.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--text-color);">Loading ${isArchive ? 'archived ' : ''}threads...</div>`;
+        if (cachedBoardThreads.length === 0) {
+            if (isCatalog && catalogGrid) {
+                catalogGrid.innerHTML = `<div style="grid-column: 1 / -1; text-align:center; padding: 30px; opacity:0.7;">Loading catalog...</div>`;
+            } else {
+                container.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--text-color);">Loading ${isArchive ? 'archived ' : ''}threads...</div>`;
+            }
+        } else if (isCatalog) {
+            // Instant render cached threads into catalog mode while re-validating
+            renderCatalogGrid(cachedBoardThreads);
         }
     }
 
@@ -531,10 +536,10 @@ async function loadBoardView(isArchive = false, isSilent = false) {
     try {
         const viewParam = isArchive ? '&view=archive' : '';
         const res = await apiFetch(`/threads?b=${currentBoard}${viewParam}`);
-        if (res.notModified) {
-            return; // 304 Not Modified: server confirmed zero changes
+        if (isSilent && res.notModified) {
+            return; // 304 Not Modified: server confirmed zero changes during silent background update
         }
-        const threads = res.threads || [];
+        const threads = res.threads || cachedBoardThreads || [];
         cachedBoardThreads = threads;
 
         if (threads.length === 0) {
@@ -723,8 +728,8 @@ async function loadThreadView(threadId, isSilent = false) {
 
     try {
         const data = await apiFetch(`/thread?id=${threadId}`);
-        if (data.notModified) {
-            return; // 304 Not Modified: server confirmed zero changes
+        if (isSilent && data.notModified) {
+            return; // 304 Not Modified: server confirmed zero changes during silent background update
         }
         const th = data.thread;
         const replies = data.replies || [];
@@ -1359,22 +1364,24 @@ function initKeyboardNavigation() {
             return;
         }
 
-        // R Key opens Quick Reply
-        if (e.key === 'r' || e.key === 'R') {
-            e.preventDefault();
-            openQuickReply(currentThreadId);
+        // R Key opens Quick Reply (only when viewing an active thread and no modifier keys are pressed)
+        if ((e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            if (currentThreadId) {
+                e.preventDefault();
+                openQuickReply(currentThreadId);
+            }
             return;
         }
 
-        // J Key: Jump to next post/reply
-        if (e.key === 'j' || e.key === 'J') {
+        // J Key: Jump to next post/reply (without modifier keys)
+        if ((e.key === 'j' || e.key === 'J') && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             navigatePosts(1);
             return;
         }
 
-        // K Key: Jump to previous post/reply
-        if (e.key === 'k' || e.key === 'K') {
+        // K Key: Jump to previous post/reply (without modifier keys)
+        if ((e.key === 'k' || e.key === 'K') && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             navigatePosts(-1);
             return;
