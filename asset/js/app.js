@@ -484,6 +484,15 @@ function getCatalogThumbnail(mediaUrl) {
     if (media.type === 'reddit' || media.type === 'reddit_video') {
         return `<div class="catalog-placeholder-icon" style="color:#FF4500;">🤖</div>`;
     }
+    if (media.type === 'pixiv') {
+        const thumb = `https://pixiv.re/${media.id}.jpg`;
+        return `<img src="${thumb}" class="catalog-thumb" alt="Pixiv #${media.id}" loading="lazy" decoding="async" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\' style=\\'color:#0096fa;\\'>🎨</div>';">`;
+    }
+    if (media.type === 'pixiv_image') {
+        const primarySrc = media.proxyUrl || `/api/proxy/pixiv?url=${encodeURIComponent(media.url)}`;
+        const helperFallback = media.helperUrl || media.url.replace(/^https?:\/\/[a-zA-Z0-9-]+\.pximg\.net\//i, 'https://i.pixiv.re/');
+        return `<img src="${escapeHtml(primarySrc)}" class="catalog-thumb" alt="Pixiv Image" loading="lazy" decoding="async" onerror="if(this.dataset.triedHelper!=='true'){this.dataset.triedHelper='true';this.src='${escapeHtml(helperFallback)}';}else{this.onerror=null;this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\' style=\\'color:#0096fa;\\'>🎨</div>';}">`;
+    }
     if (media.type === 'video') {
         return `<div class="catalog-placeholder-icon">🎥</div>`;
     }

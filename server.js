@@ -124,12 +124,23 @@ app.get('/api/proxy/pixiv', async (req, res) => {
     }
 
     try {
-        const upstreamResp = await fetch(targetUrl, {
+        let upstreamResp = await fetch(targetUrl, {
             headers: {
                 'Referer': 'https://www.pixiv.net/',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
             }
         });
+
+        // If upstream Pixiv blocks or rate limits, fallback seamlessly to community proxy helper i.pixiv.re
+        if (!upstreamResp.ok) {
+            const helperUrl = targetUrl.replace(/^https?:\/\/[a-zA-Z0-9-]+\.pximg\.net\//i, 'https://i.pixiv.re/');
+            try {
+                const helperResp = await fetch(helperUrl);
+                if (helperResp.ok) {
+                    upstreamResp = helperResp;
+                }
+            } catch (_) {}
+        }
 
         if (!upstreamResp.ok) {
             return res.status(upstreamResp.status).send(`Upstream Pixiv error: ${upstreamResp.status}`);
@@ -153,12 +164,24 @@ app.get('/api/proxy/pixiv', async (req, res) => {
             res.send(Buffer.from(arrayBuffer));
         }
     } catch (err) {
-        console.error('Pixiv proxy error:', err);
+        console.error('Pixiv proxy error, trying helper fallback:', err);
+        // Fallback to helper on network errors
+        try {
+            const helperUrl = targetUrl.replace(/^https?:\/\/[a-zA-Z0-9-]+\.pximg\.net\//i, 'https://i.pixiv.re/');
+            const helperResp = await fetch(helperUrl);
+            if (helperResp.ok) {
+                res.setHeader('Content-Type', helperResp.headers.get('content-type') || 'image/jpeg');
+                res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                const stream = Readable.fromWeb(helperResp.body);
+                return stream.pipe(res);
+            }
+        } catch (_) {}
         res.status(502).send('Error proxying Pixiv image');
     }
 });
 
-// Pixiv Artwork Metadata resolver
+// Pixiv Artwork Metadata resolver with robust fallback to pixiv.re helper
 app.get('/api/pixiv/artwork', async (req, res) => {
     const illustId = req.query.id;
     if (!illustId || !/^\d+$/.test(String(illustId).trim())) {
@@ -171,48 +194,85 @@ app.get('/api/pixiv/artwork', async (req, res) => {
     }
 
     try {
-        const resp = await fetch(`https://www.pixiv.net/ajax/illust/${cleanId}`, {
-            headers: {
-                'Referer': `https://www.pixiv.net/artworks/${cleanId}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-            }
-        });
+        let body = null;
+        let isR18 = false;
+        let title = `Artwork #${cleanId}`;
+        let author = 'Pixiv Artist';
+        let authorId = '';
+        let pageCount = 1;
+        let imageUrl = '';
 
-        if (!resp.ok) {
-            return res.status(resp.status).json({ error: `Pixiv API returned ${resp.status}` });
-        }
+        // 1. Attempt official Pixiv AJAX metadata fetch
+        try {
+            const resp = await fetch(`https://www.pixiv.net/ajax/illust/${cleanId}`, {
+                headers: {
+                    'Referer': `https://www.pixiv.net/artworks/${cleanId}`,
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                }
+            });
 
-        const data = await resp.json();
-        if (data.error || !data.body) {
-            return res.status(404).json({ error: data.message || 'Artwork not found or private' });
-        }
+            if (resp.ok) {
+                const data = await resp.json();
+                if (!data.error && data.body) {
+                    body = data.body;
+                    title = body.title || title;
+                    author = body.userName || author;
+                    authorId = body.userId || '';
+                    pageCount = body.pageCount || 1;
+                    isR18 = (body.xRestrict === 1 || body.xRestrict === 2);
+                    imageUrl = body.urls?.regular || body.urls?.small || body.urls?.original || '';
 
-        const body = data.body;
-        let imageUrl = body.urls?.regular || body.urls?.small || body.urls?.original || '';
-        const isR18 = (body.xRestrict === 1 || body.xRestrict === 2);
-
-        // Fallback for R-18 and age-restricted works where Pixiv masks public urls
-        if (!imageUrl) {
-            const userIllust = body.userIllusts?.[cleanId] || 
-                (body.noLoginData?.zengoIdWorks || []).find(w => String(w.id) === String(cleanId));
-            const dt = userIllust?.createDate || body.createDate;
-            if (dt) {
-                const m = dt.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
-                if (m) {
-                    const [_, y, mo, d, h, mi, s] = m;
-                    imageUrl = `https://i.pximg.net/img-master/img/${y}/${mo}/${d}/${h}/${mi}/${s}/${cleanId}_p0_master1200.jpg`;
+                    // For R-18 works where Pixiv masks public urls, reconstruct from timestamp
+                    if (!imageUrl) {
+                        const userIllust = body.userIllusts?.[cleanId] || 
+                            (body.noLoginData?.zengoIdWorks || []).find(w => String(w.id) === String(cleanId));
+                        const dt = userIllust?.createDate || body.createDate;
+                        if (dt) {
+                            const m = dt.match(/(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
+                            if (m) {
+                                const [_, y, mo, d, h, mi, s] = m;
+                                imageUrl = `https://i.pximg.net/img-master/img/${y}/${mo}/${d}/${h}/${mi}/${s}/${cleanId}_p0_master1200.jpg`;
+                            }
+                        }
+                    }
                 }
             }
+        } catch (fetchErr) {
+            console.warn(`Pixiv official AJAX error for #${cleanId}:`, fetchErr.message);
         }
 
-        const proxyUrl = imageUrl ? `/api/proxy/pixiv?url=${encodeURIComponent(imageUrl)}` : '';
+        // 2. If Pixiv blocked, masked, or returned private/not found, use pixiv.re community proxy helper
+        if (!imageUrl) {
+            try {
+                const helperCheck = await fetch(`https://pixiv.re/${cleanId}.jpg`, { method: 'HEAD' });
+                if (helperCheck.ok) {
+                    imageUrl = `https://pixiv.re/${cleanId}.jpg`;
+                }
+            } catch (_) {}
+        }
+
+        // 3. Fallback proxyUrl
+        let proxyUrl = '';
+        if (imageUrl) {
+            if (imageUrl.includes('pixiv.re')) {
+                // pixiv.re already has CORS and CDN caching enabled
+                proxyUrl = imageUrl;
+            } else {
+                proxyUrl = `/api/proxy/pixiv?url=${encodeURIComponent(imageUrl)}`;
+            }
+        }
+
+        // If we still found no media at all, return 404
+        if (!imageUrl) {
+            return res.status(404).json({ error: 'Artwork not found or completely removed from Pixiv' });
+        }
 
         const artwork = {
             id: cleanId,
-            title: body.title || `Artwork #${cleanId}`,
-            author: body.userName || 'Artist',
-            authorId: body.userId || '',
-            pageCount: body.pageCount || 1,
+            title,
+            author,
+            authorId,
+            pageCount,
             isR18,
             imageUrl,
             proxyUrl,

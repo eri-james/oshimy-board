@@ -42,15 +42,20 @@ function getMediaType(url) {
         return { type: 'pixiv', id: pixivMatch[1], url: cleanUrl };
     }
 
-    // 4. Pixiv Direct CDN Images (i.pximg.net - requires proxy due to Pixiv hotlink protection)
-    const pximgRegex = /(?:https?:\/\/)?([a-zA-Z0-9-]+\.pximg\.net\/[^\s]+)/i;
+    // 4. Pixiv Direct CDN Images (i.pximg.net, i.pixiv.re, pixiv.re - requires proxy or proxy helper)
+    const pximgRegex = /(?:https?:\/\/)?([a-zA-Z0-9-]+\.(?:pximg\.net|pixiv\.re)\/[^\s]+|pixiv\.re\/\d+(?:-\d+)?\.(?:jpg|png|gif|jpeg))/i;
     const pximgMatch = cleanUrl.match(pximgRegex);
     if (pximgMatch) {
         const fullUrl = cleanUrl.startsWith('http') ? cleanUrl : `https://${cleanUrl}`;
+        // If already pointing to pixiv.re helper, it can be loaded directly with fallback
+        const isHelper = /pixiv\.re/i.test(fullUrl);
+        const helperUrl = isHelper ? fullUrl : fullUrl.replace(/^https?:\/\/[a-zA-Z0-9-]+\.pximg\.net\//i, 'https://i.pixiv.re/');
+        const proxyUrl = `/api/proxy/pixiv?url=${encodeURIComponent(fullUrl)}`;
         return { 
             type: 'pixiv_image', 
             url: fullUrl,
-            proxyUrl: `/api/proxy/pixiv?url=${encodeURIComponent(fullUrl)}`
+            helperUrl,
+            proxyUrl
         };
     }
 
@@ -121,22 +126,29 @@ function renderMedia(url) {
 
     // 3. Pixiv Artwork Link
     if (media.type === 'pixiv') {
+        const helperFallback = `https://pixiv.re/${media.id}.jpg`;
         return `
             <div class="media-container file-placeholder pixiv-placeholder" data-pixiv-id="${media.id}" onclick="openLightbox('pixiv', '${media.id}')" title="Click to view Pixiv Artwork #${media.id}">
                 <div class="pixiv-thumb-slot" id="pixiv_slot_${media.id}" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
-                    <div class="file-ext" style="color:#0096fa; font-size:22px; font-weight:900;">pixiv</div>
-                    <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="pixiv_title_${media.id}">#${media.id}</div>
-                    <div style="font-size:10px; color:#aaa; margin-top:2px;" id="pixiv_author_${media.id}">View Artwork</div>
+                    <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">
+                        <img src="${helperFallback}" class="thread-image" loading="lazy" decoding="async" alt="Pixiv #${media.id}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                        <div class="pixiv-fallback-badge" style="display:none; flex-direction:column; align-items:center; justify-content:center;">
+                            <div class="file-ext" style="color:#0096fa; font-size:22px; font-weight:900;">pixiv</div>
+                            <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px;">#${media.id}</div>
+                        </div>
+                        <div class="pixiv-badge">pixiv</div>
+                    </div>
                 </div>
             </div>
         `;
     }
 
-    // 4. Pixiv Direct Image (i.pximg.net - rendered through reverse proxy to bypass hotlink block)
+    // 4. Pixiv Direct Image (i.pximg.net / i.pixiv.re - rendered with automatic proxy helper fallback)
     if (media.type === 'pixiv_image') {
-        const proxySrc = media.proxyUrl || `/api/proxy/pixiv?url=${encodeURIComponent(media.url)}`;
+        const primarySrc = media.proxyUrl || `/api/proxy/pixiv?url=${encodeURIComponent(media.url)}`;
+        const helperFallback = media.helperUrl || media.url.replace(/^https?:\/\/[a-zA-Z0-9-]+\.pximg\.net\//i, 'https://i.pixiv.re/');
         return `
-            <img src="${escapeHtml(proxySrc)}" class="thread-image" loading="lazy" decoding="async" alt="Pixiv image" onclick="openLightbox('pixiv_image', '${escapeHtml(proxySrc)}', '${escapeHtml(media.url)}')" onerror="this.onerror=null; this.style.display='none';" title="Click to expand Pixiv image">
+            <img src="${escapeHtml(primarySrc)}" class="thread-image" loading="lazy" decoding="async" alt="Pixiv image" onclick="openLightbox('pixiv_image', this.currentSrc || this.src, '${escapeHtml(media.url)}')" onerror="if(this.dataset.triedHelper !== 'true'){ this.dataset.triedHelper='true'; this.src='${escapeHtml(helperFallback)}'; } else { this.style.display='none'; }" title="Click to expand Pixiv image">
         `;
     }
 
@@ -214,9 +226,10 @@ async function hydratePixivEmbeds() {
                     if (art.proxyUrl) {
                         const badgeText = art.isR18 ? 'pixiv • R-18' : 'pixiv';
                         const badgeStyle = art.isR18 ? 'background:rgba(225, 29, 72, 0.95);' : '';
+                        const helperFallback = `https://pixiv.re/${id}.jpg`;
                         slot.innerHTML = `
                             <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">
-                                <img src="${art.proxyUrl}" class="thread-image" loading="lazy" decoding="async" alt="${escapeHtml(art.title)}" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                                <img src="${art.proxyUrl}" class="thread-image" loading="lazy" decoding="async" alt="${escapeHtml(art.title)}" onerror="if(this.src!=='${helperFallback}'){this.src='${helperFallback}';}else{this.style.display='none';}" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
                                 <div class="pixiv-badge" style="${badgeStyle}">${badgeText}</div>
                             </div>
                         `;
@@ -389,20 +402,39 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                         </div>
                     `;
                 } else {
+                    const fallbackSrc = `https://pixiv.re/${artworkId}.jpg`;
                     custom.innerHTML = `
-                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px; text-align:center; max-width:400px; border:2px solid #ef4444;">
-                            <div style="color:#ef4444; font-weight:bold; margin-bottom:8px;">Artwork Unavailable</div>
-                            <div style="font-size:0.9em; color:#aaa; margin-bottom:14px;">This artwork could not be loaded or is set to private.</div>
-                            <a href="https://www.pixiv.net/artworks/${artworkId}" target="_blank" rel="noopener noreferrer" style="color:#0096fa; font-weight:bold; text-decoration:underline;">View on Pixiv ↗</a>
+                        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(92vw, 850px); max-height:88vh; display:flex; flex-direction:column; align-items:center; border:2px solid #0096fa; box-shadow:0 8px 32px rgba(0,0,0,0.9); overflow-y:auto;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px;">
+                                <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:12px;">
+                                    <div style="font-weight:bold; font-size:1.1em; color:#fff;">Pixiv Artwork #${artworkId}</div>
+                                </div>
+                                <a href="https://www.pixiv.net/artworks/${artworkId}" target="_blank" rel="noopener noreferrer" style="background:#0096fa; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:opacity 0.15s ease;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                                    View on Pixiv ↗
+                                </a>
+                            </div>
+                            <div style="max-height:calc(85vh - 120px); overflow:auto; display:flex; justify-content:center; align-items:center; width:100%;">
+                                <img src="${fallbackSrc}" style="max-width:100%; max-height:calc(85vh - 120px); object-fit:contain; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5);" alt="Pixiv #${artworkId}" onerror="this.parentElement.innerHTML='<div style=\\'padding:30px; color:#aaa;\\'>Artwork not available directly. <a href=\\'https://www.pixiv.net/artworks/${artworkId}\\' target=\\'_blank\\' style=\\'color:#0096fa;\\'>Open on Pixiv ↗</a></div>';">
+                            </div>
                         </div>
                     `;
                 }
             })
             .catch(() => {
+                const fallbackSrc = `https://pixiv.re/${artworkId}.jpg`;
                 custom.innerHTML = `
-                    <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px; text-align:center; max-width:400px; border:2px solid #ef4444;">
-                        <div style="color:#ef4444; font-weight:bold; margin-bottom:8px;">Failed to load</div>
-                        <a href="https://www.pixiv.net/artworks/${artworkId}" target="_blank" rel="noopener noreferrer" style="color:#0096fa; font-weight:bold; text-decoration:underline;">Open on Pixiv ↗</a>
+                    <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(92vw, 850px); max-height:88vh; display:flex; flex-direction:column; align-items:center; border:2px solid #0096fa; box-shadow:0 8px 32px rgba(0,0,0,0.9); overflow-y:auto;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px;">
+                            <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:12px;">
+                                <div style="font-weight:bold; font-size:1.1em; color:#fff;">Pixiv Artwork #${artworkId}</div>
+                            </div>
+                            <a href="https://www.pixiv.net/artworks/${artworkId}" target="_blank" rel="noopener noreferrer" style="background:#0096fa; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:opacity 0.15s ease;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                                View on Pixiv ↗
+                            </a>
+                        </div>
+                        <div style="max-height:calc(85vh - 120px); overflow:auto; display:flex; justify-content:center; align-items:center; width:100%;">
+                            <img src="${fallbackSrc}" style="max-width:100%; max-height:calc(85vh - 120px); object-fit:contain; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5);" alt="Pixiv #${artworkId}" onerror="this.parentElement.innerHTML='<div style=\\'padding:30px; color:#aaa;\\'>Artwork not available directly. <a href=\\'https://www.pixiv.net/artworks/${artworkId}\\' target=\\'_blank\\' style=\\'color:#0096fa;\\'>Open on Pixiv ↗</a></div>';">
+                        </div>
                     </div>
                 `;
             });
