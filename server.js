@@ -63,6 +63,39 @@ function authMiddleware(req, res, next) {
 
 app.use(authMiddleware);
 
+// Helper: Calculate lightweight user perks sync data (unread notifs & watchlist count)
+function getUserSyncData(userId) {
+    if (!userId) return null;
+    try {
+        const notifRow = db.prepare(`
+            SELECT COUNT(*) as unread_count
+            FROM replies r
+            JOIN threads t ON t.id = r.thread_id
+            WHERE (r.user_id IS NULL OR r.user_id != ?)
+              AND (
+                t.user_id = ?
+                OR EXISTS (
+                    SELECT 1 FROM replies my_r
+                    WHERE my_r.user_id = ? AND r.comment LIKE '%' || my_r.id || '%'
+                )
+              )
+        `).get(userId, userId, userId);
+
+        const watchRow = db.prepare(`
+            SELECT COUNT(*) as watch_count
+            FROM watchlist
+            WHERE user_id = ?
+        `).get(userId);
+
+        return {
+            unread_notifications: notifRow ? notifRow.unread_count : 0,
+            watchlist_count: watchRow ? watchRow.watch_count : 0
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
 // --- API ROUTES ---
 
 // 1. Boards List & Stats
@@ -168,13 +201,24 @@ app.get('/api/threads', (req, res) => {
             }
         }
 
-        res.json({ success: true, threads });
+        const responseData = { success: true, threads };
+        if (req.user) {
+            const sync = getUserSyncData(req.user.user_id);
+            if (sync) {
+                res.set('Access-Control-Expose-Headers', 'ETag, X-Unread-Notifications, X-Watchlist-Count');
+                res.set('X-Unread-Notifications', String(sync.unread_notifications));
+                res.set('X-Watchlist-Count', String(sync.watchlist_count));
+                responseData.user_sync = sync;
+            }
+        }
+
+        res.json(responseData);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
-// 3. Single Thread with all replies
+// 3. Single Thread with all replies (or delta updates since timestamp)
 app.get('/api/thread', (req, res) => {
     const threadId = req.query.id;
     if (!threadId) {
@@ -187,8 +231,10 @@ app.get('/api/thread', (req, res) => {
             return res.status(404).json({ error: 'Thread not found' });
         }
 
-        // HTTP Caching & 304 Not Modified based on thread bumped_at and lock/pin status
-        const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}"`;
+        const since = req.query.since ? parseInt(req.query.since, 10) : 0;
+
+        // HTTP Caching & 304 Not Modified based on thread bumped_at, lock/pin status, and optional since param
+        const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}${since > 0 ? '-s' + since : ''}"`;
         res.set('ETag', etag);
         res.set('Cache-Control', 'no-cache');
 
@@ -196,13 +242,42 @@ app.get('/api/thread', (req, res) => {
             return res.status(304).end();
         }
 
-        const replies = db.prepare(`
-            SELECT * FROM replies 
-            WHERE thread_id = ? 
-            ORDER BY created_at ASC
-        `).all(threadId);
+        let replies;
+        if (since > 0) {
+            replies = db.prepare(`
+                SELECT * FROM replies 
+                WHERE thread_id = ? AND created_at > ?
+                ORDER BY created_at ASC
+            `).all(threadId, since);
+        } else {
+            replies = db.prepare(`
+                SELECT * FROM replies 
+                WHERE thread_id = ? 
+                ORDER BY created_at ASC
+            `).all(threadId);
+        }
 
-        res.json({ success: true, thread, replies });
+        const totalReplies = db.prepare('SELECT COUNT(*) as count FROM replies WHERE thread_id = ?').get(threadId)?.count || replies.length;
+
+        const responseData = { 
+            success: true, 
+            thread, 
+            replies,
+            is_delta: since > 0,
+            total_replies: totalReplies
+        };
+
+        if (req.user) {
+            const sync = getUserSyncData(req.user.user_id);
+            if (sync) {
+                res.set('Access-Control-Expose-Headers', 'ETag, X-Unread-Notifications, X-Watchlist-Count');
+                res.set('X-Unread-Notifications', String(sync.unread_notifications));
+                res.set('X-Watchlist-Count', String(sync.watchlist_count));
+                responseData.user_sync = sync;
+            }
+        }
+
+        res.json(responseData);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

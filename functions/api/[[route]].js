@@ -157,6 +157,35 @@ async function getUser(request, db) {
     }
 }
 
+// Helper: Calculate lightweight user perks sync data for Cloudflare D1
+async function getD1UserSyncData(db, userId) {
+    if (!userId) return null;
+    try {
+        const notif = await db.prepare(`
+            SELECT COUNT(*) as unread_count
+            FROM replies r
+            JOIN threads t ON t.id = r.thread_id
+            WHERE (r.user_id IS NULL OR r.user_id != ?)
+              AND (
+                t.user_id = ?
+                OR EXISTS (
+                    SELECT 1 FROM replies my_r
+                    WHERE my_r.user_id = ? AND r.comment LIKE '%' || my_r.id || '%'
+                )
+              )
+        `).bind(userId, userId, userId).first();
+
+        const watch = await db.prepare('SELECT COUNT(*) as watch_count FROM watchlist WHERE user_id = ?').bind(userId).first();
+
+        return {
+            unread_notifications: notif ? notif.unread_count : 0,
+            watchlist_count: watch ? watch.watch_count : 0
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
 export async function onRequest(context) {
     const { request, env } = context;
     const url = new URL(request.url);
@@ -277,10 +306,26 @@ export async function onRequest(context) {
                 }
             }
 
-            return json({ success: true, threads }, 200, { 'ETag': etag, 'Cache-Control': 'no-cache' });
+            const responseData = { success: true, threads };
+            const headers = { 
+                'ETag': etag, 
+                'Cache-Control': 'no-cache',
+                'Access-Control-Expose-Headers': 'ETag, X-Unread-Notifications, X-Watchlist-Count'
+            };
+
+            if (user?.user_id) {
+                const sync = await getD1UserSyncData(db, user.user_id);
+                if (sync) {
+                    headers['X-Unread-Notifications'] = String(sync.unread_notifications);
+                    headers['X-Watchlist-Count'] = String(sync.watchlist_count);
+                    responseData.user_sync = sync;
+                }
+            }
+
+            return json(responseData, 200, headers);
         }
 
-        // 3. GET /api/thread?id=...
+        // 3. GET /api/thread?id=... (with optional ?since=TIMESTAMP delta updates)
         if (route === 'thread' && method === 'GET') {
             const id = url.searchParams.get('id');
             if (!id) return json({ error: 'Missing id' }, 400);
@@ -288,7 +333,9 @@ export async function onRequest(context) {
             const thread = await db.prepare('SELECT * FROM threads WHERE id = ?').bind(id).first();
             if (!thread) return json({ error: 'Not found' }, 404);
 
-            const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}"`;
+            const since = parseInt(url.searchParams.get('since') || '0', 10);
+
+            const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}${since > 0 ? '-s' + since : ''}"`;
             if (request.headers.get('if-none-match') === etag) {
                 return new Response(null, {
                     status: 304,
@@ -301,8 +348,41 @@ export async function onRequest(context) {
                 });
             }
 
-            const replies = await db.prepare('SELECT * FROM replies WHERE thread_id = ? ORDER BY created_at ASC').bind(id).all();
-            return json({ success: true, thread, replies: replies.results || [] }, 200, { 'ETag': etag, 'Cache-Control': 'no-cache' });
+            let repliesSql = 'SELECT * FROM replies WHERE thread_id = ?';
+            const params = [id];
+            if (since > 0) {
+                repliesSql += ' AND created_at > ?';
+                params.push(since);
+            }
+            repliesSql += ' ORDER BY created_at ASC';
+
+            const replies = await db.prepare(repliesSql).bind(...params).all();
+            const totalRow = await db.prepare('SELECT COUNT(*) as count FROM replies WHERE thread_id = ?').bind(id).first();
+
+            const responseData = { 
+                success: true, 
+                thread, 
+                replies: replies.results || [],
+                is_delta: since > 0,
+                total_replies: totalRow?.count || (replies.results || []).length
+            };
+
+            const headers = { 
+                'ETag': etag, 
+                'Cache-Control': 'no-cache',
+                'Access-Control-Expose-Headers': 'ETag, X-Unread-Notifications, X-Watchlist-Count'
+            };
+
+            if (user?.user_id) {
+                const sync = await getD1UserSyncData(db, user.user_id);
+                if (sync) {
+                    headers['X-Unread-Notifications'] = String(sync.unread_notifications);
+                    headers['X-Watchlist-Count'] = String(sync.watchlist_count);
+                    responseData.user_sync = sync;
+                }
+            }
+
+            return json(responseData, 200, headers);
         }
 
         // 4. POST /api/threads

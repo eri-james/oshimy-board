@@ -38,24 +38,45 @@ const ARCHIVE_TIME_MS = 3 * 24 * 60 * 60 * 1000; // 3 Days
 // In-memory cache for ETags to support HTTP 304 Not Modified caching across polling
 const etagCache = new Map();
 
-// Helper: API fetch wrapper with Auth header, ETag caching, and 304 Not Modified handling
+// Helper: API fetch wrapper with Auth header, ETag caching, signal support, and 304 Not Modified handling
 async function apiFetch(endpoint, options = {}) {
     const isGet = !options.method || options.method === 'GET';
-    const headers = options.headers || {};
+    const fetchOptions = { ...options };
+    const headers = options.headers ? { ...options.headers } : {};
     if (authToken) {
         headers['Authorization'] = `Bearer ${authToken}`;
     }
     if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
         headers['Content-Type'] = 'application/json';
-        options.body = JSON.stringify(options.body);
+        fetchOptions.body = JSON.stringify(options.body);
     }
     // For GET requests, attach stored ETag if available
     if (isGet && etagCache.has(endpoint)) {
         headers['If-None-Match'] = etagCache.get(endpoint).etag;
     }
-    options.headers = headers;
+    fetchOptions.headers = headers;
 
-    const response = await fetch(API_BASE + endpoint, options);
+    const response = await fetch(API_BASE + endpoint, fetchOptions);
+
+    // Sync notification and watchlist count from response headers if present
+    const unreadHeader = response.headers.get('x-unread-notifications');
+    if (unreadHeader !== null) {
+        const unread = parseInt(unreadHeader, 10);
+        const badge = document.getElementById('replyBadge');
+        if (badge) {
+            if (unread > 0) {
+                badge.innerText = unread;
+                badge.style.display = 'inline';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+    }
+    const watchHeader = response.headers.get('x-watchlist-count');
+    if (watchHeader !== null) {
+        const badge = document.getElementById('watchlistBadge');
+        if (badge) badge.innerText = `(${watchHeader})`;
+    }
 
     // 304 Not Modified: return cached data with notModified flag
     if (response.status === 304) {
@@ -69,6 +90,27 @@ async function apiFetch(endpoint, options = {}) {
     }
 
     const data = await response.json();
+
+    // Also sync perks from JSON body user_sync if present
+    if (data && data.user_sync) {
+        if (data.user_sync.unread_notifications !== undefined) {
+            const unread = data.user_sync.unread_notifications;
+            const badge = document.getElementById('replyBadge');
+            if (badge) {
+                if (unread > 0) {
+                    badge.innerText = unread;
+                    badge.style.display = 'inline';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+        }
+        if (data.user_sync.watchlist_count !== undefined) {
+            const wBadge = document.getElementById('watchlistBadge');
+            if (wBadge) wBadge.innerText = `(${data.user_sync.watchlist_count})`;
+        }
+    }
+
     const etag = response.headers.get('ETag');
     if (isGet && etag) {
         etagCache.set(endpoint, { etag, data });

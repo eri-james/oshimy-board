@@ -285,6 +285,18 @@ let cachedBoardThreads = [];
 let catalogFilterQuery = "";
 let catalogSortCriteria = "bump";
 
+// Navigation AbortController for race condition prevention
+let navAbortController = null;
+
+function cancelPendingNavFetch() {
+    if (navAbortController) {
+        try {
+            navAbortController.abort();
+        } catch (e) {}
+        navAbortController = null;
+    }
+}
+
 function isCatalogMode() {
     const urlParam = new URLSearchParams(window.location.search).get('view');
     if (urlParam === 'catalog') return true;
@@ -293,10 +305,47 @@ function isCatalogMode() {
 }
 
 function setBoardMode(mode) {
+    if (currentBoardViewMode === mode) return;
     currentBoardViewMode = mode;
     localStorage.setItem('oshimy_board_mode', mode);
     renderBoardNav();
+
+    // Optimization 1: Zero-network switch if current board threads are already cached in memory
+    if (cachedBoardThreads && cachedBoardThreads.length > 0 && currentBoard) {
+        renderCurrentBoardData(cachedBoardThreads);
+        return;
+    }
     loadBoardView(false, false);
+}
+
+function renderCurrentBoardData(threads) {
+    const container = document.getElementById('threadList');
+    const catalogToolbar = document.getElementById('catalogToolbar');
+    const catalogGrid = document.getElementById('catalogGrid');
+    const formWrapper = document.getElementById('formWrapper');
+    if (!container) return;
+
+    const isCatalog = isCatalogMode();
+
+    if (isCatalog) {
+        container.style.display = 'none';
+        if (catalogToolbar) catalogToolbar.style.display = 'flex';
+        if (catalogGrid) catalogGrid.style.display = 'grid';
+        if (formWrapper) formWrapper.style.display = 'none';
+        renderCatalogGrid(threads);
+    } else {
+        container.style.display = 'block';
+        if (catalogToolbar) catalogToolbar.style.display = 'none';
+        if (catalogGrid) catalogGrid.style.display = 'none';
+        if (formWrapper) formWrapper.style.display = 'block';
+
+        let html = "";
+        for (const th of threads) {
+            html += renderThreadPreview(th);
+        }
+        container.innerHTML = html;
+        generateBacklinks();
+    }
 }
 
 function handleCatalogSearch(val) {
@@ -511,6 +560,9 @@ async function loadBoardView(isArchive = false, isSilent = false) {
     }
 
     if (!isSilent) {
+        cancelPendingNavFetch();
+        navAbortController = new AbortController();
+
         if (cachedBoardThreads.length === 0) {
             if (isCatalog && catalogGrid) {
                 catalogGrid.innerHTML = `<div style="grid-column: 1 / -1; text-align:center; padding: 30px; opacity:0.7;">Loading catalog...</div>`;
@@ -534,8 +586,9 @@ async function loadBoardView(isArchive = false, isSilent = false) {
     }
 
     try {
+        const signal = !isSilent && navAbortController ? navAbortController.signal : undefined;
         const viewParam = isArchive ? '&view=archive' : '';
-        const res = await apiFetch(`/threads?b=${currentBoard}${viewParam}`);
+        const res = await apiFetch(`/threads?b=${currentBoard}${viewParam}`, { signal });
         if (isSilent && res.notModified) {
             return; // 304 Not Modified: server confirmed zero changes during silent background update
         }
@@ -616,9 +669,11 @@ async function loadBoardView(isArchive = false, isSilent = false) {
             requestAnimationFrame(restoreAnchor);
         }
     } catch (err) {
+        if (err.name === 'AbortError') return; // Cancelled silently, new navigation took over
         if (!isSilent) {
             container.innerHTML = `<div style="color:red; text-align:center; padding: 20px;">Failed to load board: ${err.message}</div>`;
         }
+    }
     }
 }
 
@@ -715,6 +770,9 @@ async function loadThreadView(threadId, isSilent = false) {
     if (!opContainer || !repliesContainer) return;
 
     if (!isSilent) {
+        cancelPendingNavFetch();
+        navAbortController = new AbortController();
+
         opContainer.innerHTML = `<div style="text-align:center; padding: 20px;">Loading thread #${threadId}...</div>`;
         repliesContainer.innerHTML = "";
     }
@@ -727,12 +785,56 @@ async function loadThreadView(threadId, isSilent = false) {
     }
 
     try {
-        const data = await apiFetch(`/thread?id=${threadId}`);
+        const signal = !isSilent && navAbortController ? navAbortController.signal : undefined;
+
+        // Optimization 3: Delta updates for background polling if replies already exist in DOM
+        let latestReplyTimestamp = 0;
+        if (isSilent) {
+            const existingCards = repliesContainer.querySelectorAll('.reply-container');
+            existingCards.forEach(card => {
+                const ts = parseInt(card.getAttribute('data-created-at') || '0', 10);
+                if (ts > latestReplyTimestamp) latestReplyTimestamp = ts;
+            });
+        }
+
+        const endpoint = (isSilent && latestReplyTimestamp > 0)
+            ? `/thread?id=${threadId}&since=${latestReplyTimestamp}`
+            : `/thread?id=${threadId}`;
+
+        const data = await apiFetch(endpoint, { signal });
         if (isSilent && data.notModified) {
             return; // 304 Not Modified: server confirmed zero changes during silent background update
         }
         const th = data.thread;
         const replies = data.replies || [];
+
+        // If delta update arrived, only append brand-new replies without full re-render
+        if (data.is_delta) {
+            if (th) {
+                if (th.is_locked && formWrapper) {
+                    formWrapper.style.display = "none";
+                } else if (formWrapper) {
+                    formWrapper.style.display = "block";
+                }
+            }
+
+            if (replies.length > 0) {
+                const newElements = [];
+                for (const r of replies) {
+                    if (!document.getElementById(`post_${r.id}`)) {
+                        const temp = document.createElement('div');
+                        temp.innerHTML = renderReplyCard(r, th.id, false);
+                        const el = temp.firstElementChild;
+                        repliesContainer.appendChild(el);
+                        newElements.push(el);
+                    }
+                }
+                for (const el of newElements) {
+                    generateBacklinks(el);
+                }
+            }
+            return;
+        }
 
         // Check if anything in the thread actually changed
         const lastReplyId = replies.length > 0 ? replies[replies.length - 1].id : 'none';
@@ -896,6 +998,7 @@ async function loadThreadView(threadId, isSilent = false) {
             }
         }
     } catch (err) {
+        if (err.name === 'AbortError') return; // Cancelled silently, new navigation took over
         if (!isSilent) {
             opContainer.innerHTML = `<div style="color:red; text-align:center;">Failed to load thread: ${err.message}</div>`;
         }
@@ -925,7 +1028,7 @@ function renderReplyCard(r, threadId, isPreview = false) {
         : `No. <a href="javascript:void(0)" onclick="quotePost('${r.id}', '${threadId}')">${r.id.substring(1, 9)}</a>`;
 
     return `
-        <div class="reply-container${optClass}" id="post_${r.id}" style="margin-bottom: 8px;">
+        <div class="reply-container${optClass}" id="post_${r.id}" data-created-at="${r.created_at || 0}" style="margin-bottom: 8px;">
             <div class="reply">
                 ${mediaHtml}
                 <div class="post-content">
@@ -1920,16 +2023,11 @@ function startAutoUpdate() {
         if (!isAutoUpdateEnabled) return;
         if (document.hidden) return; // Don't poll if browser tab is in background
 
-        // Also sync notifications and watchlist silently in background
-        if (currentUser) {
-            syncUserPerks();
-        }
-
         // Detect if archive view
         const isArch = new URLSearchParams(window.location.search).get('view') === 'archive';
 
         if (currentThreadId) {
-            loadThreadView(currentThreadId, true); // true = silent background update
+            loadThreadView(currentThreadId, true); // true = silent background update (uses delta updates!)
         } else if (currentBoard) {
             loadBoardView(isArch, true); // true = silent background update
         }
