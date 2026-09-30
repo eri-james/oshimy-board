@@ -674,7 +674,6 @@ async function loadBoardView(isArchive = false, isSilent = false) {
             container.innerHTML = `<div style="color:red; text-align:center; padding: 20px;">Failed to load board: ${err.message}</div>`;
         }
     }
-    }
 }
 
 // Render Thread Card in Board Index
