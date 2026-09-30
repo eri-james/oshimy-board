@@ -378,6 +378,49 @@ body.night-mode .post-link-btn:hover {
     pointer-events: none;
     box-shadow: 0 2px 4px rgba(0,0,0,0.5);
 }
+.pixiv-pages-badge {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    font-size: 10px;
+    font-weight: bold;
+    padding: 2px 6px;
+    border-radius: 4px;
+    pointer-events: none;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+.pixiv-carousel-btn {
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 50%;
+    width: 38px;
+    height: 38px;
+    font-size: 18px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+.pixiv-carousel-btn:hover:not(:disabled) {
+    background: var(--main-accent, #0096fa);
+    border-color: #fff;
+    transform: scale(1.08);
+}
+.pixiv-carousel-btn:disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+    transform: none;
+}
 
 /* --- SPECIAL TEXT & LINKBACKS --- */
 .quote-link { 

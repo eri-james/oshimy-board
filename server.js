@@ -251,7 +251,7 @@ app.get('/api/pixiv/artwork', async (req, res) => {
             } catch (_) {}
         }
 
-        // 3. Fallback proxyUrl
+        // 3. Fallback proxyUrl and build pages list
         let proxyUrl = '';
         if (imageUrl) {
             if (imageUrl.includes('pixiv.re')) {
@@ -267,6 +267,31 @@ app.get('/api/pixiv/artwork', async (req, res) => {
             return res.status(404).json({ error: 'Artwork not found or completely removed from Pixiv' });
         }
 
+        // Construct full pages array for carousel
+        const pages = [];
+        for (let p = 0; p < pageCount; p++) {
+            let pageImg = '';
+            if (imageUrl.includes('pixiv.re')) {
+                pageImg = p === 0 ? `https://pixiv.re/${cleanId}.jpg` : `https://pixiv.re/${cleanId}-${p + 1}.jpg`;
+            } else if (imageUrl.includes('_p0_')) {
+                pageImg = imageUrl.replace('_p0_', `_p${p}_`);
+            } else {
+                pageImg = p === 0 ? imageUrl : `https://pixiv.re/${cleanId}-${p + 1}.jpg`;
+            }
+
+            const pageProxy = pageImg.includes('pixiv.re')
+                ? pageImg
+                : `/api/proxy/pixiv?url=${encodeURIComponent(pageImg)}`;
+            const pageHelper = `https://pixiv.re/${cleanId}-${p + 1}.jpg`;
+
+            pages.push({
+                pageIndex: p,
+                displayUrl: pageProxy,
+                helperUrl: pageHelper,
+                originalUrl: pageImg
+            });
+        }
+
         const artwork = {
             id: cleanId,
             title,
@@ -276,6 +301,7 @@ app.get('/api/pixiv/artwork', async (req, res) => {
             isR18,
             imageUrl,
             proxyUrl,
+            pages,
             artworkUrl: `https://www.pixiv.net/artworks/${cleanId}`
         };
 

@@ -223,6 +223,9 @@ async function hydratePixivEmbeds() {
                 const art = data.artwork;
                 const slot = placeholder.querySelector('.pixiv-thumb-slot');
                 if (slot) {
+                    const pagesBadge = (art.pageCount && art.pageCount > 1) 
+                        ? `<div class="pixiv-pages-badge">📚 ${art.pageCount}P</div>` 
+                        : '';
                     if (art.proxyUrl) {
                         const badgeText = art.isR18 ? 'pixiv • R-18' : 'pixiv';
                         const badgeStyle = art.isR18 ? 'background:rgba(225, 29, 72, 0.95);' : '';
@@ -231,6 +234,7 @@ async function hydratePixivEmbeds() {
                             <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">
                                 <img src="${art.proxyUrl}" class="thread-image" loading="lazy" decoding="async" alt="${escapeHtml(art.title)}" onerror="if(this.src!=='${helperFallback}'){this.src='${helperFallback}';}else{this.style.display='none';}" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
                                 <div class="pixiv-badge" style="${badgeStyle}">${badgeText}</div>
+                                ${pagesBadge}
                             </div>
                         `;
                         placeholder.classList.add('pixiv-thumb-loaded');
@@ -239,9 +243,10 @@ async function hydratePixivEmbeds() {
                             <div class="file-ext" style="color:${art.isR18 ? '#e11d48' : '#0096fa'}; font-size:22px; font-weight:900;">${art.isR18 ? 'R-18' : 'pixiv'}</div>
                             <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(art.title)}</div>
                             <div style="font-size:10px; color:#aaa; margin-top:2px;">By ${escapeHtml(art.author)}</div>
+                            ${pagesBadge}
                         `;
                     }
-                    placeholder.title = `${art.isR18 ? '[R-18] ' : ''}${art.title} by ${art.author} - Click to expand`;
+                    placeholder.title = `${art.isR18 ? '[R-18] ' : ''}${art.title} by ${art.author}${art.pageCount > 1 ? ` (${art.pageCount} images)` : ''} - Click to expand`;
                 }
             }
         } catch (_) {}
@@ -305,7 +310,117 @@ async function validateMediaUrl(url) {
     });
 }
 
-// --- CENTRALIZED LIGHTBOX CONTROLLER ---
+// --- PIXIV MULTI-PAGE CAROUSEL CONTROLLER ---
+let currentPixivGallery = {
+    pages: [],
+    currentIndex: 0,
+    title: '',
+    author: '',
+    artworkUrl: '',
+    isR18: false
+};
+
+function renderPixivCarouselModal() {
+    const custom = document.getElementById('lbCustom');
+    if (!custom) return;
+
+    const { pages, currentIndex, title, author, artworkUrl, isR18 } = currentPixivGallery;
+    const pageCount = pages.length;
+    const cur = pages[currentIndex] || pages[0];
+    const r18Tag = isR18 ? '<span style="background:#e11d48; color:#fff; font-size:0.75em; padding:2px 6px; border-radius:4px; font-weight:bold; margin-right:6px;">R-18</span>' : '';
+    const hasMultiple = pageCount > 1;
+
+    const helperFallback = cur ? cur.helperUrl : '';
+    const displaySrc = cur ? cur.displayUrl : '';
+
+    custom.innerHTML = `
+        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(94vw, 920px); max-height:90vh; display:flex; flex-direction:column; align-items:center; border:2px solid ${isR18 ? '#e11d48' : '#0096fa'}; box-shadow:0 8px 36px rgba(0,0,0,0.95); overflow:hidden; position:relative;">
+            <!-- Header bar -->
+            <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:10px; border-bottom:1px solid rgba(255,255,255,0.12); padding-bottom:8px; gap:12px;">
+                <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;">
+                    <div style="font-weight:bold; font-size:1.1em; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${r18Tag}${escapeHtml(title)}</div>
+                    <div style="font-size:0.85em; color:#9ca3af; margin-top:2px;">
+                        By <b>${escapeHtml(author)}</b>
+                        ${hasMultiple ? ` • <span style="color:#38bdf8; font-weight:bold;">Page ${currentIndex + 1} of ${pageCount}</span>` : ''}
+                    </div>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    ${hasMultiple ? `<span style="font-size:0.75em; color:#aaa; display:inline-block;" class="carousel-hint">Use ◀ ▶ or Arrow keys</span>` : ''}
+                    <a href="${escapeHtml(artworkUrl)}" target="_blank" rel="noopener noreferrer" style="background:${isR18 ? '#e11d48' : '#0096fa'}; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:opacity 0.15s ease;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                        View on Pixiv ↗
+                    </a>
+                </div>
+            </div>
+
+            <!-- Image viewport with carousel arrows -->
+            <div style="position:relative; width:100%; max-height:calc(85vh - 125px); min-height:220px; display:flex; justify-content:center; align-items:center; overflow:hidden;">
+                ${hasMultiple ? `
+                    <button type="button" class="pixiv-carousel-btn" style="position:absolute; left:8px; z-index:10;" onclick="navigatePixivPage(-1)" ${currentIndex === 0 ? 'disabled' : ''} title="Previous page (Left arrow)">
+                        ◀
+                    </button>
+                ` : ''}
+
+                <div style="width:100%; height:100%; display:flex; justify-content:center; align-items:center;">
+                    <img id="pixivCarouselImg" src="${displaySrc}" style="max-width:100%; max-height:calc(85vh - 130px); object-fit:contain; border-radius:6px; box-shadow:0 4px 20px rgba(0,0,0,0.6); user-select:none;" alt="${escapeHtml(title)} - Page ${currentIndex + 1}" onerror="if(this.dataset.triedHelper!=='true'){this.dataset.triedHelper='true';this.src='${helperFallback}';}else{this.parentElement.innerHTML='<div style=\\'padding:30px; color:#aaa;\\'>Image failed to load. <a href=\\'${escapeHtml(artworkUrl)}\\' target=\\'_blank\\' style=\\'color:#0096fa;\\'>Open on Pixiv ↗</a></div>';}">
+                </div>
+
+                ${hasMultiple ? `
+                    <button type="button" class="pixiv-carousel-btn" style="position:absolute; right:8px; z-index:10;" onclick="navigatePixivPage(1)" ${currentIndex >= pageCount - 1 ? 'disabled' : ''} title="Next page (Right arrow)">
+                        ▶
+                    </button>
+                ` : ''}
+            </div>
+
+            <!-- Page indicator pills for multi-page illustrations -->
+            ${hasMultiple ? `
+                <div style="display:flex; justify-content:center; align-items:center; gap:6px; margin-top:10px; max-width:100%; overflow-x:auto; padding:4px 0;">
+                    ${pages.map((p, idx) => `
+                        <button type="button" onclick="setPixivPage(${idx})" style="border:none; cursor:pointer; width:${idx === currentIndex ? '22px' : '10px'}; height:8px; border-radius:4px; background:${idx === currentIndex ? (isR18 ? '#e11d48' : '#0096fa') : 'rgba(255,255,255,0.3)'}; transition:all 0.2s ease;" title="Page ${idx + 1}"></button>
+                    `).join('')}
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+function navigatePixivPage(dir) {
+    if (!currentPixivGallery || !currentPixivGallery.pages.length) return;
+    const newIdx = currentPixivGallery.currentIndex + dir;
+    if (newIdx >= 0 && newIdx < currentPixivGallery.pages.length) {
+        currentPixivGallery.currentIndex = newIdx;
+        renderPixivCarouselModal();
+    }
+}
+
+function setPixivPage(idx) {
+    if (!currentPixivGallery || !currentPixivGallery.pages.length) return;
+    if (idx >= 0 && idx < currentPixivGallery.pages.length) {
+        currentPixivGallery.currentIndex = idx;
+        renderPixivCarouselModal();
+    }
+}
+
+// Arrow key navigation listener for Lightbox
+if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', (e) => {
+        const lb = document.getElementById('lightbox');
+        if (!lb || lb.style.display !== 'flex') return;
+
+        // If Pixiv carousel is active and has multiple pages
+        if (currentPixivGallery && currentPixivGallery.pages && currentPixivGallery.pages.length > 1) {
+            if (e.key === 'ArrowLeft' || e.key === 'Left') {
+                e.preventDefault();
+                navigatePixivPage(-1);
+                return;
+            }
+            if (e.key === 'ArrowRight' || e.key === 'Right') {
+                e.preventDefault();
+                navigatePixivPage(1);
+                return;
+            }
+        }
+    });
+}
 function openLightbox(type, content, extra1, extra2, extra3) {
     const lb = document.getElementById('lightbox');
     if (!lb) return;
@@ -365,7 +480,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         custom.innerHTML = `
             <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px 20px; text-align:center; min-width:280px; max-width:800px; border:2px solid #0096fa; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
                 <div style="font-size:1.1em; color:#0096fa; font-weight:bold; margin-bottom:8px;">🎨 Loading Pixiv Artwork #${artworkId}...</div>
-                <div style="font-size:0.85em; opacity:0.7;">Fetching artwork details and media...</div>
+                <div style="font-size:0.85em; opacity:0.7;">Fetching artwork details and media pages...</div>
             </div>
         `;
         custom.style.display = 'block';
@@ -375,68 +490,55 @@ function openLightbox(type, content, extra1, extra2, extra3) {
             .then(data => {
                 if (data.success && data.artwork) {
                     const art = data.artwork;
-                    const r18Tag = art.isR18 ? '<span style="background:#e11d48; color:#fff; font-size:0.75em; padding:2px 6px; border-radius:4px; font-weight:bold; margin-right:6px;">R-18</span>' : '';
-                    const imageBody = art.proxyUrl ? `
-                        <div style="max-height:calc(85vh - 120px); overflow:auto; display:flex; justify-content:center; align-items:center; width:100%;">
-                            <img src="${art.proxyUrl}" style="max-width:100%; max-height:calc(85vh - 120px); object-fit:contain; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5);" alt="${escapeHtml(art.title)}">
-                        </div>
-                    ` : `
-                        <div style="padding:40px 20px; text-align:center;">
-                            <div style="font-size:2em; margin-bottom:10px;">🔞</div>
-                            <div style="color:#aaa; font-size:0.95em; margin-bottom:16px;">This R-18 artwork requires a direct Pixiv session to view on Pixiv.</div>
-                        </div>
-                    `;
+                    const pages = (art.pages && art.pages.length > 0) ? art.pages : [{
+                        pageIndex: 0,
+                        displayUrl: art.proxyUrl || `https://pixiv.re/${artworkId}.jpg`,
+                        helperUrl: `https://pixiv.re/${artworkId}.jpg`,
+                        originalUrl: art.imageUrl
+                    }];
 
-                    custom.innerHTML = `
-                        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(92vw, 850px); max-height:88vh; display:flex; flex-direction:column; align-items:center; border:2px solid ${art.isR18 ? '#e11d48' : '#0096fa'}; box-shadow:0 8px 32px rgba(0,0,0,0.9); overflow-y:auto;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px;">
-                                <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:12px;">
-                                    <div style="font-weight:bold; font-size:1.1em; color:#fff;">${r18Tag}${escapeHtml(art.title)}</div>
-                                    <div style="font-size:0.85em; color:#9ca3af;">By <b>${escapeHtml(art.author)}</b> ${art.pageCount > 1 ? `• ${art.pageCount} Pages` : ''}</div>
-                                </div>
-                                <a href="${escapeHtml(art.artworkUrl)}" target="_blank" rel="noopener noreferrer" style="background:${art.isR18 ? '#e11d48' : '#0096fa'}; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:opacity 0.15s ease;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-                                    View on Pixiv ↗
-                                </a>
-                            </div>
-                            ${imageBody}
-                        </div>
-                    `;
+                    currentPixivGallery = {
+                        pages,
+                        currentIndex: 0,
+                        title: art.title || `Artwork #${artworkId}`,
+                        author: art.author || 'Artist',
+                        artworkUrl: art.artworkUrl || `https://www.pixiv.net/artworks/${artworkId}`,
+                        isR18: !!art.isR18
+                    };
+
+                    renderPixivCarouselModal();
                 } else {
-                    const fallbackSrc = `https://pixiv.re/${artworkId}.jpg`;
-                    custom.innerHTML = `
-                        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(92vw, 850px); max-height:88vh; display:flex; flex-direction:column; align-items:center; border:2px solid #0096fa; box-shadow:0 8px 32px rgba(0,0,0,0.9); overflow-y:auto;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px;">
-                                <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:12px;">
-                                    <div style="font-weight:bold; font-size:1.1em; color:#fff;">Pixiv Artwork #${artworkId}</div>
-                                </div>
-                                <a href="https://www.pixiv.net/artworks/${artworkId}" target="_blank" rel="noopener noreferrer" style="background:#0096fa; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:opacity 0.15s ease;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-                                    View on Pixiv ↗
-                                </a>
-                            </div>
-                            <div style="max-height:calc(85vh - 120px); overflow:auto; display:flex; justify-content:center; align-items:center; width:100%;">
-                                <img src="${fallbackSrc}" style="max-width:100%; max-height:calc(85vh - 120px); object-fit:contain; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5);" alt="Pixiv #${artworkId}" onerror="this.parentElement.innerHTML='<div style=\\'padding:30px; color:#aaa;\\'>Artwork not available directly. <a href=\\'https://www.pixiv.net/artworks/${artworkId}\\' target=\\'_blank\\' style=\\'color:#0096fa;\\'>Open on Pixiv ↗</a></div>';">
-                            </div>
-                        </div>
-                    `;
+                    currentPixivGallery = {
+                        pages: [{
+                            pageIndex: 0,
+                            displayUrl: `https://pixiv.re/${artworkId}.jpg`,
+                            helperUrl: `https://pixiv.re/${artworkId}.jpg`,
+                            originalUrl: `https://pixiv.re/${artworkId}.jpg`
+                        }],
+                        currentIndex: 0,
+                        title: `Pixiv Artwork #${artworkId}`,
+                        author: 'Pixiv Artist',
+                        artworkUrl: `https://www.pixiv.net/artworks/${artworkId}`,
+                        isR18: false
+                    };
+                    renderPixivCarouselModal();
                 }
             })
             .catch(() => {
-                const fallbackSrc = `https://pixiv.re/${artworkId}.jpg`;
-                custom.innerHTML = `
-                    <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(92vw, 850px); max-height:88vh; display:flex; flex-direction:column; align-items:center; border:2px solid #0096fa; box-shadow:0 8px 32px rgba(0,0,0,0.9); overflow-y:auto;">
-                        <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px;">
-                            <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:12px;">
-                                <div style="font-weight:bold; font-size:1.1em; color:#fff;">Pixiv Artwork #${artworkId}</div>
-                            </div>
-                            <a href="https://www.pixiv.net/artworks/${artworkId}" target="_blank" rel="noopener noreferrer" style="background:#0096fa; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:opacity 0.15s ease;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-                                View on Pixiv ↗
-                            </a>
-                        </div>
-                        <div style="max-height:calc(85vh - 120px); overflow:auto; display:flex; justify-content:center; align-items:center; width:100%;">
-                            <img src="${fallbackSrc}" style="max-width:100%; max-height:calc(85vh - 120px); object-fit:contain; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5);" alt="Pixiv #${artworkId}" onerror="this.parentElement.innerHTML='<div style=\\'padding:30px; color:#aaa;\\'>Artwork not available directly. <a href=\\'https://www.pixiv.net/artworks/${artworkId}\\' target=\\'_blank\\' style=\\'color:#0096fa;\\'>Open on Pixiv ↗</a></div>';">
-                        </div>
-                    </div>
-                `;
+                currentPixivGallery = {
+                    pages: [{
+                        pageIndex: 0,
+                        displayUrl: `https://pixiv.re/${artworkId}.jpg`,
+                        helperUrl: `https://pixiv.re/${artworkId}.jpg`,
+                        originalUrl: `https://pixiv.re/${artworkId}.jpg`
+                    }],
+                    currentIndex: 0,
+                    title: `Pixiv Artwork #${artworkId}`,
+                    author: 'Pixiv Artist',
+                    artworkUrl: `https://www.pixiv.net/artworks/${artworkId}`,
+                    isR18: false
+                };
+                renderPixivCarouselModal();
             });
     }
     else if (type === 'reddit') {
@@ -507,6 +609,14 @@ function closeLightbox(e) {
             custom.style.display = 'none';
             custom.innerHTML = "";
         }
+        currentPixivGallery = {
+            pages: [],
+            currentIndex: 0,
+            title: '',
+            author: '',
+            artworkUrl: '',
+            isR18: false
+        };
     }
 }
 
