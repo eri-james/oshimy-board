@@ -897,9 +897,11 @@ app.get('*', (req, res) => {
                 const thread = db.prepare('SELECT id, board, subject, comment, media_url, created_at FROM threads WHERE id = ?').get(threadId);
                 if (thread) {
                     const cleanComment = (thread.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
-                    const subjectTitle = thread.subject ? `${thread.subject} - ` : '';
-                    const pageTitle = `${subjectTitle}/${thread.board}/ #${thread.id} | OshiMY`;
-                    const pageDesc = cleanComment || `Thread #${thread.id} on /${thread.board}/ - OshiMY Malaysian VTuber & Otaku Imageboard`;
+                    const subjectTitle = thread.subject && thread.subject.trim() 
+                        ? `${thread.subject.trim()} - ` 
+                        : (cleanComment ? `${cleanComment.slice(0, 40)}... - ` : '');
+                    const pageTitle = `${subjectTitle}/${thread.board}/ | OshiMY`;
+                    const pageDesc = cleanComment || `Thread on /${thread.board}/ - OshiMY Malaysian VTuber & Otaku Imageboard`;
                     const threadMedia = (thread.media_url && !thread.media_url.endsWith('.mp3')) ? thread.media_url : currentBanner;
                     const canonicalUrl = `${origin}/?b=${thread.board}&t=${thread.id}`;
 
