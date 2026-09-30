@@ -333,17 +333,21 @@ async function hydrateRedditEmbeds() {
                 const p = data.post;
                 const slot = placeholder.querySelector('.reddit-thumb-slot');
                 if (slot) {
-                    const thumb = p.thumbnailUrl || p.imageUrl || p.videoUrl;
+                    const thumb = p.thumbnailUrl || p.imageUrl || p.videoThumbnail || p.videoUrl;
                     if (thumb && (p.mediaType === 'image' || p.mediaType === 'video')) {
                         const isVideo = p.mediaType === 'video';
                         const playOverlay = isVideo 
                             ? `<div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>` 
+                            : '';
+                        const multiBadge = (p.pageCount && p.pageCount > 1) 
+                            ? `<div class="pixiv-pages-badge" style="background:#FF4500;">📚 ${p.pageCount}P</div>` 
                             : '';
 
                         slot.innerHTML = `
                             <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
                                 <img src="${escapeHtml(thumb)}" referrerpolicy="no-referrer" class="thread-image" loading="lazy" decoding="async" alt="Reddit media" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
                                 ${playOverlay}
+                                ${multiBadge}
                                 <div class="pixiv-badge" style="background:#FF4500;">r/${escapeHtml(p.subreddit)}</div>
                             </div>
                         `;
@@ -361,7 +365,7 @@ async function hydrateRedditEmbeds() {
                             </div>
                         `;
                     }
-                    placeholder.title = `r/${p.subreddit}: "${p.title}" - Click to open`;
+                    placeholder.title = `r/${p.subreddit}: "${p.title}"${p.pageCount > 1 ? ` (${p.pageCount} images)` : ''} - Click to open`;
                 }
             }
         } catch (_) {}
@@ -425,72 +429,89 @@ async function validateMediaUrl(url) {
     });
 }
 
-// --- PIXIV MULTI-PAGE CAROUSEL CONTROLLER ---
-let currentPixivGallery = {
+// --- UNIFIED MULTI-PAGE GALLERY CAROUSEL CONTROLLER ---
+// Supports Pixiv, Twitter/X, and Reddit multi-image galleries with ◀ ▶ buttons and keyboard navigation
+let currentGallery = {
+    platform: 'pixiv', // 'pixiv' | 'x' | 'reddit'
     pages: [],
     currentIndex: 0,
     title: '',
     author: '',
+    postUrl: '',
     artworkUrl: '',
-    isR18: false
+    isR18: false,
+    themeColor: '#0096fa',
+    viewLinkText: 'View on Pixiv ↗'
 };
 
-function renderPixivCarouselModal() {
+// Backwards-compatible alias for existing callers
+let currentPixivGallery = currentGallery;
+
+function renderGalleryCarouselModal() {
     const custom = document.getElementById('lbCustom');
     if (!custom) return;
 
-    const { pages, currentIndex, title, author, artworkUrl, isR18 } = currentPixivGallery;
-    const pageCount = pages.length;
-    const cur = pages[currentIndex] || pages[0];
-    const r18Tag = isR18 ? '<span style="background:#e11d48; color:#fff; font-size:0.75em; padding:2px 6px; border-radius:4px; font-weight:bold; margin-right:6px;">R-18</span>' : '';
+    const { pages, currentIndex, title, author, postUrl, artworkUrl, isR18, platform, themeColor, viewLinkText } = currentGallery;
+    const targetUrl = postUrl || artworkUrl || '';
+    const pageCount = pages ? pages.length : 0;
+    const cur = (pages && pages[currentIndex]) ? pages[currentIndex] : (pages ? pages[0] : null);
+    const isReddit = platform === 'reddit';
+    const isX = platform === 'x';
+    const isPixiv = platform === 'pixiv';
+    const activeColor = isR18 ? '#e11d48' : (themeColor || (isReddit ? '#FF4500' : (isX ? '#1DA1F2' : '#0096fa')));
     const hasMultiple = pageCount > 1;
 
-    const helperFallback = cur ? cur.helperUrl : '';
+    const helperFallback = cur ? (cur.helperUrl || cur.displayUrl) : '';
     const displaySrc = cur ? cur.displayUrl : '';
+    const r18Tag = isR18 ? '<span style="background:#e11d48; color:#fff; font-size:0.75em; padding:2px 6px; border-radius:4px; font-weight:bold; margin-right:6px;">R-18</span>' : '';
+    const defaultBtnText = isReddit ? 'View on Reddit ↗' : (isX ? 'View on 𝕏 ↗' : 'View on Pixiv ↗');
+    const buttonText = viewLinkText || defaultBtnText;
 
     custom.innerHTML = `
-        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(94vw, 920px); max-height:90vh; display:flex; flex-direction:column; align-items:center; border:2px solid ${isR18 ? '#e11d48' : '#0096fa'}; box-shadow:0 8px 36px rgba(0,0,0,0.95); overflow:hidden; position:relative;">
+        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(94vw, 920px); max-height:90vh; display:flex; flex-direction:column; align-items:center; border:2px solid ${activeColor}; box-shadow:0 8px 36px rgba(0,0,0,0.95); overflow:hidden; position:relative;">
             <!-- Header bar -->
             <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:10px; border-bottom:1px solid rgba(255,255,255,0.12); padding-bottom:8px; gap:12px;">
                 <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;">
                     <div style="font-weight:bold; font-size:1.1em; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${r18Tag}${escapeHtml(title)}</div>
                     <div style="font-size:0.85em; color:#9ca3af; margin-top:2px;">
-                        By <b>${escapeHtml(author)}</b>
-                        ${hasMultiple ? ` • <span style="color:#38bdf8; font-weight:bold;">Page ${currentIndex + 1} of ${pageCount}</span>` : ''}
+                        ${isReddit ? `<b style="color:#FF4500;">${escapeHtml(author)}</b>` : (isX ? `<b>${escapeHtml(author)}</b>` : `By <b>${escapeHtml(author)}</b>`)}
+                        ${hasMultiple ? ` • <span style="color:${activeColor}; font-weight:bold;">Page ${currentIndex + 1} of ${pageCount}</span>` : ''}
                     </div>
                 </div>
                 <div style="display:flex; align-items:center; gap:8px;">
                     ${hasMultiple ? `<span style="font-size:0.75em; color:#aaa; display:inline-block;" class="carousel-hint">Use ◀ ▶ or Arrow keys</span>` : ''}
-                    <a href="${escapeHtml(artworkUrl)}" target="_blank" rel="noopener noreferrer" style="background:${isR18 ? '#e11d48' : '#0096fa'}; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:opacity 0.15s ease;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
-                        View on Pixiv ↗
-                    </a>
+                    ${targetUrl ? `
+                        <a href="${escapeHtml(targetUrl)}" target="_blank" rel="noopener noreferrer" style="background:${activeColor}; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:opacity 0.15s ease;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                            ${escapeHtml(buttonText)}
+                        </a>
+                    ` : ''}
                 </div>
             </div>
 
             <!-- Image viewport with carousel arrows -->
             <div style="position:relative; width:100%; max-height:calc(85vh - 125px); min-height:220px; display:flex; justify-content:center; align-items:center; overflow:hidden;">
                 ${hasMultiple ? `
-                    <button type="button" class="pixiv-carousel-btn" style="position:absolute; left:8px; z-index:10;" onclick="navigatePixivPage(-1)" ${currentIndex === 0 ? 'disabled' : ''} title="Previous page (Left arrow)">
+                    <button type="button" class="pixiv-carousel-btn" style="position:absolute; left:8px; z-index:10; background:rgba(0,0,0,0.65);" onclick="navigateGalleryPage(-1)" ${currentIndex === 0 ? 'disabled' : ''} title="Previous page (Left arrow)">
                         ◀
                     </button>
                 ` : ''}
 
                 <div style="width:100%; height:100%; display:flex; justify-content:center; align-items:center;">
-                    <img id="pixivCarouselImg" src="${displaySrc}" style="max-width:100%; max-height:calc(85vh - 130px); object-fit:contain; border-radius:6px; box-shadow:0 4px 20px rgba(0,0,0,0.6); user-select:none;" alt="${escapeHtml(title)} - Page ${currentIndex + 1}" onerror="if(this.dataset.triedHelper!=='true'){this.dataset.triedHelper='true';this.src='${helperFallback}';}else{this.parentElement.innerHTML='<div style=\\'padding:30px; color:#aaa;\\'>Image failed to load. <a href=\\'${escapeHtml(artworkUrl)}\\' target=\\'_blank\\' style=\\'color:#0096fa;\\'>Open on Pixiv ↗</a></div>';}">
+                    <img id="galleryCarouselImg" src="${displaySrc}" referrerpolicy="no-referrer" style="max-width:100%; max-height:calc(85vh - 130px); object-fit:contain; border-radius:6px; box-shadow:0 4px 20px rgba(0,0,0,0.6); user-select:none; cursor:pointer;" alt="${escapeHtml(title)} - Page ${currentIndex + 1}" title="Click to view full image in lightbox" onclick="openLightbox('image', '${escapeHtml(displaySrc)}')" onerror="if(this.dataset.triedHelper!=='true' && '${helperFallback}' && this.src !== '${helperFallback}'){this.dataset.triedHelper='true';this.src='${helperFallback}';}else{this.parentElement.innerHTML='<div style=\\'padding:30px; color:#aaa;\\'>Image failed to load. ${targetUrl ? `<a href=\\'${escapeHtml(targetUrl)}\\' target=\\'_blank\\' style=\\'color:${activeColor};\\'>Open on ${isReddit ? 'Reddit' : (isX ? '𝕏' : 'Pixiv')} ↗</a>` : ''}</div>';}">
                 </div>
 
                 ${hasMultiple ? `
-                    <button type="button" class="pixiv-carousel-btn" style="position:absolute; right:8px; z-index:10;" onclick="navigatePixivPage(1)" ${currentIndex >= pageCount - 1 ? 'disabled' : ''} title="Next page (Right arrow)">
+                    <button type="button" class="pixiv-carousel-btn" style="position:absolute; right:8px; z-index:10; background:rgba(0,0,0,0.65);" onclick="navigateGalleryPage(1)" ${currentIndex >= pageCount - 1 ? 'disabled' : ''} title="Next page (Right arrow)">
                         ▶
                     </button>
                 ` : ''}
             </div>
 
-            <!-- Page indicator pills for multi-page illustrations -->
+            <!-- Page indicator pills for multi-page illustrations/galleries -->
             ${hasMultiple ? `
                 <div style="display:flex; justify-content:center; align-items:center; gap:6px; margin-top:10px; max-width:100%; overflow-x:auto; padding:4px 0;">
                     ${pages.map((p, idx) => `
-                        <button type="button" onclick="setPixivPage(${idx})" style="border:none; cursor:pointer; width:${idx === currentIndex ? '22px' : '10px'}; height:8px; border-radius:4px; background:${idx === currentIndex ? (isR18 ? '#e11d48' : '#0096fa') : 'rgba(255,255,255,0.3)'}; transition:all 0.2s ease;" title="Page ${idx + 1}"></button>
+                        <button type="button" onclick="setGalleryPage(${idx})" style="border:none; cursor:pointer; width:${idx === currentIndex ? '22px' : '10px'}; height:8px; border-radius:4px; background:${idx === currentIndex ? activeColor : 'rgba(255,255,255,0.3)'}; transition:all 0.2s ease;" title="Page ${idx + 1}"></button>
                     `).join('')}
                 </div>
             ` : ''}
@@ -498,39 +519,57 @@ function renderPixivCarouselModal() {
     `;
 }
 
+function navigateGalleryPage(dir) {
+    const gallery = currentGallery || currentPixivGallery;
+    if (!gallery || !gallery.pages || !gallery.pages.length) return;
+    const newIdx = gallery.currentIndex + dir;
+    if (newIdx >= 0 && newIdx < gallery.pages.length) {
+        gallery.currentIndex = newIdx;
+        currentGallery = gallery;
+        currentPixivGallery = gallery;
+        renderGalleryCarouselModal();
+    }
+}
+
+function setGalleryPage(idx) {
+    const gallery = currentGallery || currentPixivGallery;
+    if (!gallery || !gallery.pages || !gallery.pages.length) return;
+    if (idx >= 0 && idx < gallery.pages.length) {
+        gallery.currentIndex = idx;
+        currentGallery = gallery;
+        currentPixivGallery = gallery;
+        renderGalleryCarouselModal();
+    }
+}
+
+// Backwards-compatible aliases
+function renderPixivCarouselModal() {
+    renderGalleryCarouselModal();
+}
 function navigatePixivPage(dir) {
-    if (!currentPixivGallery || !currentPixivGallery.pages.length) return;
-    const newIdx = currentPixivGallery.currentIndex + dir;
-    if (newIdx >= 0 && newIdx < currentPixivGallery.pages.length) {
-        currentPixivGallery.currentIndex = newIdx;
-        renderPixivCarouselModal();
-    }
+    navigateGalleryPage(dir);
 }
-
 function setPixivPage(idx) {
-    if (!currentPixivGallery || !currentPixivGallery.pages.length) return;
-    if (idx >= 0 && idx < currentPixivGallery.pages.length) {
-        currentPixivGallery.currentIndex = idx;
-        renderPixivCarouselModal();
-    }
+    setGalleryPage(idx);
 }
 
-// Arrow key navigation listener for Lightbox
+// Arrow key navigation listener for Lightbox (Pixiv, Twitter/X, and Reddit carousels)
 if (typeof window !== 'undefined') {
     window.addEventListener('keydown', (e) => {
         const lb = document.getElementById('lightbox');
         if (!lb || lb.style.display !== 'flex') return;
 
-        // If Pixiv carousel is active and has multiple pages
-        if (currentPixivGallery && currentPixivGallery.pages && currentPixivGallery.pages.length > 1) {
+        // If gallery carousel is active and has multiple pages
+        const gallery = currentGallery || currentPixivGallery;
+        if (gallery && gallery.pages && gallery.pages.length > 1) {
             if (e.key === 'ArrowLeft' || e.key === 'Left') {
                 e.preventDefault();
-                navigatePixivPage(-1);
+                navigateGalleryPage(-1);
                 return;
             }
             if (e.key === 'ArrowRight' || e.key === 'Right') {
                 e.preventDefault();
-                navigatePixivPage(1);
+                navigateGalleryPage(1);
                 return;
             }
         }
@@ -639,15 +678,20 @@ function openLightbox(type, content, extra1, extra2, extra3) {
 
                     // 2. If it has multiple images: open in multi-page carousel with ◀ ▶ keys!
                     if (t.pages && t.pages.length > 1) {
-                        currentPixivGallery = {
+                        currentGallery = {
+                            platform: 'x',
                             pages: t.pages,
                             currentIndex: 0,
                             title: t.text.slice(0, 80) || `Tweet by @${t.authorHandle}`,
                             author: `${t.authorName} (@${t.authorHandle})`,
+                            postUrl: t.url,
                             artworkUrl: t.url,
-                            isR18: false
+                            isR18: false,
+                            themeColor: '#1DA1F2',
+                            viewLinkText: 'View on 𝕏 ↗'
                         };
-                        renderPixivCarouselModal();
+                        currentPixivGallery = currentGallery;
+                        renderGalleryCarouselModal();
                         return;
                     }
 
@@ -732,16 +776,20 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                         originalUrl: art.imageUrl
                     }];
 
-                    currentPixivGallery = {
+                    currentGallery = {
+                        platform: 'pixiv',
                         pages,
                         currentIndex: (initialPageIndex >= 0 && initialPageIndex < pages.length) ? initialPageIndex : 0,
                         title: art.title || `Artwork #${artworkId}`,
                         author: art.author || 'Artist',
+                        postUrl: art.artworkUrl || `https://www.pixiv.net/artworks/${artworkId}`,
                         artworkUrl: art.artworkUrl || `https://www.pixiv.net/artworks/${artworkId}`,
-                        isR18: !!art.isR18
+                        isR18: !!art.isR18,
+                        themeColor: '#0096fa',
+                        viewLinkText: 'View on Pixiv ↗'
                     };
-
-                    renderPixivCarouselModal();
+                    currentPixivGallery = currentGallery;
+                    renderGalleryCarouselModal();
 
                     // If server only returned 1 page, actively probe for additional pages via helper
                     if (pages.length === 1) {
@@ -855,7 +903,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                 if (data.success && data.post) {
                     const p = data.post;
 
-                    // 1. Direct Video Post: Stream immediately through proxy in HTML5 native player
+                    // 1. Direct Video Post: Stream immediately through proxy in HTML5 native player with controls & audio
                     if (p.mediaType === 'video' && p.videoUrl) {
                         if (custom) custom.style.display = 'none';
                         if (vid) {
@@ -870,7 +918,36 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                         return;
                     }
 
-                    // 2. Rich Card (Image or Text Discussion)
+                    // 2. Multi-image Gallery: Open in interactive carousel with ◀ ▶ buttons and keyboard arrow keys!
+                    if (p.pages && p.pages.length > 1) {
+                        currentGallery = {
+                            platform: 'reddit',
+                            pages: p.pages,
+                            currentIndex: 0,
+                            title: p.title || `Post on r/${p.subreddit}`,
+                            author: `r/${p.subreddit} • Posted by ${p.author}`,
+                            postUrl: p.url,
+                            artworkUrl: p.url,
+                            isR18: false,
+                            themeColor: '#FF4500',
+                            viewLinkText: 'View on Reddit ↗'
+                        };
+                        currentPixivGallery = currentGallery;
+                        renderGalleryCarouselModal();
+                        return;
+                    }
+
+                    // 3. Single Image: Open directly in lightbox or show clean rich card with expandable image
+                    if (p.imageUrl && !p.description) {
+                        if (custom) custom.style.display = 'none';
+                        if (img) {
+                            img.src = p.imageUrl;
+                            img.style.display = 'block';
+                        }
+                        return;
+                    }
+
+                    // 4. Rich Card (Image or Text Discussion)
                     if (custom) {
                         custom.innerHTML = `
                             <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:20px 24px; text-align:left; max-width:min(90vw, 600px); border:2px solid #FF4500; box-shadow:0 8px 36px rgba(0,0,0,0.9);">
@@ -912,7 +989,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                     custom.innerHTML = `
                         <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:28px 24px; text-align:center; max-width:440px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.8);">
                             <div style="font-size:1.15em; font-weight:bold; color:#fff; margin-bottom:6px;">Reddit Video &amp; Post</div>
-                            <div style="font-size:0.9em; color:#bbb; margin-bottom:18px;">From <b>r/${escapeHtml(subreddit)}</b> (Shared via Reddit Mobile)</div>
+                            <div style="font-size:0.9em; color:#bbb; margin-bottom:18px;">From <b>r/${escapeHtml(subreddit)}</b></div>
                             <a href="${escapeHtml(postUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:#FF4500; color:#fff; font-weight:bold; font-size:1em; padding:10px 22px; border-radius:8px; text-decoration:none;">
                                 Watch / View on Reddit ↗
                             </a>
@@ -950,11 +1027,59 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                 }
             });
     }
-    else if (type === 'reddit_video' && frame) {
-        frame.src = `https://embed.reddit.com/video/${encodeURIComponent(content)}/?embed=true&theme=${theme}`;
-        frame.style.display = 'block';
-        frame.style.width = "650px";
-        frame.style.height = "500px";
+    else if (type === 'reddit_video') {
+        const videoId = content;
+        const targetUrl = `https://v.redd.it/${videoId}`;
+        if (custom) {
+            custom.innerHTML = `
+                <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px 20px; text-align:center; min-width:280px; max-width:600px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
+                    <div style="font-size:1.1em; color:#FF4500; font-weight:bold; margin-bottom:8px;">Reddit Loading Video...</div>
+                    <div style="font-size:0.85em; opacity:0.7;">Fetching video stream...</div>
+                </div>
+            `;
+            custom.style.display = 'block';
+        }
+
+        fetch(`/api/reddit/post?url=${encodeURIComponent(targetUrl)}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.post && data.post.videoUrl) {
+                    if (custom) custom.style.display = 'none';
+                    if (vid) {
+                        const streamUrl = `/api/proxy/video?url=${encodeURIComponent(data.post.videoUrl)}`;
+                        vid.referrerPolicy = "no-referrer";
+                        vid.style.display = 'block';
+                        vid.controls = true;
+                        vid.src = streamUrl;
+                        vid.load();
+                        vid.play().catch(() => {});
+                    }
+                } else {
+                    // Try direct v.redd.it proxy
+                    if (custom) custom.style.display = 'none';
+                    if (vid) {
+                        const streamUrl = `/api/proxy/video?url=${encodeURIComponent(`https://v.redd.it/${videoId}/DASH_720.mp4`)}`;
+                        vid.referrerPolicy = "no-referrer";
+                        vid.style.display = 'block';
+                        vid.controls = true;
+                        vid.src = streamUrl;
+                        vid.load();
+                        vid.play().catch(() => {});
+                    }
+                }
+            })
+            .catch(() => {
+                if (custom) custom.style.display = 'none';
+                if (vid) {
+                    const streamUrl = `/api/proxy/video?url=${encodeURIComponent(`https://v.redd.it/${videoId}/DASH_720.mp4`)}`;
+                    vid.referrerPolicy = "no-referrer";
+                    vid.style.display = 'block';
+                    vid.controls = true;
+                    vid.src = streamUrl;
+                    vid.load();
+                    vid.play().catch(() => {});
+                }
+            });
     }
 
     lb.style.display = 'flex';
@@ -988,14 +1113,17 @@ function closeLightbox(e) {
             custom.style.display = 'none';
             custom.innerHTML = "";
         }
-        currentPixivGallery = {
+        currentGallery = {
+            platform: 'pixiv',
             pages: [],
             currentIndex: 0,
             title: '',
             author: '',
+            postUrl: '',
             artworkUrl: '',
             isR18: false
         };
+        currentPixivGallery = currentGallery;
     }
 }
 
