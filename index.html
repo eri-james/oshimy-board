@@ -293,7 +293,7 @@
     <!-- 5. VIEW: SINGLE THREAD -->
     <div id="threadView" style="display:none;">
         <div style="max-width: 1000px; margin: 0 auto 15px auto; display: flex; justify-content: space-between; align-items: center;">
-            <a href="#" onclick="window.location.hash=''; return false;" class="reply-link" style="float:none; display:inline-block;"> ⬅ Return to Board</a>
+            <a href="javascript:void(0)" onclick="returnToBoard()" class="reply-link" style="float:none; display:inline-block;"> ⬅ Return to Board</a>
             <button type="button" onclick="openQuickReply(currentThreadId)" style="background:var(--main-accent); color:#fff; border:none; padding:5px 12px; border-radius:6px; font-weight:bold; cursor:pointer; font-size:0.85em;">⚡ Quick Reply</button>
         </div>
         <div id="opContainer"></div>

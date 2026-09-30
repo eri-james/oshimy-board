@@ -72,6 +72,10 @@ function router() {
     document.body.classList.remove('night-mode');
 
     const urlParam = new URLSearchParams(window.location.search);
+    if (urlParam.get('b') && BOARDS[urlParam.get('b')]) {
+        currentBoard = urlParam.get('b');
+    }
+
     let targetThreadId = null;
     let postPart = null;
 
@@ -101,6 +105,17 @@ function router() {
         if (topDivider) topDivider.style.display = "block";
         currentThreadId = targetThreadId;
         lastThreadSignature = "";
+
+        // If board is known from query param or current state, apply board theme and title immediately
+        if (currentBoard && BOARDS[currentBoard]) {
+            document.title = `${BOARDS[currentBoard].title} | OshiMY`;
+            document.getElementById('boardTitle').innerText = BOARDS[currentBoard].title;
+            if (BOARDS[currentBoard].type === 'nsfw') {
+                document.body.classList.add('night-mode');
+            } else {
+                document.body.classList.remove('night-mode');
+            }
+        }
 
         if (postPart) {
             sessionStorage.setItem('pending_scroll_post', postPart);
@@ -148,6 +163,21 @@ function router() {
     loadBoardView(isArchiveView);
 
     renderBoardNav();
+}
+
+function returnToBoard() {
+    if (currentBoard && BOARDS[currentBoard]) {
+        // If query parameters contain ?t= or ?thread=, remove them and retain board
+        const url = `?b=${currentBoard}`;
+        if (window.location.search.includes('t=') || window.location.search.includes('thread=')) {
+            window.location.href = url;
+            return;
+        }
+        window.location.hash = '';
+        router();
+    } else {
+        window.location.href = 'index.html';
+    }
 }
 
 // --- DYNAMIC HEADER NAVIGATION ---
@@ -415,7 +445,7 @@ function renderCatalogGrid(threads) {
         const dateStr = new Date(th.bumped_at || th.created_at).toLocaleDateString();
 
         html += `
-            <a href="?b=${currentBoard}#thread_${th.id}" class="catalog-tile" id="cat_${th.id}">
+            <a href="?b=${currentBoard}&t=${th.id}" class="catalog-tile" id="cat_${th.id}">
                 <div class="catalog-thumb-container">
                     ${thumb}
                     <span class="catalog-badge-overlay">R: ${replies}</span>
@@ -749,14 +779,14 @@ function renderThreadPreview(th) {
                         <span class="date">${dateStr}</span>
                         <span class="post-id">No. <a href="?b=${currentBoard}&t=${th.id}#post_${th.id}" onclick="quotePost('${th.id}', '${th.id}', event)" title="Quote post (Click) / Copy link (Right-click)">${th.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${th.id}', '${th.id}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a></span>
                         ${youTag}
-                        <a href="?b=${currentBoard}#thread_${th.id}" class="reply-link">[Reply ➜]</a>
+                        <a href="?b=${currentBoard}&t=${th.id}" class="reply-link">[Reply ➜]</a>
                         ${watchControl}
                         ${modControls}
                     </div>
                     <div class="backlink-container" id="backlinks_${th.id}"></div>
                     <div class="comment">${formatComment(th.comment)}</div>
                     <div style="font-size:0.85em; color:var(--text-color); opacity:0.8; margin-top:8px;">
-                        [ <a href="?b=${currentBoard}#thread_${th.id}" class="reply-count-link">${replyCountText}</a> ]
+                        [ <a href="?b=${currentBoard}&t=${th.id}" class="reply-count-link">${replyCountText}</a> ]
                     </div>
                 </div>
             </div>
@@ -823,6 +853,18 @@ async function loadThreadView(threadId, isSilent = false) {
         if (th && th.board && (!currentBoard || currentBoard !== th.board)) {
             currentBoard = th.board;
             renderBoardNav();
+        }
+
+        // Always ensure the board title and theme (e.g. NSFW night-mode) match the active thread's board
+        if (th && th.board && BOARDS[th.board]) {
+            const bData = BOARDS[th.board];
+            const titleEl = document.getElementById('boardTitle');
+            if (titleEl) titleEl.innerText = bData.title;
+            if (bData.type === 'nsfw') {
+                document.body.classList.add('night-mode');
+            } else {
+                document.body.classList.remove('night-mode');
+            }
         }
 
         // Keep browser URL clean and easily shareable for Discord/social previews
