@@ -99,6 +99,115 @@ function getUserSyncData(userId) {
 
 // --- API ROUTES ---
 
+// In-memory cache for Pixiv artwork details
+const pixivArtworkCache = new Map();
+
+// Pixiv Image Reverse Proxy to bypass Pixiv CDN hotlink protection
+app.get('/api/proxy/pixiv', async (req, res) => {
+    const targetUrl = req.query.url;
+    if (!targetUrl || typeof targetUrl !== 'string') {
+        return res.status(400).send('Missing url parameter');
+    }
+
+    let parsedUrl;
+    try {
+        parsedUrl = new URL(targetUrl);
+    } catch (_) {
+        return res.status(400).send('Invalid url format');
+    }
+
+    // SSRF protection: only allow pximg.net domains
+    const hostname = parsedUrl.hostname.toLowerCase();
+    if (hostname !== 'pximg.net' && !hostname.endsWith('.pximg.net')) {
+        return res.status(403).send('Only pximg.net domains are supported');
+    }
+
+    try {
+        const upstreamResp = await fetch(targetUrl, {
+            headers: {
+                'Referer': 'https://www.pixiv.net/',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            }
+        });
+
+        if (!upstreamResp.ok) {
+            return res.status(upstreamResp.status).send(`Upstream Pixiv error: ${upstreamResp.status}`);
+        }
+
+        const contentType = upstreamResp.headers.get('content-type') || 'image/jpeg';
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+
+        const contentLength = upstreamResp.headers.get('content-length');
+        if (contentLength) {
+            res.setHeader('Content-Length', contentLength);
+        }
+
+        const arrayBuffer = await upstreamResp.arrayBuffer();
+        res.send(Buffer.from(arrayBuffer));
+    } catch (err) {
+        console.error('Pixiv proxy error:', err);
+        res.status(502).send('Error proxying Pixiv image');
+    }
+});
+
+// Pixiv Artwork Metadata resolver
+app.get('/api/pixiv/artwork', async (req, res) => {
+    const illustId = req.query.id;
+    if (!illustId || !/^\d+$/.test(String(illustId).trim())) {
+        return res.status(400).json({ error: 'Invalid or missing Pixiv illustration id' });
+    }
+
+    const cleanId = String(illustId).trim();
+    if (pixivArtworkCache.has(cleanId)) {
+        return res.json({ success: true, artwork: pixivArtworkCache.get(cleanId) });
+    }
+
+    try {
+        const resp = await fetch(`https://www.pixiv.net/ajax/illust/${cleanId}`, {
+            headers: {
+                'Referer': `https://www.pixiv.net/artworks/${cleanId}`,
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+            }
+        });
+
+        if (!resp.ok) {
+            return res.status(resp.status).json({ error: `Pixiv API returned ${resp.status}` });
+        }
+
+        const data = await resp.json();
+        if (data.error || !data.body) {
+            return res.status(404).json({ error: data.message || 'Artwork not found or private' });
+        }
+
+        const body = data.body;
+        const imageUrl = body.urls?.regular || body.urls?.small || body.urls?.original || '';
+        const proxyUrl = imageUrl ? `/api/proxy/pixiv?url=${encodeURIComponent(imageUrl)}` : '';
+
+        const artwork = {
+            id: cleanId,
+            title: body.title || `Artwork #${cleanId}`,
+            author: body.userName || 'Artist',
+            authorId: body.userId || '',
+            pageCount: body.pageCount || 1,
+            imageUrl,
+            proxyUrl,
+            artworkUrl: `https://www.pixiv.net/artworks/${cleanId}`
+        };
+
+        pixivArtworkCache.set(cleanId, artwork);
+        if (pixivArtworkCache.size > 500) {
+            const firstKey = pixivArtworkCache.keys().next().value;
+            pixivArtworkCache.delete(firstKey);
+        }
+
+        res.json({ success: true, artwork });
+    } catch (err) {
+        console.error('Pixiv artwork lookup error:', err);
+        res.status(500).json({ error: 'Failed to fetch Pixiv artwork data' });
+    }
+});
+
 // 1. Boards List & Stats
 app.get('/api/boards', (req, res) => {
     try {

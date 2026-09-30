@@ -364,7 +364,7 @@ async function executeOmikujiDraw() {
             const today = getTodayUtcString();
             const guest = loadGuestGamification();
             if (guest.last_omikuji_date === today) {
-                alert('You have already drawn your fortune today!');
+                showToast('You have already drawn your fortune today!', 3500, 'info');
                 return;
             }
 
@@ -408,7 +408,7 @@ async function executeOmikujiDraw() {
             }, 700);
         }
     } catch (err) {
-        alert(err.message || 'Failed to draw fortune.');
+        showToast(err.message || 'Failed to draw fortune.', 4000, 'error');
         if (btn) btn.disabled = false;
         if (cylinder) cylinder.classList.remove('shrine-shake');
     }
@@ -549,7 +549,7 @@ async function saveFactionSelection() {
             showGamificationToast('Faction Saved!', `Joined ${opt ? opt.name : 'None'}`, '🚩');
         }
     } catch (err) {
-        alert('Failed to save faction: ' + err.message);
+        showToast('Failed to save faction: ' + err.message, 4000, 'error');
     }
 }
 

@@ -35,19 +35,38 @@ function getMediaType(url) {
         return { type: 'image', url: cleanUrl };
     }
 
-    // 3. Reddit CDN Images (i.redd.it, preview.redd.it, external-preview.redd.it)
+    // 3. Pixiv Artwork Link (pixiv.net/artworks/:id)
+    const pixivRegex = /(?:https?:\/\/)?(?:www\.)?pixiv\.net\/(?:[a-zA-Z-]+\/)?artworks\/(\d+)/i;
+    const pixivMatch = cleanUrl.match(pixivRegex);
+    if (pixivMatch) {
+        return { type: 'pixiv', id: pixivMatch[1], url: cleanUrl };
+    }
+
+    // 4. Pixiv Direct CDN Images (i.pximg.net - requires proxy due to Pixiv hotlink protection)
+    const pximgRegex = /(?:https?:\/\/)?([a-zA-Z0-9-]+\.pximg\.net\/[^\s]+)/i;
+    const pximgMatch = cleanUrl.match(pximgRegex);
+    if (pximgMatch) {
+        const fullUrl = cleanUrl.startsWith('http') ? cleanUrl : `https://${cleanUrl}`;
+        return { 
+            type: 'pixiv_image', 
+            url: fullUrl,
+            proxyUrl: `/api/proxy/pixiv?url=${encodeURIComponent(fullUrl)}`
+        };
+    }
+
+    // 5. Reddit CDN Images (i.redd.it, preview.redd.it, external-preview.redd.it)
     if (cleanUrl.match(/(?:https?:\/\/)?(?:i|preview|external-preview)\.redd\.it\/[^\s]+/i)) {
         return { type: 'image', url: cleanUrl };
     }
 
-    // 4. Reddit Direct Video (v.redd.it)
+    // 6. Reddit Direct Video (v.redd.it)
     const redditVideoRegex = /(?:https?:\/\/)?v\.redd\.it\/([a-zA-Z0-9_-]+)/i;
     const redditVideoMatch = cleanUrl.match(redditVideoRegex);
     if (redditVideoMatch) {
         return { type: 'reddit_video', id: redditVideoMatch[1], url: cleanUrl };
     }
 
-    // 5. Reddit Post & Share Link Detection (handles /r/sub/comments/id, /r/sub/s/shareId, /comments/id, redd.it/id)
+    // 7. Reddit Post & Share Link Detection (handles /r/sub/comments/id, /r/sub/s/shareId, /comments/id, redd.it/id)
     const redditPostRegex = /(?:https?:\/\/)?(?:(?:www\.|old\.|new\.|m\.|sh\.)?reddit\.com\/(?:r\/([a-zA-Z0-9_]+)\/(?:comments\/([a-z0-9]+)|s\/([a-zA-Z0-9_-]+))|(?:comments\/([a-z0-9]+)|s\/([a-zA-Z0-9_-]+)))|(?<![a-zA-Z0-9])redd\.it\/([a-z0-9]+))/i;
     const redditPostMatch = cleanUrl.match(redditPostRegex);
     if (redditPostMatch) {
@@ -57,17 +76,17 @@ function getMediaType(url) {
         return { type: 'reddit', subreddit, id, isShare, url: cleanUrl };
     }
 
-    // 4. Direct HTML5 Video Detection
+    // 8. Direct HTML5 Video Detection
     if (cleanUrl.match(/\.(mp4|webm|ogv|mov|m4v)(?:\?.*)?$/i)) {
         return { type: 'video', url: cleanUrl };
     }
 
-    // 5. Direct HTML5 Audio Detection
+    // 9. Direct HTML5 Audio Detection
     if (cleanUrl.match(/\.(mp3|wav|ogg|m4a|aac|opus|flac)(?:\?.*)?$/i)) {
         return { type: 'audio', url: cleanUrl };
     }
 
-    // 6. Default Fallback: Treat as Image
+    // 10. Default Fallback: Treat as Image
     return { type: 'image', url: cleanUrl };
 }
 
@@ -100,7 +119,28 @@ function renderMedia(url) {
         `;
     }
 
-    // 3. Reddit Post Card
+    // 3. Pixiv Artwork Link
+    if (media.type === 'pixiv') {
+        return `
+            <div class="media-container file-placeholder pixiv-placeholder" data-pixiv-id="${media.id}" onclick="openLightbox('pixiv', '${media.id}')" title="Click to view Pixiv Artwork #${media.id}">
+                <div class="pixiv-thumb-slot" id="pixiv_slot_${media.id}" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
+                    <div class="file-ext" style="color:#0096fa; font-size:22px; font-weight:900;">pixiv</div>
+                    <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" id="pixiv_title_${media.id}">#${media.id}</div>
+                    <div style="font-size:10px; color:#aaa; margin-top:2px;" id="pixiv_author_${media.id}">View Artwork</div>
+                </div>
+            </div>
+        `;
+    }
+
+    // 4. Pixiv Direct Image (i.pximg.net - rendered through reverse proxy to bypass hotlink block)
+    if (media.type === 'pixiv_image') {
+        const proxySrc = media.proxyUrl || `/api/proxy/pixiv?url=${encodeURIComponent(media.url)}`;
+        return `
+            <img src="${escapeHtml(proxySrc)}" class="thread-image" loading="lazy" decoding="async" alt="Pixiv image" onclick="openLightbox('pixiv_image', '${escapeHtml(proxySrc)}', '${escapeHtml(media.url)}')" onerror="this.onerror=null; this.style.display='none';" title="Click to expand Pixiv image">
+        `;
+    }
+
+    // 5. Reddit Post Card
     if (media.type === 'reddit') {
         const isShareParam = media.isShare ? 'true' : 'false';
         return `
@@ -116,7 +156,7 @@ function renderMedia(url) {
         `;
     }
 
-    // 4. Reddit Video Card (v.redd.it)
+    // 6. Reddit Video Card (v.redd.it)
     if (media.type === 'reddit_video') {
         return `
             <div class="media-container file-placeholder reddit-placeholder" onclick="openLightbox('reddit_video', '${media.id}')" title="Click to view Reddit Video">
@@ -127,7 +167,7 @@ function renderMedia(url) {
         `;
     }
 
-    // 5. Direct Video
+    // 7. Direct Video
     if (media.type === 'video') {
         return `
             <div class="media-container" onclick="openLightbox('video', '${escapeHtml(media.url)}')" style="cursor:pointer;" title="Click to play Video">
@@ -137,7 +177,7 @@ function renderMedia(url) {
         `;
     }
 
-    // 6. Direct Audio
+    // 8. Direct Audio
     if (media.type === 'audio') {
         return `
             <div class="media-container file-placeholder" onclick="openLightbox('audio', '${escapeHtml(media.url)}')" style="cursor:pointer; background:#2c3e50;" title="Click to play Audio">
@@ -148,30 +188,79 @@ function renderMedia(url) {
         `;
     }
 
-    // 7. Standard Image (including i.redd.it and pbs.twimg.com)
+    // 9. Standard Image (including i.redd.it and pbs.twimg.com)
     return `
         <img src="${escapeHtml(media.url)}" class="thread-image" loading="lazy" decoding="async" alt="Post attachment" onclick="openLightbox('image', '${escapeHtml(media.url)}')" onerror="this.onerror=null; this.style.display='none';" title="Click to expand image">
     `;
 }
 
-// --- CLIENT-SIDE MEDIA VALIDATION ---
-function validateMediaUrl(url) {
-    return new Promise((resolve) => {
-        if (!url || !url.trim()) return resolve({ valid: true });
-        const media = getMediaType(url);
-        
-        // Video, Audio, YouTube, Twitter, Reddit are accepted without pre-loading
-        if (media.type !== 'image') {
-            return resolve({ valid: true, type: media.type });
-        }
+// Hydrates Pixiv artwork card placeholders with actual thumbnails from /api/pixiv/artwork
+async function hydratePixivEmbeds() {
+    const slots = document.querySelectorAll('.pixiv-placeholder[data-pixiv-id]');
+    if (!slots || slots.length === 0) return;
 
-        // Test Image Load
+    for (const placeholder of slots) {
+        const id = placeholder.getAttribute('data-pixiv-id');
+        if (!id || placeholder.getAttribute('data-hydrated') === 'true') continue;
+        placeholder.setAttribute('data-hydrated', 'true');
+
+        try {
+            const resp = await fetch(`/api/pixiv/artwork?id=${id}`);
+            const data = await resp.json();
+            if (data.success && data.artwork) {
+                const art = data.artwork;
+                const slot = placeholder.querySelector('.pixiv-thumb-slot');
+                if (slot) {
+                    slot.innerHTML = `
+                        <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">
+                            <img src="${art.proxyUrl}" class="thread-image" loading="lazy" decoding="async" alt="${escapeHtml(art.title)}" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                            <div class="pixiv-badge">pixiv</div>
+                        </div>
+                    `;
+                    placeholder.classList.add('pixiv-thumb-loaded');
+                    placeholder.title = `${art.title} by ${art.author} - Click to expand`;
+                }
+            }
+        } catch (_) {}
+    }
+}
+
+// --- CLIENT-SIDE MEDIA VALIDATION ---
+async function validateMediaUrl(url) {
+    if (!url || !url.trim()) return { valid: true };
+    const media = getMediaType(url);
+    if (!media) return { valid: true };
+    
+    // Video, Audio, YouTube, Twitter, Reddit are accepted without image pre-loading
+    if (['video', 'audio', 'youtube', 'x', 'reddit', 'reddit_video'].includes(media.type)) {
+        return { valid: true, type: media.type };
+    }
+
+    // Pixiv Artwork validation: Query resolver endpoint
+    if (media.type === 'pixiv') {
+        try {
+            const resp = await fetch(`/api/pixiv/artwork?id=${media.id}`);
+            const data = await resp.json();
+            if (data.success && data.artwork) {
+                return { valid: true, type: 'pixiv', artwork: data.artwork };
+            }
+            return { valid: false, error: data.error || "Pixiv artwork not found or is set to private." };
+        } catch (err) {
+            // Allow through if network check times out
+            return { valid: true, type: 'pixiv' };
+        }
+    }
+
+    // Pixiv Direct Image (i.pximg.net): Test via reverse proxy to avoid 403 Forbidden
+    const testUrl = (media.type === 'pixiv_image' && media.proxyUrl) ? media.proxyUrl : media.url;
+
+    return new Promise((resolve) => {
         const img = new Image();
         let finished = false;
         img.onload = () => {
             if (!finished) {
                 finished = true;
-                resolve({ valid: true, type: 'image' });
+                resolve({ valid: true, type: media.type });
             }
         };
         img.onerror = () => {
@@ -180,14 +269,14 @@ function validateMediaUrl(url) {
                 resolve({ valid: false, error: "Image failed to load. Check that the URL is public and direct." });
             }
         };
-        img.src = media.url;
+        img.src = testUrl;
 
         // 4-second timeout guard
         setTimeout(() => {
             if (!finished) {
                 finished = true;
                 // Allow through on slow networks rather than blocking the post
-                resolve({ valid: true, type: 'image' });
+                resolve({ valid: true, type: media.type });
             }
         }, 4000);
     });
@@ -229,7 +318,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
     const isNight = typeof currentBoard !== 'undefined' && typeof BOARDS !== 'undefined' && BOARDS[currentBoard] && BOARDS[currentBoard].type === 'nsfw';
     const theme = isNight ? 'dark' : 'light';
 
-    if (type === 'image' && img) {
+    if ((type === 'image' || type === 'pixiv_image') && img) {
         img.src = content;
         img.style.display = 'block';
     } 
@@ -247,6 +336,56 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         frame.style.display = 'block';
         frame.style.width = "550px";
         frame.style.height = "520px";
+    }
+    else if (type === 'pixiv' && custom) {
+        const artworkId = content;
+        custom.innerHTML = `
+            <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px 20px; text-align:center; min-width:280px; max-width:800px; border:2px solid #0096fa; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
+                <div style="font-size:1.1em; color:#0096fa; font-weight:bold; margin-bottom:8px;">🎨 Loading Pixiv Artwork #${artworkId}...</div>
+                <div style="font-size:0.85em; opacity:0.7;">Fetching artwork details and media...</div>
+            </div>
+        `;
+        custom.style.display = 'block';
+
+        fetch(`/api/pixiv/artwork?id=${artworkId}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.success && data.artwork) {
+                    const art = data.artwork;
+                    custom.innerHTML = `
+                        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(92vw, 850px); max-height:88vh; display:flex; flex-direction:column; align-items:center; border:2px solid #0096fa; box-shadow:0 8px 32px rgba(0,0,0,0.9); overflow-y:auto;">
+                            <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px;">
+                                <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding-right:12px;">
+                                    <div style="font-weight:bold; font-size:1.1em; color:#fff;">${escapeHtml(art.title)}</div>
+                                    <div style="font-size:0.85em; color:#9ca3af;">By <b>${escapeHtml(art.author)}</b> ${art.pageCount > 1 ? `• ${art.pageCount} Pages` : ''}</div>
+                                </div>
+                                <a href="${escapeHtml(art.artworkUrl)}" target="_blank" rel="noopener noreferrer" style="background:#0096fa; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:background 0.15s ease;" onmouseover="this.style.background='#3bb3ff'" onmouseout="this.style.background='#0096fa'">
+                                    View on Pixiv ↗
+                                </a>
+                            </div>
+                            <div style="max-height:calc(85vh - 120px); overflow:auto; display:flex; justify-content:center; align-items:center; width:100%;">
+                                <img src="${art.proxyUrl}" style="max-width:100%; max-height:calc(85vh - 120px); object-fit:contain; border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,0.5);" alt="${escapeHtml(art.title)}">
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    custom.innerHTML = `
+                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px; text-align:center; max-width:400px; border:2px solid #ef4444;">
+                            <div style="color:#ef4444; font-weight:bold; margin-bottom:8px;">Artwork Unavailable</div>
+                            <div style="font-size:0.9em; color:#aaa; margin-bottom:14px;">This artwork could not be loaded or is set to private.</div>
+                            <a href="https://www.pixiv.net/artworks/${artworkId}" target="_blank" rel="noopener noreferrer" style="color:#0096fa; font-weight:bold; text-decoration:underline;">View on Pixiv ↗</a>
+                        </div>
+                    `;
+                }
+            })
+            .catch(() => {
+                custom.innerHTML = `
+                    <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px; text-align:center; max-width:400px; border:2px solid #ef4444;">
+                        <div style="color:#ef4444; font-weight:bold; margin-bottom:8px;">Failed to load</div>
+                        <a href="https://www.pixiv.net/artworks/${artworkId}" target="_blank" rel="noopener noreferrer" style="color:#0096fa; font-weight:bold; text-decoration:underline;">Open on Pixiv ↗</a>
+                    </div>
+                `;
+            });
     }
     else if (type === 'reddit') {
         const subreddit = extra1 || 'reddit';
@@ -373,6 +512,16 @@ function initMediaInputDetector() {
             badge.style.color = '#ff4d4d';
             badge.style.border = '1px solid #ff4d4d';
             badge.innerHTML = `✓ YouTube Video Detected (Thumbnail &amp; Player)`;
+        } else if (media.type === 'pixiv') {
+            badge.style.background = 'rgba(0, 150, 250, 0.15)';
+            badge.style.color = '#0096fa';
+            badge.style.border = '1px solid #0096fa';
+            badge.innerHTML = `✓ Pixiv Artwork Detected: <b>#${media.id}</b> (Interactive Card &amp; Viewer)`;
+        } else if (media.type === 'pixiv_image') {
+            badge.style.background = 'rgba(0, 150, 250, 0.15)';
+            badge.style.color = '#0096fa';
+            badge.style.border = '1px solid #0096fa';
+            badge.innerHTML = `✓ Pixiv Direct Image Detected (Hotlink Protection Bypassed)`;
         } else if (media.type === 'video') {
             badge.style.background = 'rgba(0, 229, 255, 0.15)';
             badge.style.color = '#00e5ff';
@@ -415,11 +564,7 @@ function initMediaUpload() {
 
         // Size check (max 32MB for ImgBB)
         if (file.size > 32 * 1024 * 1024) {
-            if (typeof showToast === 'function') {
-                showToast("File exceeds 32MB limit.");
-            } else {
-                alert("File exceeds 32MB limit.");
-            }
+            showToast("File exceeds 32MB limit.", 3500, "error");
             hiddenInput.value = "";
             return;
         }
@@ -441,17 +586,13 @@ function initMediaUpload() {
                     urlInput.dispatchEvent(new Event('input'));
                     urlInput.focus();
                 }
-                if (typeof showToast === 'function') {
-                    showToast("Image uploaded successfully!");
-                }
+                showToast("Image uploaded successfully!", 3000, "success");
             } else {
                 const errMsg = result.error?.message || "Upload failed";
-                if (typeof showToast === 'function') showToast(errMsg);
-                else alert("Upload Failed: " + errMsg);
+                showToast("Upload Failed: " + errMsg, 4000, "error");
             }
         } catch (err) {
-            if (typeof showToast === 'function') showToast("Network error during upload.");
-            else alert("Network Error during upload");
+            showToast("Network Error during upload", 4000, "error");
         } finally {
             uploadBtn.innerText = "Upload Image";
             uploadBtn.disabled = false;

@@ -1181,7 +1181,7 @@ async function submitQuickReply() {
 
     const threadId = activeQrThreadId || currentThreadId || dock?.getAttribute('data-thread-id');
     if (!threadId) {
-        alert("Please select or open a thread to reply to.");
+        showToast("Please select or open a thread to reply to.", 3500, "error");
         return;
     }
 
@@ -1299,10 +1299,17 @@ function initQuickReply() {
                 badge.innerHTML = '';
                 return;
             }
+            const media = typeof getMediaType === 'function' ? getMediaType(val) : null;
             badge.style.display = 'block';
-            badge.style.background = 'rgba(0, 132, 255, 0.15)';
-            badge.style.color = 'var(--main-accent)';
-            badge.innerHTML = '✓ Media attached';
+            if (media && (media.type === 'pixiv' || media.type === 'pixiv_image')) {
+                badge.style.background = 'rgba(0, 150, 250, 0.15)';
+                badge.style.color = '#0096fa';
+                badge.innerHTML = media.type === 'pixiv' ? `✓ Pixiv #${media.id} Attached` : '✓ Pixiv Image (Proxied)';
+            } else {
+                badge.style.background = 'rgba(0, 132, 255, 0.15)';
+                badge.style.color = 'var(--main-accent)';
+                badge.innerHTML = '✓ Media attached';
+            }
         };
         imageInput.addEventListener('input', updateQrBadge);
         imageInput.addEventListener('change', updateQrBadge);
@@ -1358,8 +1365,7 @@ async function submitReplyCore({ threadId, comment, name, media_url, source = 'm
         if (!check.valid) {
             const errMsg = check.error || "Invalid media or image URL.";
             if (qrStatus) { qrStatus.style.color = '#ef4444'; qrStatus.innerText = errMsg; }
-            if (typeof showToast === 'function') showToast(errMsg);
-            else alert(errMsg);
+            showToast(errMsg, 3500, "error");
             if (qrSubmitBtn) { qrSubmitBtn.disabled = false; qrSubmitBtn.innerText = "Submit"; }
             if (mainSubmitBtn) { mainSubmitBtn.disabled = false; mainSubmitBtn.innerText = "Submit Reply"; }
             return;
@@ -1642,8 +1648,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const check = await validateMediaUrl(mediaVal);
             if (!check.valid) {
                 const errMsg = check.error || "Invalid media or image URL.";
-                if (typeof showToast === 'function') showToast(errMsg);
-                else alert(errMsg);
+                showToast(errMsg, 3500, "error");
                 submitBtn.disabled = false;
                 submitBtn.innerText = "Create Thread";
                 return;
@@ -1678,7 +1683,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.location.hash = `#thread_${res.thread.id}`;
             }
         } catch (err) {
-            alert("Posting Error: " + err.message);
+            showToast("Posting Error: " + err.message, 4000, "error");
         } finally {
             submitBtn.disabled = false;
             submitBtn.innerText = currentThreadId ? "Submit Reply" : "Submit Post";
@@ -1701,7 +1706,7 @@ async function adminDelete(type, id) {
             router();
         }
     } catch (err) {
-        alert("Failed to delete: " + err.message);
+        showToast("Failed to delete: " + err.message, 4000, "error");
     }
 }
 
@@ -1713,7 +1718,7 @@ async function togglePin(threadId) {
         });
         router();
     } catch (err) {
-        alert("Failed to pin: " + err.message);
+        showToast("Failed to pin: " + err.message, 4000, "error");
     }
 }
 
@@ -1725,7 +1730,7 @@ async function toggleLock(threadId) {
         });
         router();
     } catch (err) {
-        alert("Failed to lock: " + err.message);
+        showToast("Failed to lock: " + err.message, 4000, "error");
     }
 }
 
@@ -1947,7 +1952,7 @@ async function toggleWatch(threadId) {
             });
         }
     } catch (err) {
-        alert("Failed to update watchlist: " + err.message);
+        showToast("Failed to update watchlist: " + err.message, 4000, "error");
     }
 }
 

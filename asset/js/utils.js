@@ -2,6 +2,40 @@
 // UTILS.JS - Helpers & Text Processing
 // ==========================================
 
+// Non-blocking in-app notification toasts (avoids window.alert in iframe)
+function showToast(message, duration = 3500, type = 'info') {
+    let container = document.getElementById('toastContainer');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toastContainer';
+        container.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:99999;display:flex;flex-direction:column;gap:8px;max-width:380px;pointer-events:none;';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.style.cssText = 'background:var(--card-bg, #222);color:var(--text-color, #fff);border:1px solid var(--border-color, #444);border-left:4px solid var(--main-accent, #3b82f6);padding:10px 16px;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-size:0.9em;opacity:0;transform:translateY(10px);transition:all 0.25s ease;pointer-events:auto;line-height:1.4;word-break:break-word;';
+    if (type === 'error') {
+        toast.style.borderLeftColor = '#ef4444';
+    } else if (type === 'success') {
+        toast.style.borderLeftColor = '#10b981';
+    }
+    toast.textContent = message;
+    container.appendChild(toast);
+    requestAnimationFrame(() => {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateY(0)';
+    });
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(10px)';
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+}
+
+// Ensure window.alert does not disrupt or hang iframe execution
+window.alert = function(msg) {
+    showToast(msg, 4000, 'info');
+};
+
 // Get list of my own posts from storage
 const MY_POSTS = JSON.parse(localStorage.getItem('my_posts') || "[]");
 
@@ -168,6 +202,10 @@ function generateBacklinks(scopeElement = null) {
             }
         });
     });
+
+    if (typeof hydratePixivEmbeds === 'function') {
+        hydratePixivEmbeds();
+    }
 }
 
 // ==========================================

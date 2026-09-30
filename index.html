@@ -106,7 +106,7 @@
             <textarea id="commentInput" placeholder="Write your comment..." required></textarea>
             
             <div style="display: flex; gap: 8px;">
-                <input type="url" id="imageInput" placeholder="Media URL (Reddit/X/YT/Direct Image or Video Link)" style="flex-grow: 1;">
+                <input type="url" id="imageInput" placeholder="Media URL (Pixiv/Reddit/X/YT/Direct Image or Video Link)" style="flex-grow: 1;">
                 <button type="button" id="uploadBtn">Upload Image</button>
             </div>
             <div id="mediaDetectedBadge" style="display:none; font-size:0.8em; margin-top:4px; margin-bottom:6px; padding:4px 8px; border-radius:4px; font-weight:bold;"></div>
@@ -116,6 +116,7 @@
                 <summary><span>ℹ️ Supported Media &amp; Upload Formats</span></summary>
                 <div class="media-help-content">
                     <ul>
+                        <li><b>Pixiv:</b> Artwork URLs (<code>pixiv.net/artworks/...</code>) and direct images (<code>i.pximg.net/...</code>).</li>
                         <li><b>Reddit:</b> Direct images (<code>i.redd.it</code>), videos (<code>v.redd.it</code>), or post links (<code>reddit.com/r/.../comments/...</code>, <code>redd.it/...</code>).</li>
                         <li><b>X (Twitter):</b> Direct post URLs (<code>https://x.com/.../status/...</code>) and twimg images.</li>
                         <li><b>YouTube:</b> <code>youtube.com/watch?v=...</code>, <code>youtu.be/...</code>, Shorts, or Music.</li>
@@ -336,7 +337,7 @@
             <input type="text" id="qrSubject" placeholder="Subject" style="display:none;">
             <textarea id="qrComment" placeholder="Write your comment... (Ctrl+Enter to submit)" required></textarea>
             <div style="display:flex; gap:6px; align-items:center;">
-                <input type="url" id="qrImage" placeholder="Media URL (X/YT/Reddit/Image/Video)" style="flex-grow:1;">
+                <input type="url" id="qrImage" placeholder="Media URL (Pixiv/X/YT/Reddit/Image/Video)" style="flex-grow:1;">
                 <button type="button" id="qrUploadBtn" class="qr-upload-btn">Upload</button>
             </div>
             <div id="qrMediaBadge" style="display:none; font-size:0.75em; padding:3px 6px; border-radius:4px; font-weight:bold;"></div>
