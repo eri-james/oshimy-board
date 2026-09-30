@@ -456,10 +456,28 @@ function openLightbox(type, content, extra1, extra2, extra3) {
     const isNight = typeof currentBoard !== 'undefined' && typeof BOARDS !== 'undefined' && BOARDS[currentBoard] && BOARDS[currentBoard].type === 'nsfw';
     const theme = isNight ? 'dark' : 'light';
 
-    if ((type === 'image' || type === 'pixiv_image') && img) {
+    // Auto-detect Pixiv artwork ID and page index if clicking a direct Pixiv image (i.pximg.net or pixiv.re)
+    if (type === 'pixiv_image') {
+        const fullTarget = `${extra1 || ''} ${content || ''}`;
+        const pxMatch = fullTarget.match(/(\d+)_p(\d+)/i) || fullTarget.match(/pixiv\.re\/(\d+)(?:-(\d+))?/i);
+        if (pxMatch && pxMatch[1]) {
+            type = 'pixiv';
+            content = pxMatch[1];
+            // If from pixiv.re/id-N.jpg, index is N-1; if from id_pN, index is N
+            const isSuffix = fullTarget.includes('pixiv.re') && !fullTarget.includes('_p');
+            extra1 = pxMatch[2] ? (parseInt(pxMatch[2], 10) - (isSuffix ? 1 : 0)) : 0;
+        }
+    }
+
+    if (type === 'image' && img) {
         img.src = content;
         img.style.display = 'block';
     } 
+    else if (type === 'pixiv_image' && img) {
+        // Fallback for direct images where no illustration ID was detected
+        img.src = content;
+        img.style.display = 'block';
+    }
     else if ((type === 'video' || type === 'audio') && vid) {
         vid.src = content;
         vid.style.display = 'block';
@@ -477,6 +495,8 @@ function openLightbox(type, content, extra1, extra2, extra3) {
     }
     else if (type === 'pixiv' && custom) {
         const artworkId = content;
+        const initialPageIndex = Math.max(0, parseInt(extra1, 10) || 0);
+
         custom.innerHTML = `
             <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px 20px; text-align:center; min-width:280px; max-width:800px; border:2px solid #0096fa; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
                 <div style="font-size:1.1em; color:#0096fa; font-weight:bold; margin-bottom:8px;">🎨 Loading Pixiv Artwork #${artworkId}...</div>
@@ -499,7 +519,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
 
                     currentPixivGallery = {
                         pages,
-                        currentIndex: 0,
+                        currentIndex: (initialPageIndex >= 0 && initialPageIndex < pages.length) ? initialPageIndex : 0,
                         title: art.title || `Artwork #${artworkId}`,
                         author: art.author || 'Artist',
                         artworkUrl: art.artworkUrl || `https://www.pixiv.net/artworks/${artworkId}`,
@@ -508,13 +528,31 @@ function openLightbox(type, content, extra1, extra2, extra3) {
 
                     renderPixivCarouselModal();
                 } else {
+                    // Fallback: check if page 2 exists via community helper to enable carousel even on API fallback
+                    const fallbackPages = [{
+                        pageIndex: 0,
+                        displayUrl: `https://pixiv.re/${artworkId}.jpg`,
+                        helperUrl: `https://pixiv.re/${artworkId}.jpg`,
+                        originalUrl: `https://pixiv.re/${artworkId}.jpg`
+                    }];
+
+                    // Optimistically probe for multi-page illustrations
+                    const testImg2 = new Image();
+                    testImg2.onload = () => {
+                        if (currentPixivGallery && currentPixivGallery.artworkUrl.includes(artworkId)) {
+                            currentPixivGallery.pages.push({
+                                pageIndex: 1,
+                                displayUrl: `https://pixiv.re/${artworkId}-2.jpg`,
+                                helperUrl: `https://pixiv.re/${artworkId}-2.jpg`,
+                                originalUrl: `https://pixiv.re/${artworkId}-2.jpg`
+                            });
+                            renderPixivCarouselModal();
+                        }
+                    };
+                    testImg2.src = `https://pixiv.re/${artworkId}-2.jpg`;
+
                     currentPixivGallery = {
-                        pages: [{
-                            pageIndex: 0,
-                            displayUrl: `https://pixiv.re/${artworkId}.jpg`,
-                            helperUrl: `https://pixiv.re/${artworkId}.jpg`,
-                            originalUrl: `https://pixiv.re/${artworkId}.jpg`
-                        }],
+                        pages: fallbackPages,
                         currentIndex: 0,
                         title: `Pixiv Artwork #${artworkId}`,
                         author: 'Pixiv Artist',
@@ -525,13 +563,29 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                 }
             })
             .catch(() => {
+                const fallbackPages = [{
+                    pageIndex: 0,
+                    displayUrl: `https://pixiv.re/${artworkId}.jpg`,
+                    helperUrl: `https://pixiv.re/${artworkId}.jpg`,
+                    originalUrl: `https://pixiv.re/${artworkId}.jpg`
+                }];
+
+                const testImg2 = new Image();
+                testImg2.onload = () => {
+                    if (currentPixivGallery && currentPixivGallery.artworkUrl.includes(artworkId)) {
+                        currentPixivGallery.pages.push({
+                            pageIndex: 1,
+                            displayUrl: `https://pixiv.re/${artworkId}-2.jpg`,
+                            helperUrl: `https://pixiv.re/${artworkId}-2.jpg`,
+                            originalUrl: `https://pixiv.re/${artworkId}-2.jpg`
+                        });
+                        renderPixivCarouselModal();
+                    }
+                };
+                testImg2.src = `https://pixiv.re/${artworkId}-2.jpg`;
+
                 currentPixivGallery = {
-                    pages: [{
-                        pageIndex: 0,
-                        displayUrl: `https://pixiv.re/${artworkId}.jpg`,
-                        helperUrl: `https://pixiv.re/${artworkId}.jpg`,
-                        originalUrl: `https://pixiv.re/${artworkId}.jpg`
-                    }],
+                    pages: fallbackPages,
                     currentIndex: 0,
                     title: `Pixiv Artwork #${artworkId}`,
                     author: 'Pixiv Artist',
