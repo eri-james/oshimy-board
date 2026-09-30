@@ -109,27 +109,14 @@ function getTodayDateStr() {
 }
 
 async function awardD1UserXp(db, userId, xpAmount) {
-    if (!userId || !xpAmount) return;
+    if (!userId || !xpAmount || xpAmount <= 0) return;
     try {
-        const u = await db.prepare('SELECT xp FROM users WHERE id = ?').bind(userId).first();
-        if (!u) return;
-        const newXp = (u.xp || 0) + xpAmount;
-        const newLevel = calculateLevel(newXp);
-        await db.prepare('UPDATE users SET xp = ?, level = ? WHERE id = ?').bind(newXp, newLevel, userId).run();
-    } catch {}
-}
-
-let migrationsChecked = false;
-async function ensureD1Migrations(db) {
-    if (migrationsChecked) return;
-    try {
-        await db.prepare("ALTER TABLE users ADD COLUMN xp INTEGER NOT NULL DEFAULT 0;").run().catch(() => {});
-        await db.prepare("ALTER TABLE users ADD COLUMN level INTEGER NOT NULL DEFAULT 1;").run().catch(() => {});
-        await db.prepare("ALTER TABLE users ADD COLUMN streak INTEGER NOT NULL DEFAULT 0;").run().catch(() => {});
-        await db.prepare("ALTER TABLE users ADD COLUMN last_active_date TEXT;").run().catch(() => {});
-        await db.prepare("ALTER TABLE users ADD COLUMN last_omikuji_date TEXT;").run().catch(() => {});
-        await db.prepare("ALTER TABLE users ADD COLUMN oshi_badge TEXT;").run().catch(() => {});
-        migrationsChecked = true;
+        await db.prepare(`
+            UPDATE users
+            SET xp = xp + ?,
+                level = ((xp + ?) / 25) + 1
+            WHERE id = ?
+        `).bind(xpAmount, xpAmount, userId).run();
     } catch {}
 }
 
@@ -158,22 +145,15 @@ async function getUser(request, db) {
 }
 
 // Helper: Calculate lightweight user perks sync data for Cloudflare D1
+// Uses indexed reply_mentions table to eliminate full table scans (Audit Finding 1 & Recommendation A.2)
 async function getD1UserSyncData(db, userId) {
     if (!userId) return null;
     try {
         const notif = await db.prepare(`
             SELECT COUNT(*) as unread_count
-            FROM replies r
-            JOIN threads t ON t.id = r.thread_id
-            WHERE (r.user_id IS NULL OR r.user_id != ?)
-              AND (
-                t.user_id = ?
-                OR EXISTS (
-                    SELECT 1 FROM replies my_r
-                    WHERE my_r.user_id = ? AND r.comment LIKE '%' || my_r.id || '%'
-                )
-              )
-        `).bind(userId, userId, userId).first();
+            FROM reply_mentions
+            WHERE target_user_id = ? AND is_read = 0
+        `).bind(userId).first();
 
         const watch = await db.prepare('SELECT COUNT(*) as watch_count FROM watchlist WHERE user_id = ?').bind(userId).first();
 
@@ -202,14 +182,33 @@ export async function onRequest(context) {
         });
     }
 
+    // Cloudflare Edge Cache API (Audit Recommendation B.1)
+    const isPublicCacheable = method === 'GET' && (
+        path[0] === 'threads' || 
+        (path[0] === 'thread' && !url.searchParams.has('since')) ||
+        path[0] === 'boards'
+    );
+    let edgeCache = null;
+    let cacheKey = null;
+    try {
+        if (typeof caches !== 'undefined' && caches.default) {
+            edgeCache = caches.default;
+            cacheKey = new Request(request.url, request);
+            if (isPublicCacheable) {
+                const cachedResp = await edgeCache.match(cacheKey);
+                if (cachedResp) {
+                    return cachedResp;
+                }
+            }
+        }
+    } catch (_) {}
+
     const db = getDb(env);
     if (!db) {
         return json({
             error: "Cloudflare D1 binding not found. Please go to Pages Settings > Functions > D1 database bindings, ensure Variable name is 'DB' (uppercase) for both Production and Preview environments, and trigger a new deployment."
         }, 500);
     }
-
-    await ensureD1Migrations(db);
 
     const route = path[0] || '';
     const user = await getUser(request, db);
@@ -721,17 +720,15 @@ export async function onRequest(context) {
                     status: 304,
                     headers: {
                         'ETag': etag,
-                        'Cache-Control': 'no-cache',
+                        'Cache-Control': 'public, max-age=5, stale-while-revalidate=15',
                         'Access-Control-Allow-Origin': '*',
                         'Access-Control-Allow-Headers': '*'
                     }
                 });
             }
 
-            let sql = `
-                SELECT t.*, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count
-                FROM threads t WHERE t.board = ?
-            `;
+            // Denormalized reply_count eliminates correlated count subquery (Audit Finding 3 & Recommendation A.1)
+            let sql = `SELECT t.* FROM threads t WHERE t.board = ?`;
             if (isArchive) {
                 sql += ` AND t.bumped_at < ${cutoff} ORDER BY t.bumped_at DESC LIMIT 100`;
             } else {
@@ -741,9 +738,10 @@ export async function onRequest(context) {
             const list = await db.prepare(sql).bind(board).all();
             const threads = list.results || [];
 
-            // Attach preview replies via single window function query (replaces N+1 loop)
-            if (threads.length > 0) {
-                const threadIds = threads.map(t => t.id);
+            // Preview replies optimization: only query for threads that actually have replies (Audit Finding 4)
+            const threadsWithReplies = threads.filter(t => (t.reply_count || 0) > 0);
+            if (threadsWithReplies.length > 0) {
+                const threadIds = threadsWithReplies.map(t => t.id);
                 const placeholders = threadIds.map(() => '?').join(',');
                 const prev = await db.prepare(`
                     WITH ranked_replies AS (
@@ -770,20 +768,15 @@ export async function onRequest(context) {
             const responseData = { success: true, threads };
             const headers = { 
                 'ETag': etag, 
-                'Cache-Control': 'no-cache',
-                'Access-Control-Expose-Headers': 'ETag, X-Unread-Notifications, X-Watchlist-Count'
+                'Cache-Control': 'public, max-age=5, stale-while-revalidate=15',
+                'Access-Control-Expose-Headers': 'ETag'
             };
 
-            if (user?.user_id) {
-                const sync = await getD1UserSyncData(db, user.user_id);
-                if (sync) {
-                    headers['X-Unread-Notifications'] = String(sync.unread_notifications);
-                    headers['X-Watchlist-Count'] = String(sync.watchlist_count);
-                    responseData.user_sync = sync;
-                }
+            const resp = json(responseData, 200, headers);
+            if (edgeCache && cacheKey) {
+                context.waitUntil(edgeCache.put(cacheKey, resp.clone()));
             }
-
-            return json(responseData, 200, headers);
+            return resp;
         }
 
         // 3. GET /api/thread?id=... (with optional ?since=TIMESTAMP delta updates)
@@ -791,59 +784,68 @@ export async function onRequest(context) {
             const id = url.searchParams.get('id');
             if (!id) return json({ error: 'Missing id' }, 400);
 
+            const since = parseInt(url.searchParams.get('since') || '0', 10);
+
+            // Delta Polling Optimization (Audit Recommendation C.2)
+            if (since > 0) {
+                const repliesRes = await db.prepare('SELECT * FROM replies WHERE thread_id = ? AND created_at > ? ORDER BY created_at ASC').bind(id, since).all();
+                const replies = repliesRes.results || [];
+                if (replies.length === 0) {
+                    return json({
+                        success: true,
+                        thread: null,
+                        replies: [],
+                        is_delta: true,
+                        total_replies: -1
+                    }, 200, { 'Cache-Control': 'no-cache' });
+                }
+                return json({
+                    success: true,
+                    thread: null,
+                    replies,
+                    is_delta: true,
+                    total_replies: -1
+                }, 200, { 'Cache-Control': 'no-cache' });
+            }
+
             const thread = await db.prepare('SELECT * FROM threads WHERE id = ?').bind(id).first();
             if (!thread) return json({ error: 'Not found' }, 404);
 
-            const since = parseInt(url.searchParams.get('since') || '0', 10);
-
-            const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}${since > 0 ? '-s' + since : ''}"`;
+            const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}"`;
             if (request.headers.get('if-none-match') === etag) {
                 return new Response(null, {
                     status: 304,
                     headers: {
                         'ETag': etag,
-                        'Cache-Control': 'no-cache',
+                        'Cache-Control': 'public, max-age=5, stale-while-revalidate=15',
                         'Access-Control-Allow-Origin': '*',
                         'Access-Control-Allow-Headers': '*'
                     }
                 });
             }
 
-            let repliesSql = 'SELECT * FROM replies WHERE thread_id = ?';
-            const params = [id];
-            if (since > 0) {
-                repliesSql += ' AND created_at > ?';
-                params.push(since);
-            }
-            repliesSql += ' ORDER BY created_at ASC';
-
-            const replies = await db.prepare(repliesSql).bind(...params).all();
-            const totalRow = await db.prepare('SELECT COUNT(*) as count FROM replies WHERE thread_id = ?').bind(id).first();
+            const replies = (await db.prepare('SELECT * FROM replies WHERE thread_id = ? ORDER BY created_at ASC').bind(id).all()).results || [];
+            const totalReplies = thread.reply_count || replies.length;
 
             const responseData = { 
                 success: true, 
                 thread, 
-                replies: replies.results || [],
-                is_delta: since > 0,
-                total_replies: totalRow?.count || (replies.results || []).length
+                replies,
+                is_delta: false,
+                total_replies: totalReplies
             };
 
             const headers = { 
                 'ETag': etag, 
-                'Cache-Control': 'no-cache',
-                'Access-Control-Expose-Headers': 'ETag, X-Unread-Notifications, X-Watchlist-Count'
+                'Cache-Control': 'public, max-age=5, stale-while-revalidate=15',
+                'Access-Control-Expose-Headers': 'ETag'
             };
 
-            if (user?.user_id) {
-                const sync = await getD1UserSyncData(db, user.user_id);
-                if (sync) {
-                    headers['X-Unread-Notifications'] = String(sync.unread_notifications);
-                    headers['X-Watchlist-Count'] = String(sync.watchlist_count);
-                    responseData.user_sync = sync;
-                }
+            const resp = json(responseData, 200, headers);
+            if (edgeCache && cacheKey) {
+                context.waitUntil(edgeCache.put(cacheKey, resp.clone()));
             }
-
-            return json(responseData, 200, headers);
+            return resp;
         }
 
         // 4. POST /api/threads
@@ -855,12 +857,15 @@ export async function onRequest(context) {
             const id = '-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
             const now = Date.now();
             const clientIp = request.headers.get('cf-connecting-ip') || 'anon';
+            const posterName = (name?.trim() || 'Anonymous');
+            const posterSubject = (subject?.trim() || '');
+            const posterMedia = (media_url?.trim() || '');
 
             await db.prepare(`
-                INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, user_id, role, display_title, created_at, bumped_at, is_pinned, is_locked)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, user_id, role, display_title, created_at, bumped_at, is_pinned, is_locked, reply_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
             `).bind(
-                id, board, (name?.trim() || 'Anonymous'), (subject?.trim() || ''), comment.trim(), (media_url?.trim() || ''),
+                id, board, posterName, posterSubject, comment.trim(), posterMedia,
                 clientIp, user?.user_id || null, user?.role || null, user?.display_title || null, now, now
             ).run();
 
@@ -868,8 +873,34 @@ export async function onRequest(context) {
                 await awardD1UserXp(db, user.user_id, XP_RULES.THREAD_CREATION);
             }
 
-            const thread = await db.prepare('SELECT * FROM threads WHERE id = ?').bind(id).first();
-            return json({ success: true, thread });
+            // Invalidate edge cache for this board
+            if (edgeCache) {
+                const purgeUrl = new URL(request.url);
+                purgeUrl.pathname = '/api/threads';
+                purgeUrl.search = `?b=${board}`;
+                context.waitUntil(edgeCache.delete(new Request(purgeUrl.toString())));
+            }
+
+            // Construct in memory without redundant SELECT (Audit Recommendation A.5)
+            const createdThread = {
+                id,
+                board,
+                name: posterName,
+                subject: posterSubject,
+                comment: comment.trim(),
+                media_url: posterMedia,
+                ip_hash: clientIp,
+                user_id: user?.user_id || null,
+                role: user?.role || null,
+                display_title: user?.display_title || null,
+                created_at: now,
+                bumped_at: now,
+                is_pinned: 0,
+                is_locked: 0,
+                reply_count: 0
+            };
+
+            return json({ success: true, thread: createdThread });
         }
 
         // 5. POST /api/replies
@@ -885,23 +916,86 @@ export async function onRequest(context) {
             const id = '-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
             const now = Date.now();
             const clientIp = request.headers.get('cf-connecting-ip') || 'anon';
+            const posterName = (name?.trim() || 'Anonymous');
+            const posterMedia = (media_url?.trim() || '');
 
             await db.prepare(`
                 INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).bind(
-                id, thread_id, thread.board, (name?.trim() || 'Anonymous'), comment.trim(), (media_url?.trim() || ''),
+                id, thread_id, thread.board, posterName, comment.trim(), posterMedia,
                 clientIp, user?.user_id || null, user?.role || null, user?.display_title || null, now
             ).run();
 
-            await db.prepare('UPDATE threads SET bumped_at = ? WHERE id = ?').bind(now, thread_id).run();
+            // Bump thread activity and denormalized reply_count (Audit Finding 3 & 5)
+            await db.prepare('UPDATE threads SET reply_count = reply_count + 1, bumped_at = ? WHERE id = ?').bind(now, thread_id).run();
+
+            // Mention and OP notification detection (Audit Finding 1 & Recommendation A.2)
+            try {
+                const targetUserIds = new Set();
+                if (thread.user_id && thread.user_id !== user?.user_id) {
+                    targetUserIds.add(thread.user_id);
+                }
+                const quoteMatches = comment.matchAll(/>>(?:#)?([a-zA-Z0-9_\-]+)/g);
+                for (const match of quoteMatches) {
+                    const rawQuote = match[1];
+                    if (thread.id === rawQuote || thread.id.includes(rawQuote)) {
+                        if (thread.user_id && thread.user_id !== user?.user_id) {
+                            targetUserIds.add(thread.user_id);
+                        }
+                    }
+                    const quotedReply = await db.prepare(`
+                        SELECT user_id FROM replies 
+                        WHERE thread_id = ? AND (id = ? OR id LIKE ?)
+                        LIMIT 1
+                    `).bind(thread_id, rawQuote, '%' + rawQuote + '%').first();
+                    if (quotedReply && quotedReply.user_id && quotedReply.user_id !== user?.user_id) {
+                        targetUserIds.add(quotedReply.user_id);
+                    }
+                }
+
+                for (const targetUid of targetUserIds) {
+                    const mentionId = 'm_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
+                    await db.prepare(`
+                        INSERT OR IGNORE INTO reply_mentions (id, source_reply_id, target_user_id, thread_id, created_at, is_read)
+                        VALUES (?, ?, ?, ?, ?, 0)
+                    `).bind(mentionId, id, targetUid, thread_id, now).run().catch(() => {});
+                }
+            } catch (mErr) {}
 
             if (user?.user_id) {
                 await awardD1UserXp(db, user.user_id, XP_RULES.REPLY_CREATION);
             }
 
-            const reply = await db.prepare('SELECT * FROM replies WHERE id = ?').bind(id).first();
-            return json({ success: true, reply });
+            // Invalidate edge cache for this thread and board
+            if (edgeCache) {
+                const threadUrl = new URL(request.url);
+                threadUrl.pathname = '/api/thread';
+                threadUrl.search = `?id=${thread_id}`;
+                context.waitUntil(edgeCache.delete(new Request(threadUrl.toString())));
+
+                const boardUrl = new URL(request.url);
+                boardUrl.pathname = '/api/threads';
+                boardUrl.search = `?b=${thread.board}`;
+                context.waitUntil(edgeCache.delete(new Request(boardUrl.toString())));
+            }
+
+            // Construct in memory without redundant SELECT (Audit Recommendation A.5)
+            const createdReply = {
+                id,
+                thread_id,
+                board: thread.board,
+                name: posterName,
+                comment: comment.trim(),
+                media_url: posterMedia,
+                ip_hash: clientIp,
+                user_id: user?.user_id || null,
+                role: user?.role || null,
+                display_title: user?.display_title || null,
+                created_at: now
+            };
+
+            return json({ success: true, reply: createdReply });
         }
 
         // 6. POST /api/auth/register
@@ -983,25 +1077,29 @@ export async function onRequest(context) {
             });
         }
 
-        // 8c. User Perks: Notifications
+        // 8c. User Perks: Notifications (Indexed reply_mentions query - Audit Finding 1 & Recommendation A.2)
         if (route === 'user' && path[1] === 'notifications' && method === 'GET') {
             if (!user) return json({ success: true, notifications: [] });
             const uid = user.user_id;
             const notifs = (await db.prepare(`
-                SELECT r.id, r.thread_id, r.board, r.name, r.comment, r.created_at, t.subject
-                FROM replies r
-                JOIN threads t ON t.id = r.thread_id
-                WHERE (r.user_id IS NULL OR r.user_id != ?)
-                  AND (
-                    t.user_id = ?
-                    OR EXISTS (
-                        SELECT 1 FROM replies my_r
-                        WHERE my_r.user_id = ? AND r.comment LIKE '%' || my_r.id || '%'
-                    )
-                  )
-                ORDER BY r.created_at DESC LIMIT 30
-            `).bind(uid, uid, uid).all()).results || [];
+                SELECT m.id as mention_id, m.is_read, r.id, r.thread_id, r.board, r.name, r.comment, r.created_at, t.subject
+                FROM reply_mentions m
+                JOIN replies r ON r.id = m.source_reply_id
+                JOIN threads t ON t.id = m.thread_id
+                WHERE m.target_user_id = ?
+                ORDER BY m.created_at DESC LIMIT 30
+            `).bind(uid).all()).results || [];
+
+            await db.prepare('UPDATE reply_mentions SET is_read = 1 WHERE target_user_id = ? AND is_read = 0').bind(uid).run().catch(() => {});
+
             return json({ success: true, notifications: notifs });
+        }
+
+        // 8c2. Dedicated User Sync Endpoint (Decoupled from content polling - Audit Recommendation A.3)
+        if (route === 'user' && path[1] === 'sync' && method === 'GET') {
+            if (!user) return json({ success: true, user_sync: null });
+            const sync = await getD1UserSyncData(db, user.user_id);
+            return json({ success: true, user_sync: sync });
         }
 
         // 8d. User Perks: Watchlist
@@ -1132,7 +1230,11 @@ export async function onRequest(context) {
                 if (body.type === 'thread') {
                     await db.prepare('DELETE FROM threads WHERE id = ?').bind(body.id).run();
                 } else if (body.type === 'reply') {
+                    const rep = await db.prepare('SELECT thread_id FROM replies WHERE id = ?').bind(body.id).first();
                     await db.prepare('DELETE FROM replies WHERE id = ?').bind(body.id).run();
+                    if (rep) {
+                        await db.prepare('UPDATE threads SET reply_count = MAX(0, reply_count - 1) WHERE id = ?').bind(rep.thread_id).run();
+                    }
                 }
                 return json({ success: true });
             }

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS threads (
     display_title TEXT,
     is_pinned INTEGER DEFAULT 0,
     is_locked INTEGER DEFAULT 0,
+    reply_count INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     bumped_at INTEGER NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -56,7 +57,22 @@ CREATE TABLE IF NOT EXISTS replies (
 );
 
 CREATE INDEX IF NOT EXISTS idx_replies_thread_created ON replies(thread_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_replies_thread_created_desc ON replies(thread_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_replies_user_id ON replies(user_id);
+
+CREATE TABLE IF NOT EXISTS reply_mentions (
+    id TEXT PRIMARY KEY,
+    source_reply_id TEXT,
+    target_user_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    is_read INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_mentions_target_unread ON reply_mentions(target_user_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_mentions_target_created ON reply_mentions(target_user_id, created_at DESC);
 
 
 INSERT OR IGNORE INTO users (id, username, password_hash, role, display_title, created_at) VALUES ('user_admin_01', 'admin', '62dc8f73f44b13a45827211db1e056b7:10c9b56fd0f7b65a54cdb94c2fff1ef1b87eaa5917d8dc726ec456d02b719a1be7961e6f377410bc000de17bcfed3575727d1b11afbf3ee837182a171a08808b', 'admin', 'Admin 🛡️', 1790654700092);

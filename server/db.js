@@ -18,7 +18,7 @@ db.exec('PRAGMA foreign_keys = ON;');
 const schemaSql = fs.readFileSync(path.join(rootDir, 'db', 'schema.sql'), 'utf-8');
 db.exec(schemaSql);
 
-// Safe auto-migrations for gamification fields on users table
+// Safe auto-migrations for gamification fields and performance denormalizations
 try {
     const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
     if (!userCols.includes('xp')) db.exec("ALTER TABLE users ADD COLUMN xp INTEGER NOT NULL DEFAULT 0;");
@@ -27,6 +27,31 @@ try {
     if (!userCols.includes('last_active_date')) db.exec("ALTER TABLE users ADD COLUMN last_active_date TEXT;");
     if (!userCols.includes('last_omikuji_date')) db.exec("ALTER TABLE users ADD COLUMN last_omikuji_date TEXT;");
     if (!userCols.includes('oshi_badge')) db.exec("ALTER TABLE users ADD COLUMN oshi_badge TEXT;");
+
+    const threadCols = db.prepare("PRAGMA table_info(threads)").all().map(c => c.name);
+    if (!threadCols.includes('reply_count')) {
+        db.exec("ALTER TABLE threads ADD COLUMN reply_count INTEGER NOT NULL DEFAULT 0;");
+        db.exec(`
+            UPDATE threads
+            SET reply_count = (SELECT COUNT(*) FROM replies WHERE replies.thread_id = threads.id);
+        `);
+    }
+
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS reply_mentions (
+            id TEXT PRIMARY KEY,
+            source_reply_id TEXT,
+            target_user_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
+            FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_mentions_target_unread ON reply_mentions(target_user_id, is_read);
+        CREATE INDEX IF NOT EXISTS idx_mentions_target_created ON reply_mentions(target_user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_replies_thread_created_desc ON replies(thread_id, created_at DESC);
+    `);
 } catch (err) {
     console.error('[DB] Auto-migration error:', err);
 }

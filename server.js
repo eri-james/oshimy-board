@@ -19,7 +19,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || process.env.APP_PORT || 3000;
+const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -66,22 +66,15 @@ function authMiddleware(req, res, next) {
 app.use(authMiddleware);
 
 // Helper: Calculate lightweight user perks sync data (unread notifs & watchlist count)
+// Uses indexed reply_mentions table to eliminate full table scans (Audit Finding 1 & Recommendation A.2)
 function getUserSyncData(userId) {
     if (!userId) return null;
     try {
         const notifRow = db.prepare(`
             SELECT COUNT(*) as unread_count
-            FROM replies r
-            JOIN threads t ON t.id = r.thread_id
-            WHERE (r.user_id IS NULL OR r.user_id != ?)
-              AND (
-                t.user_id = ?
-                OR EXISTS (
-                    SELECT 1 FROM replies my_r
-                    WHERE my_r.user_id = ? AND r.comment LIKE '%' || my_r.id || '%'
-                )
-              )
-        `).get(userId, userId, userId);
+            FROM reply_mentions
+            WHERE target_user_id = ? AND is_read = 0
+        `).get(userId);
 
         const watchRow = db.prepare(`
             SELECT COUNT(*) as watch_count
@@ -697,15 +690,14 @@ app.get('/api/threads', (req, res) => {
         const etag = `W/"th-${board}-${isArchive ? 'arch' : 'act'}-${count}-${maxBump}"`;
 
         res.set('ETag', etag);
-        res.set('Cache-Control', 'no-cache');
+        res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=15');
 
         if (req.headers['if-none-match'] === etag) {
             return res.status(304).end();
         }
 
         let query = `
-            SELECT t.*, 
-                (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count
+            SELECT t.*
             FROM threads t
             WHERE t.board = ?
         `;
@@ -719,9 +711,10 @@ app.get('/api/threads', (req, res) => {
 
         const threads = db.prepare(query).all(board);
 
-        // Fix N+1 query loop: Fetch 3 preview replies for ALL threads in a single query using window function
-        if (threads.length > 0) {
-            const threadIds = threads.map(t => t.id);
+        // Preview replies optimization: only query for threads that actually have replies (Audit Finding 4)
+        const threadsWithReplies = threads.filter(t => (t.reply_count || 0) > 0);
+        if (threadsWithReplies.length > 0) {
+            const threadIds = threadsWithReplies.map(t => t.id);
             const placeholders = threadIds.map(() => '?').join(',');
             const previewReplies = db.prepare(`
                 WITH ranked_replies AS (
@@ -748,18 +741,7 @@ app.get('/api/threads', (req, res) => {
             }
         }
 
-        const responseData = { success: true, threads };
-        if (req.user) {
-            const sync = getUserSyncData(req.user.user_id);
-            if (sync) {
-                res.set('Access-Control-Expose-Headers', 'ETag, X-Unread-Notifications, X-Watchlist-Count');
-                res.set('X-Unread-Notifications', String(sync.unread_notifications));
-                res.set('X-Watchlist-Count', String(sync.watchlist_count));
-                responseData.user_sync = sync;
-            }
-        }
-
-        res.json(responseData);
+        res.json({ success: true, threads });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -773,58 +755,65 @@ app.get('/api/thread', (req, res) => {
     }
 
     try {
+        const since = req.query.since ? parseInt(req.query.since, 10) : 0;
+
+        // Delta Polling Optimization (Audit Recommendation C.2)
+        if (since > 0) {
+            const replies = db.prepare(`
+                SELECT * FROM replies 
+                WHERE thread_id = ? AND created_at > ?
+                ORDER BY created_at ASC
+            `).all(threadId, since);
+
+            if (replies.length === 0) {
+                // 0 new replies: return empty delta immediately without reading thread or counting total replies
+                return res.json({
+                    success: true,
+                    thread: null,
+                    replies: [],
+                    is_delta: true,
+                    total_replies: -1
+                });
+            }
+
+            return res.json({
+                success: true,
+                thread: null,
+                replies,
+                is_delta: true,
+                total_replies: -1
+            });
+        }
+
         const thread = db.prepare('SELECT * FROM threads WHERE id = ?').get(threadId);
         if (!thread) {
             return res.status(404).json({ error: 'Thread not found' });
         }
 
-        const since = req.query.since ? parseInt(req.query.since, 10) : 0;
-
-        // HTTP Caching & 304 Not Modified based on thread bumped_at, lock/pin status, and optional since param
-        const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}${since > 0 ? '-s' + since : ''}"`;
+        // HTTP Caching & 304 Not Modified based on thread bumped_at, lock/pin status
+        const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}"`;
         res.set('ETag', etag);
-        res.set('Cache-Control', 'no-cache');
+        res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=15');
 
         if (req.headers['if-none-match'] === etag) {
             return res.status(304).end();
         }
 
-        let replies;
-        if (since > 0) {
-            replies = db.prepare(`
-                SELECT * FROM replies 
-                WHERE thread_id = ? AND created_at > ?
-                ORDER BY created_at ASC
-            `).all(threadId, since);
-        } else {
-            replies = db.prepare(`
-                SELECT * FROM replies 
-                WHERE thread_id = ? 
-                ORDER BY created_at ASC
-            `).all(threadId);
-        }
+        const replies = db.prepare(`
+            SELECT * FROM replies 
+            WHERE thread_id = ? 
+            ORDER BY created_at ASC
+        `).all(threadId);
 
-        const totalReplies = db.prepare('SELECT COUNT(*) as count FROM replies WHERE thread_id = ?').get(threadId)?.count || replies.length;
+        const totalReplies = thread.reply_count || replies.length;
 
-        const responseData = { 
+        res.json({ 
             success: true, 
             thread, 
             replies,
-            is_delta: since > 0,
+            is_delta: false,
             total_replies: totalReplies
-        };
-
-        if (req.user) {
-            const sync = getUserSyncData(req.user.user_id);
-            if (sync) {
-                res.set('Access-Control-Expose-Headers', 'ETag, X-Unread-Notifications, X-Watchlist-Count');
-                res.set('X-Unread-Notifications', String(sync.unread_notifications));
-                res.set('X-Watchlist-Count', String(sync.watchlist_count));
-                responseData.user_sync = sync;
-            }
-        }
-
-        res.json(responseData);
+        });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -860,7 +849,23 @@ app.post('/api/threads', (req, res) => {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
         `).run(id, board, posterName, posterSubject, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now, now);
 
-        const created = db.prepare('SELECT * FROM threads WHERE id = ?').get(id);
+        const created = {
+            id,
+            board,
+            name: posterName,
+            subject: posterSubject,
+            comment: comment.trim(),
+            media_url: posterMedia,
+            ip_hash: ipHash,
+            user_id: userId,
+            role,
+            display_title: displayTitle,
+            created_at: now,
+            bumped_at: now,
+            is_pinned: 0,
+            is_locked: 0,
+            reply_count: 0
+        };
 
         if (userId) {
             awardUserXP(db, userId, XP_RULES.THREAD_CREATION);
@@ -909,10 +914,61 @@ app.post('/api/replies', (req, res) => {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(id, thread_id, thread.board, posterName, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now);
 
-        // Bump thread activity
-        db.prepare('UPDATE threads SET bumped_at = ? WHERE id = ?').run(now, thread_id);
+        // Bump thread activity and denormalized reply_count (Audit Finding 3 & 5)
+        db.prepare('UPDATE threads SET reply_count = reply_count + 1, bumped_at = ? WHERE id = ?').run(now, thread_id);
 
-        const created = db.prepare('SELECT * FROM replies WHERE id = ?').get(id);
+        // Mention and OP notification detection (Audit Finding 1 & Recommendation A.2)
+        try {
+            const targetUserIds = new Set();
+            if (thread.user_id && thread.user_id !== userId) {
+                targetUserIds.add(thread.user_id);
+            }
+            const quoteMatches = comment.matchAll(/>>(?:#)?([a-zA-Z0-9_\-]+)/g);
+            for (const match of quoteMatches) {
+                const rawQuote = match[1];
+                if (thread.id === rawQuote || thread.id.includes(rawQuote)) {
+                    if (thread.user_id && thread.user_id !== userId) {
+                        targetUserIds.add(thread.user_id);
+                    }
+                }
+                const quotedReply = db.prepare(`
+                    SELECT user_id FROM replies 
+                    WHERE thread_id = ? AND (id = ? OR id LIKE ?)
+                    LIMIT 1
+                `).get(thread_id, rawQuote, '%' + rawQuote + '%');
+                if (quotedReply && quotedReply.user_id && quotedReply.user_id !== userId) {
+                    targetUserIds.add(quotedReply.user_id);
+                }
+            }
+
+            if (targetUserIds.size > 0) {
+                const insertMention = db.prepare(`
+                    INSERT OR IGNORE INTO reply_mentions (id, source_reply_id, target_user_id, thread_id, created_at, is_read)
+                    VALUES (?, ?, ?, ?, ?, 0)
+                `);
+                for (const targetUid of targetUserIds) {
+                    const mentionId = 'm_' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
+                    insertMention.run(mentionId, id, targetUid, thread_id, now);
+                }
+            }
+        } catch (mErr) {
+            console.warn('[Mentions] Error registering reply mention:', mErr);
+        }
+
+        // Construct reply in memory - eliminates redundant read query (Audit Recommendation A.5)
+        const created = {
+            id,
+            thread_id,
+            board: thread.board,
+            name: posterName,
+            comment: comment.trim(),
+            media_url: posterMedia,
+            ip_hash: ipHash,
+            user_id: userId,
+            role,
+            display_title: displayTitle,
+            created_at: now
+        };
 
         if (userId) {
             awardUserXP(db, userId, XP_RULES.REPLY_CREATION);
@@ -1038,23 +1094,28 @@ app.get('/api/user/notifications', (req, res) => {
     try {
         const uid = req.user.user_id;
         const notifications = db.prepare(`
-            SELECT r.id, r.thread_id, r.board, r.name, r.comment, r.created_at, t.subject
-            FROM replies r
-            JOIN threads t ON t.id = r.thread_id
-            WHERE (r.user_id IS NULL OR r.user_id != ?)
-              AND (
-                t.user_id = ?
-                OR EXISTS (
-                    SELECT 1 FROM replies my_r
-                    WHERE my_r.user_id = ? AND r.comment LIKE '%' || my_r.id || '%'
-                )
-              )
-            ORDER BY r.created_at DESC LIMIT 30
-        `).all(uid, uid, uid);
+            SELECT m.id as mention_id, m.is_read, r.id, r.thread_id, r.board, r.name, r.comment, r.created_at, t.subject
+            FROM reply_mentions m
+            JOIN replies r ON r.id = m.source_reply_id
+            JOIN threads t ON t.id = m.thread_id
+            WHERE m.target_user_id = ?
+            ORDER BY m.created_at DESC LIMIT 30
+        `).all(uid);
+
+        // Mark unread mentions as read
+        db.prepare('UPDATE reply_mentions SET is_read = 1 WHERE target_user_id = ? AND is_read = 0').run(uid);
+
         res.json({ success: true, notifications });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+
+// 9c2. Dedicated User Sync Endpoint (Decoupled from content polling, Audit Recommendation A.3)
+app.get('/api/user/sync', (req, res) => {
+    if (!req.user) return res.json({ success: true, user_sync: null });
+    const sync = getUserSyncData(req.user.user_id);
+    res.json({ success: true, user_sync: sync });
 });
 
 // 9d. User Perks: Watchlist
@@ -1210,7 +1271,11 @@ app.post('/api/admin/delete', (req, res) => {
             db.prepare('DELETE FROM threads WHERE id = ?').run(id);
             res.json({ success: true, message: 'Thread deleted.' });
         } else if (type === 'reply') {
+            const rep = db.prepare('SELECT thread_id FROM replies WHERE id = ?').get(id);
             db.prepare('DELETE FROM replies WHERE id = ?').run(id);
+            if (rep) {
+                db.prepare('UPDATE threads SET reply_count = MAX(0, reply_count - 1) WHERE id = ?').run(rep.thread_id);
+            }
             res.json({ success: true, message: 'Reply deleted.' });
         } else {
             res.status(400).json({ error: 'Invalid delete target type' });

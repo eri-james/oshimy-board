@@ -84,29 +84,19 @@ export function drawRandomOmikuji() {
 }
 
 /**
- * Safely awards XP to a user in SQLite and updates their level.
+ * Safely awards XP to a user in SQLite and updates their level in a single atomic query.
+ * Eliminates redundant read query on post/reply submission (Audit Recommendation A.4).
  */
 export function awardUserXP(db, userId, xpAmount) {
     if (!userId || !xpAmount || xpAmount <= 0) return null;
     try {
-        const user = db.prepare('SELECT xp, level FROM users WHERE id = ?').get(userId);
-        if (!user) return null;
-
-        const oldXp = user.xp || 0;
-        const oldLevel = user.level || calculateLevel(oldXp);
-        const newXp = oldXp + xpAmount;
-        const newLevel = calculateLevel(newXp);
-
-        db.prepare('UPDATE users SET xp = ?, level = ? WHERE id = ?').run(newXp, newLevel, userId);
-
-        const rank = getRank(newLevel);
-        return {
-            xp: newXp,
-            level: newLevel,
-            rankTitle: rank.title,
-            rankBadge: rank.badge,
-            leveledUp: newLevel > oldLevel
-        };
+        db.prepare(`
+            UPDATE users
+            SET xp = xp + ?,
+                level = ((xp + ?) / 25) + 1
+            WHERE id = ?
+        `).run(xpAmount, xpAmount, userId);
+        return true;
     } catch (err) {
         console.error('[Gamification] awardUserXP error:', err);
         return null;

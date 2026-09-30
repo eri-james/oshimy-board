@@ -856,6 +856,9 @@ async function loadThreadView(threadId, isSilent = false) {
         if (isSilent && data.notModified) {
             return; // 304 Not Modified: server confirmed zero changes during silent background update
         }
+        if (data.is_delta && (!data.replies || data.replies.length === 0)) {
+            return; // Delta Polling Optimization (Audit Recommendation C.2): 0 new replies, skip DOM overhead
+        }
         const th = data.thread;
         const replies = data.replies || [];
 
@@ -1017,7 +1020,7 @@ async function loadThreadView(threadId, isSilent = false) {
             for (const r of replies) {
                 if (!document.getElementById(`post_${r.id}`)) {
                     const temp = document.createElement('div');
-                    temp.innerHTML = renderReplyCard(r, th.id, false);
+                    temp.innerHTML = renderReplyCard(r, (th ? th.id : threadId), false);
                     const el = temp.firstElementChild;
                     repliesContainer.appendChild(el);
                     newElements.push(el);
@@ -1900,7 +1903,45 @@ async function syncUserPerks() {
         console.warn('Failed to sync (You) posts:', e);
     }
 
-    // 2. Watchlist sync
+    // 1. Fast, lightweight user sync endpoint (Audit Recommendation A.3)
+    try {
+        const syncData = await apiFetch('/user/sync');
+        if (syncData.success && syncData.user_sync) {
+            const badge = document.getElementById('replyBadge');
+            if (badge) {
+                const unread = syncData.user_sync.unread_notifications || 0;
+                if (unread > 0) {
+                    badge.innerText = unread;
+                    badge.style.display = 'inline';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+            const wBadge = document.getElementById('watchlistBadge');
+            if (wBadge) wBadge.innerText = `(${syncData.user_sync.watchlist_count || 0})`;
+        }
+    } catch (_) {}
+
+    // 2. Cross-device (You) posts sync
+    try {
+        const postData = await apiFetch('/user/my-posts');
+        if (postData.success && Array.isArray(postData.post_ids)) {
+            let updated = false;
+            for (const pid of postData.post_ids) {
+                if (!MY_POSTS.includes(pid)) {
+                    MY_POSTS.push(pid);
+                    updated = true;
+                }
+            }
+            if (updated) {
+                localStorage.setItem('my_posts', JSON.stringify(MY_POSTS));
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to sync (You) posts:', e);
+    }
+
+    // 3. Watchlist sync
     try {
         const watchData = await apiFetch('/user/watchlist');
         if (watchData.success && Array.isArray(watchData.watchlist)) {
@@ -1911,27 +1952,15 @@ async function syncUserPerks() {
     } catch (e) {
         console.warn('Failed to sync watchlist:', e);
     }
-
-    // 3. Reply notifications sync
-    try {
-        const notifData = await apiFetch('/user/notifications');
-        if (notifData.success && Array.isArray(notifData.notifications)) {
-            const lastSeen = parseInt(localStorage.getItem('myvt_last_seen_notif') || '0', 10);
-            const unread = notifData.notifications.filter(n => n.created_at > lastSeen).length;
-            const badge = document.getElementById('replyBadge');
-            if (badge) {
-                if (unread > 0) {
-                    badge.innerText = unread;
-                    badge.style.display = 'inline';
-                } else {
-                    badge.style.display = 'none';
-                }
-            }
-        }
-    } catch (e) {
-        console.warn('Failed to sync notifications:', e);
-    }
 }
+
+// Decoupled notification & perks sync on tab focus and 60-second low-frequency interval (Audit Recommendation A.3)
+window.addEventListener('focus', () => {
+    if (currentUser) syncUserPerks();
+});
+setInterval(() => {
+    if (currentUser && !document.hidden) syncUserPerks();
+}, 60000);
 
 async function toggleWatch(threadId) {
     if (!currentUser) {
@@ -2097,29 +2126,96 @@ function formatTimeAgo(ts) {
     return `${Math.floor(diff / 86400)}d ago`;
 }
 
-// --- 4CHAN-STYLE AUTO-POLLING ---
-function startAutoUpdate() {
-    if (autoUpdateTimer) clearInterval(autoUpdateTimer);
-    autoUpdateTimer = setInterval(() => {
+// --- ADAPTIVE AUTO-POLLING WITH EXPONENTIAL BACKOFF (Audit Recommendation C.1) ---
+let lastUserInteraction = Date.now();
+let activePollTimeout = null;
+
+function recordUserActivity() {
+    const now = Date.now();
+    const wasIdle = (now - lastUserInteraction) > 120000;
+    lastUserInteraction = now;
+    if (wasIdle && isAutoUpdateEnabled) {
+        // User returned from idle: wake up immediately and reschedule at active interval
+        scheduleNextAutoUpdate(true);
+    }
+}
+
+['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'].forEach(evt => {
+    window.addEventListener(evt, recordUserActivity, { passive: true });
+});
+
+function getAdaptiveInterval() {
+    const idleMs = Date.now() - lastUserInteraction;
+    // 30s for thread view, 45s for board view (Audit Recommendation C.1)
+    const baseInterval = currentThreadId ? 30000 : 45000;
+    if (idleMs > 300000) {
+        // Inactive > 5 minutes: 120s
+        return 120000;
+    } else if (idleMs > 120000) {
+        // Inactive > 2 minutes: 60s
+        return 60000;
+    }
+    return baseInterval;
+}
+
+function updateAutoUpdateToggleLabel(intervalMs) {
+    const btn = document.getElementById('autoUpdateToggle');
+    if (!btn) return;
+    if (!isAutoUpdateEnabled) {
+        btn.innerText = "Auto-Update: Off";
+        btn.style.color = "#888";
+    } else {
+        const sec = Math.round(intervalMs / 1000);
+        const isIdle = intervalMs > (currentThreadId ? 30000 : 45000);
+        btn.innerText = isIdle ? `Auto-Update: On (Idle ${sec}s)` : `Auto-Update: On (${sec}s)`;
+        btn.style.color = "var(--main-accent)";
+    }
+}
+
+function scheduleNextAutoUpdate(immediate = false) {
+    if (activePollTimeout) {
+        clearTimeout(activePollTimeout);
+        activePollTimeout = null;
+    }
+    if (!isAutoUpdateEnabled) {
+        updateAutoUpdateToggleLabel(0);
+        return;
+    }
+
+    const interval = getAdaptiveInterval();
+    updateAutoUpdateToggleLabel(interval);
+
+    const delay = immediate ? 500 : interval;
+    activePollTimeout = setTimeout(async () => {
         if (!isAutoUpdateEnabled) return;
-        if (document.hidden) return; // Don't poll if browser tab is in background
-
-        // Detect if archive view
-        const isArch = new URLSearchParams(window.location.search).get('view') === 'archive';
-
-        if (currentThreadId) {
-            loadThreadView(currentThreadId, true); // true = silent background update (uses delta updates!)
-        } else if (currentBoard) {
-            loadBoardView(isArch, true); // true = silent background update
+        if (!document.hidden) {
+            const isArch = new URLSearchParams(window.location.search).get('view') === 'archive';
+            try {
+                if (currentThreadId) {
+                    await loadThreadView(currentThreadId, true);
+                } else if (currentBoard) {
+                    await loadBoardView(isArch, true);
+                }
+            } catch (_) {}
         }
-    }, 15000); // 15 seconds
+        scheduleNextAutoUpdate();
+    }, delay);
+}
+
+function startAutoUpdate() {
+    scheduleNextAutoUpdate();
 }
 
 function toggleAutoUpdate() {
     isAutoUpdateEnabled = !isAutoUpdateEnabled;
-    const btn = document.getElementById('autoUpdateToggle');
-    if (btn) {
-        btn.innerText = isAutoUpdateEnabled ? "Auto-Update: On (15s)" : "Auto-Update: Off";
-        btn.style.color = isAutoUpdateEnabled ? "var(--main-accent)" : "#888";
+    if (isAutoUpdateEnabled) {
+        lastUserInteraction = Date.now();
+        scheduleNextAutoUpdate(true);
+    } else {
+        if (activePollTimeout) {
+            clearTimeout(activePollTimeout);
+            activePollTimeout = null;
+        }
+        updateAutoUpdateToggleLabel(0);
     }
 }
