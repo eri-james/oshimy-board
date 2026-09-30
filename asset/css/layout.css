@@ -162,6 +162,33 @@ body.night-mode .media-help-drawer .media-help-content code {
 .name { color: #2e7d32; font-weight: bold; }
 .time, .post-id { color: #666; font-size: 0.85em; }
 
+.post-link-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 3px;
+    padding: 1px 4px;
+    border-radius: 4px;
+    color: var(--text-color);
+    opacity: 0.6;
+    text-decoration: none;
+    font-size: 0.9em;
+    cursor: pointer;
+    transition: opacity 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+    vertical-align: middle;
+}
+
+.post-link-btn:hover {
+    opacity: 1;
+    color: var(--main-accent);
+    background-color: rgba(0, 0, 0, 0.06);
+    transform: scale(1.1);
+}
+
+body.night-mode .post-link-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
 .reply-link {
     margin-left: auto;
     background: var(--header-color);

@@ -87,6 +87,8 @@ function router() {
         targetThreadId = urlParam.get('t') || urlParam.get('thread');
         if (hash.startsWith("#post_")) {
             postPart = hash.replace("#post_", "");
+        } else if (urlParam.get('r') || urlParam.get('reply')) {
+            postPart = urlParam.get('r') || urlParam.get('reply');
         }
     }
 
@@ -745,7 +747,7 @@ function renderThreadPreview(th) {
                         ${roleBadge}
                         <span class="name">${escapeHtml(th.name || 'Anonymous')}</span>
                         <span class="date">${dateStr}</span>
-                        <span class="post-id">No. <a href="javascript:void(0)" onclick="quotePost('${th.id}', '${th.id}')">${th.id.substring(1, 9)}</a></span>
+                        <span class="post-id">No. <a href="?b=${currentBoard}&t=${th.id}#post_${th.id}" onclick="quotePost('${th.id}', '${th.id}', event)" title="Quote post (Click) / Copy link (Right-click)">${th.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${th.id}', '${th.id}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a></span>
                         ${youTag}
                         <a href="?b=${currentBoard}#thread_${th.id}" class="reply-link">[Reply ➜]</a>
                         ${watchControl}
@@ -937,7 +939,7 @@ async function loadThreadView(threadId, isSilent = false) {
                             ${roleBadge}
                             <span class="name">${escapeHtml(th.name || 'Anonymous')}</span>
                             <span class="date">${dateStr}</span>
-                            <span class="post-id">No. <a href="javascript:void(0)" onclick="quotePost('${th.id}', '${th.id}')">${th.id.substring(1, 9)}</a></span>
+                            <span class="post-id">No. <a href="?b=${currentBoard}&t=${th.id}#post_${th.id}" onclick="quotePost('${th.id}', '${th.id}', event)" title="Quote post (Click) / Copy link (Right-click)">${th.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${th.id}', '${th.id}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a></span>
                             ${youTag}
                             ${watchControl}
                             ${modControls}
@@ -1048,7 +1050,7 @@ function renderReplyCard(r, threadId, isPreview = false) {
     const optClass = r.is_optimistic ? ' reply-optimistic' : '';
     const postIdHtml = r.is_optimistic 
         ? `<span class="posting-badge">Posting</span>` 
-        : `No. <a href="javascript:void(0)" onclick="quotePost('${r.id}', '${threadId}')">${r.id.substring(1, 9)}</a>`;
+        : `No. <a href="?b=${currentBoard}&t=${threadId}#post_${r.id}" onclick="quotePost('${r.id}', '${threadId}', event)" title="Quote post (Click) / Copy link (Right-click)">${r.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${r.id}', '${threadId}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a>`;
 
     return `
         <div class="reply-container${optClass}" id="post_${r.id}" data-created-at="${r.created_at || 0}" style="margin-bottom: 8px;">
@@ -1388,7 +1390,7 @@ async function submitReplyCore({ threadId, comment, name, media_url, source = 'm
                 if (postHeader) {
                     const idLabel = postHeader.querySelector('.post-id');
                     if (idLabel) {
-                        idLabel.innerHTML = `No. <a href="javascript:void(0)" onclick="quotePost('${res.reply.id}', '${threadId}')">${res.reply.id.substring(1, 9)}</a> <span style="font-weight:bold; font-style:italic; font-size:0.9em;">(You)</span>`;
+                        idLabel.innerHTML = `No. <a href="?b=${currentBoard}&t=${threadId}#post_${res.reply.id}" onclick="quotePost('${res.reply.id}', '${threadId}', event)" title="Quote post (Click) / Copy link (Right-click)">${res.reply.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${res.reply.id}', '${threadId}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a> <span style="font-weight:bold; font-style:italic; font-size:0.9em;">(You)</span>`;
                     }
                 }
                 generateBacklinks();

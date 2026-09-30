@@ -43,7 +43,41 @@ function formatComment(text) {
     return formatted;
 }
 
-function quotePost(postId, threadId) {
+function copyPostLink(postId, threadId, board = null, event = null) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    const targetBoard = board || (typeof currentBoard !== 'undefined' ? currentBoard : '');
+    const origin = window.location.origin;
+    const url = `${origin}/?b=${targetBoard}&t=${threadId}#post_${postId}`;
+
+    navigator.clipboard.writeText(url).then(() => {
+        if (typeof showToast === 'function') {
+            showToast(`Post link copied to clipboard!`);
+        }
+    }).catch(() => {
+        const dummy = document.createElement('textarea');
+        dummy.value = url;
+        document.body.appendChild(dummy);
+        dummy.select();
+        document.execCommand('copy');
+        document.body.removeChild(dummy);
+        if (typeof showToast === 'function') {
+            showToast(`Post link copied to clipboard!`);
+        }
+    });
+}
+
+function quotePost(postId, threadId, event = null) {
+    // If user held Ctrl / Cmd or middle-clicked, let normal link behavior handle opening/copying
+    if (event && (event.ctrlKey || event.metaKey || event.button === 1)) {
+        return;
+    }
+    if (event) {
+        event.preventDefault();
+    }
+
     // If not in the thread, navigate to it first
     if (!currentThreadId || currentThreadId !== threadId) {
         sessionStorage.setItem('pending_quote', '>>' + postId);
