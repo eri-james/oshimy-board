@@ -554,17 +554,20 @@ function smartDiffBoard(container, threads) {
 
             // Update preview replies if new preview replies were posted
             const repliesContainer = card.querySelector('.replies');
-            if (repliesContainer && th.preview_replies && th.preview_replies.length > 0) {
-                const existingReplyIds = new Set(
-                    Array.from(card.querySelectorAll('.reply-container')).map(el => el.id.replace('post_', ''))
-                );
-                for (const r of th.preview_replies) {
-                    if (!existingReplyIds.has(r.id)) {
-                        const tempDiv = document.createElement('div');
-                        tempDiv.innerHTML = renderReplyCard(r, th.id, true);
-                        const newReplyEl = tempDiv.firstElementChild;
-                        repliesContainer.appendChild(newReplyEl);
-                        newReplyEl.classList.add('new-reply-flash');
+            if (repliesContainer) {
+                if (!th.preview_replies || th.preview_replies.length === 0) {
+                    if (repliesContainer.children.length > 0) {
+                        repliesContainer.innerHTML = '';
+                    }
+                } else {
+                    const existingReplyIds = Array.from(card.querySelectorAll('.reply-container')).map(el => el.id.replace('post_', ''));
+                    const targetReplyIds = th.preview_replies.map(r => r.id);
+                    if (existingReplyIds.join(',') !== targetReplyIds.join(',')) {
+                        let newRepliesHtml = '';
+                        for (const r of th.preview_replies) {
+                            newRepliesHtml += renderReplyCard(r, th.id, true);
+                        }
+                        repliesContainer.innerHTML = newRepliesHtml;
                     }
                 }
             }

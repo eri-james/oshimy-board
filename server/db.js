@@ -31,11 +31,12 @@ try {
     const threadCols = db.prepare("PRAGMA table_info(threads)").all().map(c => c.name);
     if (!threadCols.includes('reply_count')) {
         db.exec("ALTER TABLE threads ADD COLUMN reply_count INTEGER NOT NULL DEFAULT 0;");
-        db.exec(`
-            UPDATE threads
-            SET reply_count = (SELECT COUNT(*) FROM replies WHERE replies.thread_id = threads.id);
-        `);
     }
+    // Always ensure denormalized reply_count is accurately synced with replies table
+    db.exec(`
+        UPDATE threads
+        SET reply_count = (SELECT COUNT(*) FROM replies WHERE replies.thread_id = threads.id);
+    `);
 
     db.exec(`
         CREATE TABLE IF NOT EXISTS reply_mentions (
@@ -105,8 +106,8 @@ export function initSeedData() {
                 const boards = data.boards || {};
                 
                 const insertThread = db.prepare(`
-                    INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, created_at, bumped_at, is_pinned, is_locked)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                    INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, created_at, bumped_at, is_pinned, is_locked, reply_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
                 `);
 
                 const insertReply = db.prepare(`
@@ -128,6 +129,8 @@ export function initSeedData() {
                         const ipHash = hashIp(thread.ip);
                         const createdAt = thread.timestamp || Date.now();
                         const bumpedAt = thread.lastUpdated || createdAt;
+                        const replies = thread.replies || {};
+                        const rCount = Object.keys(replies).length;
 
                         insertThread.run(
                             threadId,
@@ -138,14 +141,14 @@ export function initSeedData() {
                             media,
                             ipHash,
                             createdAt,
-                            bumpedAt
+                            bumpedAt,
+                            rCount
                         );
                         threadCount++;
 
                         const escapeSql = (s) => (s ? s.replace(/'/g, "''").replace(/\r/g, '').replace(/\n/g, "' || char(10) || '") : '');
-                        sqlStatements.push(`INSERT OR IGNORE INTO threads (id, board, name, subject, comment, media_url, ip_hash, created_at, bumped_at, is_pinned, is_locked) VALUES ('${escapeSql(threadId)}', '${escapeSql(boardId)}', '${escapeSql(name)}', '${escapeSql(subject)}', '${escapeSql(comment)}', '${escapeSql(media)}', '${escapeSql(ipHash)}', ${createdAt}, ${bumpedAt}, 0, 0);`);
+                        sqlStatements.push(`INSERT OR IGNORE INTO threads (id, board, name, subject, comment, media_url, ip_hash, created_at, bumped_at, is_pinned, is_locked, reply_count) VALUES ('${escapeSql(threadId)}', '${escapeSql(boardId)}', '${escapeSql(name)}', '${escapeSql(subject)}', '${escapeSql(comment)}', '${escapeSql(media)}', '${escapeSql(ipHash)}', ${createdAt}, ${bumpedAt}, 0, 0, ${rCount});`);
 
-                        const replies = thread.replies || {};
                         for (const [replyId, reply] of Object.entries(replies)) {
                             const rName = reply.name || 'Anonymous';
                             const rComment = reply.comment || '';
@@ -169,6 +172,12 @@ export function initSeedData() {
                         }
                     }
                 }
+
+                // Ensure all thread reply counts are fully synced after seeding
+                db.exec(`
+                    UPDATE threads
+                    SET reply_count = (SELECT COUNT(*) FROM replies WHERE replies.thread_id = threads.id);
+                `);
 
                 // Write Cloudflare D1 import.sql file without inline comments
                 const d1ImportSql = [

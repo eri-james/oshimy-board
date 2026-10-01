@@ -796,7 +796,7 @@ app.get('/api/threads', (req, res) => {
         }
 
         let query = `
-            SELECT t.*
+            SELECT t.*, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count
             FROM threads t
             WHERE t.board = ?
         `;
@@ -810,7 +810,12 @@ app.get('/api/threads', (req, res) => {
 
         const threads = db.prepare(query).all(board);
 
-        // Preview replies optimization: only query for threads that actually have replies (Audit Finding 4)
+        // Initialize preview_replies array on all threads
+        for (const th of threads) {
+            th.preview_replies = [];
+        }
+
+        // Preview replies: query the latest preview replies for threads that have replies
         const threadsWithReplies = threads.filter(t => (t.reply_count || 0) > 0);
         if (threadsWithReplies.length > 0) {
             const threadIds = threadsWithReplies.map(t => t.id);
@@ -836,7 +841,9 @@ app.get('/api/threads', (req, res) => {
             }
 
             for (const th of threads) {
-                th.preview_replies = replyMap.get(th.id) || [];
+                if (replyMap.has(th.id)) {
+                    th.preview_replies = replyMap.get(th.id);
+                }
             }
         }
 

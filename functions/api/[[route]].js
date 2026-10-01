@@ -826,8 +826,7 @@ export async function onRequest(context) {
                 });
             }
 
-            // Denormalized reply_count eliminates correlated count subquery (Audit Finding 3 & Recommendation A.1)
-            let sql = `SELECT t.* FROM threads t WHERE t.board = ?`;
+            let sql = `SELECT t.*, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count FROM threads t WHERE t.board = ?`;
             if (isArchive) {
                 sql += ` AND t.bumped_at < ${cutoff} ORDER BY t.bumped_at DESC LIMIT 100`;
             } else {
@@ -837,7 +836,11 @@ export async function onRequest(context) {
             const list = await db.prepare(sql).bind(board).all();
             const threads = list.results || [];
 
-            // Preview replies optimization: only query for threads that actually have replies (Audit Finding 4)
+            for (const th of threads) {
+                th.preview_replies = [];
+            }
+
+            // Preview replies: query latest replies for threads with replies
             const threadsWithReplies = threads.filter(t => (t.reply_count || 0) > 0);
             if (threadsWithReplies.length > 0) {
                 const threadIds = threadsWithReplies.map(t => t.id);
@@ -860,7 +863,9 @@ export async function onRequest(context) {
                     replyMap.get(r.thread_id).push(r);
                 }
                 for (const th of threads) {
-                    th.preview_replies = replyMap.get(th.id) || [];
+                    if (replyMap.has(th.id)) {
+                        th.preview_replies = replyMap.get(th.id);
+                    }
                 }
             }
 
