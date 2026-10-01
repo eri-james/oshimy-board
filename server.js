@@ -1926,6 +1926,147 @@ function escapeJson(str) {
     return String(str).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '');
 }
 
+// Helper: Resolve any image, video, Pixiv, Twitter/X, Reddit, YouTube URL for rich Discord & messenger embeds
+function resolveSocialMedia(rawUrl, origin, cacheContext = null) {
+    if (!rawUrl || typeof rawUrl !== 'string') {
+        return { type: 'none', imageUrl: null, videoUrl: null, videoType: null, source: null };
+    }
+    const cleanUrl = rawUrl.trim();
+    if (!cleanUrl) {
+        return { type: 'none', imageUrl: null, videoUrl: null, videoType: null, source: null };
+    }
+
+    // 1. Pixiv Artworks (illust_id or artworks/ID)
+    const pixivMatch = cleanUrl.match(/(?:pixiv\.net\/(?:en\/)?artworks\/|illust_id=)(\d+)/i) || cleanUrl.match(/pixiv\.re\/(\d+)/i);
+    if (pixivMatch) {
+        const id = pixivMatch[1];
+        return {
+            type: 'image',
+            imageUrl: `https://pixiv.re/${id}.jpg`,
+            videoUrl: null,
+            videoType: null,
+            source: 'Pixiv'
+        };
+    }
+
+    // 2. YouTube (watch?v=, youtu.be, shorts, embed, live)
+    const ytMatch = cleanUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/))([a-zA-Z0-9_-]{11})/i);
+    if (ytMatch) {
+        const ytId = ytMatch[1];
+        return {
+            type: 'video',
+            imageUrl: `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`,
+            videoUrl: `https://www.youtube.com/embed/${ytId}`,
+            videoType: 'text/html',
+            source: 'YouTube'
+        };
+    }
+
+    // 3. Twitter / X (x.com or twitter.com status)
+    const xMatch = cleanUrl.match(/(?:twitter\.com|x\.com|vxtwitter\.com|fxtwitter\.com|fixupx\.com)\/([a-zA-Z0-9_]+)\/status\/(\d+)/i);
+    if (xMatch) {
+        const handle = xMatch[1];
+        const statusId = xMatch[2];
+        return {
+            type: 'image',
+            imageUrl: `https://d.fxtwitter.com/${handle}/status/${statusId}.jpg`,
+            videoUrl: null,
+            videoType: null,
+            source: 'Twitter / X'
+        };
+    }
+
+    // 4. Reddit
+    // 4a. Direct Reddit video (v.redd.it or reddit.com/video/)
+    const redditVidMatch = cleanUrl.match(/(?:v\.redd\.it|reddit\.com\/video\/)([a-zA-Z0-9_-]+)/i);
+    if (redditVidMatch) {
+        const vidId = redditVidMatch[1];
+        return {
+            type: 'video',
+            imageUrl: null,
+            videoUrl: `https://v.redd.it/${vidId}/DASH_720.mp4`,
+            videoType: 'video/mp4',
+            source: 'Reddit Video'
+        };
+    }
+    // 4b. Reddit post with comments
+    const redditPostMatch = cleanUrl.match(/(?:reddit\.com|vxreddit\.com|rxddit\.com)\/r\/([a-zA-Z0-9_]+)(?:\/comments\/([a-zA-Z0-9]+))?/i);
+    if (redditPostMatch) {
+        const sub = redditPostMatch[1];
+        const postId = redditPostMatch[2];
+        let cached = null;
+        if (cacheContext && typeof cacheContext.get === 'function') {
+            cached = cacheContext.get(cleanUrl);
+        }
+        if (cached) {
+            if (cached.mediaType === 'video' && cached.videoUrl) {
+                return {
+                    type: 'video',
+                    imageUrl: cached.thumbnailUrl || cached.imageUrl || null,
+                    videoUrl: cached.videoUrl,
+                    videoType: 'video/mp4',
+                    source: `Reddit r/${sub}`
+                };
+            }
+            if (cached.imageUrl) {
+                return {
+                    type: 'image',
+                    imageUrl: cached.imageUrl,
+                    videoUrl: null,
+                    videoType: null,
+                    source: `Reddit r/${sub}`
+                };
+            }
+        }
+        return {
+            type: 'image',
+            imageUrl: postId ? `https://redditez.com/r/${sub}/comments/${postId}.jpg` : null,
+            videoUrl: null,
+            videoType: null,
+            source: `Reddit r/${sub}`
+        };
+    }
+
+    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream)
+    if (/\.(mp4|webm|mov)(?:\?.*)?$/i.test(cleanUrl) || cleanUrl.includes('/api/proxy/stream')) {
+        let absVideoUrl = cleanUrl;
+        if (cleanUrl.startsWith('/') && origin) {
+            absVideoUrl = `${origin}${cleanUrl}`;
+        }
+        return {
+            type: 'video',
+            imageUrl: null,
+            videoUrl: absVideoUrl,
+            videoType: cleanUrl.includes('.webm') ? 'video/webm' : 'video/mp4',
+            source: 'Video'
+        };
+    }
+
+    // 6. Direct Audio Files (.mp3, .wav, .ogg, .m4a)
+    if (/\.(mp3|wav|ogg|m4a)(?:\?.*)?$/i.test(cleanUrl)) {
+        return {
+            type: 'audio',
+            imageUrl: null,
+            videoUrl: null,
+            videoType: null,
+            source: 'Audio'
+        };
+    }
+
+    // 7. Direct Images (i.ibb.co, catbox, imgur, or common extensions)
+    let absImgUrl = cleanUrl;
+    if (cleanUrl.startsWith('/') && origin) {
+        absImgUrl = `${origin}${cleanUrl}`;
+    }
+    return {
+        type: 'image',
+        imageUrl: absImgUrl,
+        videoUrl: null,
+        videoType: null,
+        source: 'Image'
+    };
+}
+
 const SFW_BOARDS = {
     'myvt':  { title: '/myvt/ - MY VTuber', description: 'Malaysian Virtual YouTuber discussions, streams, talents, and community banter.' },
     'vt':    { title: '/vt/ - SEA & Global VTuber', description: 'Southeast Asian and international VTuber discussion, talents, and agency updates.' },
@@ -2025,7 +2166,7 @@ app.get('*', (req, res) => {
 
         if (threadId) {
             try {
-                const thread = db.prepare('SELECT id, board, subject, comment, media_url, created_at, reply_count FROM threads WHERE id = ?').get(threadId);
+                const thread = db.prepare('SELECT id, board, subject, comment, media_url, created_at, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = threads.id) as reply_count FROM threads WHERE id = ?').get(threadId);
                 if (thread) {
                     const replyId = req.query.r || req.query.reply;
                     let reply = null;
@@ -2035,28 +2176,52 @@ app.get('*', (req, res) => {
                         } catch (_) {}
                     }
 
-                    let pageTitle, pageDesc, embedMedia, canonicalUrl;
+                    const rawMedia = (reply && reply.media_url) ? reply.media_url : (thread.media_url || null);
+                    const resolvedMedia = resolveSocialMedia(rawMedia, origin, redditPostCache);
+                    const displayImage = resolvedMedia.imageUrl || currentBanner;
+
+                    let pageTitle, pageDesc, canonicalUrl;
+                    const siteName = `OshiMY - /${thread.board}/`;
+
+                    const threadNum = thread.id.startsWith('-') ? thread.id.substring(1, 9) : thread.id.substring(0, 8);
 
                     if (reply) {
                         // Embed specific reply!
-                        const cleanReplyComment = (reply.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
-                        const cleanSubject = thread.subject && thread.subject.trim() ? `${thread.subject.trim()} - ` : '';
-                        pageTitle = `Reply >>${reply.id.substring(1, 9)} - ${cleanSubject}/${thread.board}/ | OshiMY`;
-                        pageDesc = cleanReplyComment || `Reply by ${reply.name || 'Anonymous'} in /${thread.board}/ thread #${thread.id.substring(1, 9)}`;
-                        // If reply has its own media, use it; otherwise fallback to thread OP media or banner
-                        embedMedia = (reply.media_url && !reply.media_url.endsWith('.mp3'))
-                            ? reply.media_url 
-                            : ((thread.media_url && !thread.media_url.endsWith('.mp3')) ? thread.media_url : currentBanner);
+                        const replyNum = reply.id.startsWith('-') ? reply.id.substring(1, 9) : reply.id.substring(0, 8);
+                        const threadSubj = thread.subject && thread.subject.trim() ? `"${thread.subject.trim()}"` : `Thread #${threadNum}`;
+                        pageTitle = `💬 Reply >>${replyNum} on ${threadSubj} (/${thread.board}/) | OshiMY`;
+
+                        const cleanReplyComment = (reply.comment || '')
+                            .replace(/<br\s*[\/]?>/gi, ' ')
+                            .replace(/<[^>]*>/g, '')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .slice(0, 220);
+
+                        pageDesc = cleanReplyComment 
+                            ? `"${cleanReplyComment}"\n\n👤 ${reply.name || 'Anonymous'} • Replying to ${threadSubj}`
+                            : `Reply >>${replyNum} by ${reply.name || 'Anonymous'} in /${thread.board}/ thread #${threadNum}`;
+
                         canonicalUrl = `${origin}/?b=${thread.board}&t=${thread.id}&r=${reply.id}`;
                     } else {
                         // Standard Thread Embed
-                        const cleanComment = (thread.comment || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 180);
-                        const subjectTitle = thread.subject && thread.subject.trim() 
-                            ? `${thread.subject.trim()} - ` 
-                            : (cleanComment ? `${cleanComment.slice(0, 40)}... - ` : '');
-                        pageTitle = `${subjectTitle}/${thread.board}/ | OshiMY`;
-                        pageDesc = cleanComment || `Thread on /${thread.board}/ - OshiMY Malaysian VTuber & Otaku Imageboard`;
-                        embedMedia = (thread.media_url && !thread.media_url.endsWith('.mp3')) ? thread.media_url : currentBanner;
+                        const threadSubj = thread.subject && thread.subject.trim();
+                        pageTitle = threadSubj 
+                            ? `📌 ${threadSubj} - /${thread.board}/ | OshiMY`
+                            : `🧵 /${thread.board}/ Thread #${threadNum} | OshiMY`;
+
+                        const cleanComment = (thread.comment || '')
+                            .replace(/<br\s*[\/]?>/gi, ' ')
+                            .replace(/<[^>]*>/g, '')
+                            .replace(/\s+/g, ' ')
+                            .trim()
+                            .slice(0, 220);
+
+                        const repliesLabel = thread.reply_count === 1 ? '1 reply' : `${thread.reply_count || 0} replies`;
+                        pageDesc = cleanComment
+                            ? `"${cleanComment}"\n\n💬 ${repliesLabel} • 👤 ${thread.name || 'Anonymous'} • /${thread.board}/`
+                            : `Thread #${threadNum} by ${thread.name || 'Anonymous'} in /${thread.board}/ (${repliesLabel})`;
+
                         canonicalUrl = `${origin}/?b=${thread.board}&t=${thread.id}`;
                     }
 
@@ -2064,14 +2229,36 @@ app.get('*', (req, res) => {
                     html = html
                         .replace(/<title>.*?<\/title>/, `<title>${escapeHtml(pageTitle)}</title>`)
                         .replace(/<meta name="description" content=".*?">/, `<meta name="description" content="${escapeAttr(pageDesc)}">`)
+                        .replace(/<meta property="og:site_name" content=".*?">/, `<meta property="og:site_name" content="${escapeAttr(siteName)}">`)
                         .replace(/<meta property="og:title" content=".*?">/, `<meta property="og:title" content="${escapeAttr(pageTitle)}">`)
                         .replace(/<meta property="og:description" content=".*?">/, `<meta property="og:description" content="${escapeAttr(pageDesc)}">`)
-                        .replace(/<meta property="og:image" content=".*?">/, `<meta property="og:image" content="${escapeAttr(embedMedia)}">`)
+                        .replace(/<meta property="og:image" content=".*?">/, `<meta property="og:image" content="${escapeAttr(displayImage)}">`)
                         .replace(/<meta property="og:url" content=".*?">/, `<meta property="og:url" content="${escapeAttr(canonicalUrl)}">`)
                         .replace(/<meta name="twitter:title" content=".*?">/, `<meta name="twitter:title" content="${escapeAttr(pageTitle)}">`)
                         .replace(/<meta name="twitter:description" content=".*?">/, `<meta name="twitter:description" content="${escapeAttr(pageDesc)}">`)
-                        .replace(/<meta name="twitter:image" content=".*?">/, `<meta name="twitter:image" content="${escapeAttr(embedMedia)}">`)
+                        .replace(/<meta name="twitter:image" content=".*?">/, `<meta name="twitter:image" content="${escapeAttr(displayImage)}">`)
                         .replace(/<link rel="canonical" href=".*?">/, `<link rel="canonical" href="${escapeAttr(canonicalUrl)}">`);
+
+                    // Video tags injection for Discord player
+                    let extraMeta = '';
+                    if (resolvedMedia.type === 'video' && resolvedMedia.videoUrl) {
+                        html = html
+                            .replace(/<meta property="og:type" content=".*?">/, `<meta property="og:type" content="video.other">`)
+                            .replace(/<meta name="twitter:card" content=".*?">/, `<meta name="twitter:card" content="player">`);
+                        extraMeta += `
+    <meta property="og:video" content="${escapeAttr(resolvedMedia.videoUrl)}">
+    <meta property="og:video:secure_url" content="${escapeAttr(resolvedMedia.videoUrl)}">
+    <meta property="og:video:type" content="${escapeAttr(resolvedMedia.videoType || 'video/mp4')}">
+    <meta property="og:video:width" content="1280">
+    <meta property="og:video:height" content="720">
+    <meta name="twitter:player" content="${escapeAttr(resolvedMedia.videoUrl)}">
+    <meta name="twitter:player:width" content="1280">
+    <meta name="twitter:player:height" content="720">`;
+                    } else {
+                        html = html
+                            .replace(/<meta property="og:type" content=".*?">/, `<meta property="og:type" content="article">`)
+                            .replace(/<meta name="twitter:card" content=".*?">/, `<meta name="twitter:card" content="summary_large_image">`);
+                    }
 
                     // Add DiscussionForumPosting / Comment Schema.org LD-JSON
                     const jsonLdType = reply ? "Comment" : "DiscussionForumPosting";
@@ -2084,7 +2271,7 @@ app.get('*', (req, res) => {
       "@type": "${jsonLdType}",
       "headline": "${escapeJson(jsonLdTitle)}",
       "text": "${escapeJson(jsonLdBody.slice(0, 300))}",
-      "image": "${escapeJson(embedMedia)}",
+      "image": "${escapeJson(displayImage)}",
       "datePublished": "${new Date((reply ? reply.created_at : thread.created_at) || Date.now()).toISOString()}",
       "url": "${escapeJson(canonicalUrl)}",
       "publisher": {
@@ -2094,7 +2281,7 @@ app.get('*', (req, res) => {
       }
     }
     </script>`;
-                    html = html.replace('</head>', `${threadJsonLd}\n</head>`);
+                    html = html.replace('</head>', `${extraMeta}\n${threadJsonLd}\n</head>`);
 
                     res.setHeader('Content-Type', 'text/html; charset=utf-8');
                     return res.send(html);
@@ -2111,10 +2298,12 @@ app.get('*', (req, res) => {
             const pageTitle = `${b.title} | OshiMY`;
             const pageDesc = `${b.description} Participate in anonymous discussions on /${boardKey}/ at OshiMY.`;
             const canonicalUrl = `${origin}/?b=${boardKey}`;
+            const siteName = `OshiMY - /${boardKey}/`;
 
             html = html
                 .replace(/<title>.*?<\/title>/, `<title>${escapeHtml(pageTitle)}</title>`)
                 .replace(/<meta name="description" content=".*?">/, `<meta name="description" content="${escapeAttr(pageDesc)}">`)
+                .replace(/<meta property="og:site_name" content=".*?">/, `<meta property="og:site_name" content="${escapeAttr(siteName)}">`)
                 .replace(/<meta property="og:title" content=".*?">/, `<meta property="og:title" content="${escapeAttr(pageTitle)}">`)
                 .replace(/<meta property="og:description" content=".*?">/, `<meta property="og:description" content="${escapeAttr(pageDesc)}">`)
                 .replace(/<meta property="og:image" content=".*?">/, `<meta property="og:image" content="${escapeAttr(currentBanner)}">`)

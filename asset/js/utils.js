@@ -92,7 +92,7 @@ function copyPostLink(postId, threadId, board = null, event = null) {
 
     navigator.clipboard.writeText(url).then(() => {
         if (typeof showToast === 'function') {
-            showToast(`Post link copied to clipboard!`);
+            showToast(`Link copied! Ready to share on Discord / WhatsApp`);
         }
     }).catch(() => {
         const dummy = document.createElement('textarea');
@@ -102,7 +102,7 @@ function copyPostLink(postId, threadId, board = null, event = null) {
         document.execCommand('copy');
         document.body.removeChild(dummy);
         if (typeof showToast === 'function') {
-            showToast(`Post link copied to clipboard!`);
+            showToast(`Link copied! Ready to share on Discord / WhatsApp`);
         }
     });
 }
