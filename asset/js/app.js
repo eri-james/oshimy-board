@@ -5,7 +5,33 @@
 
 let userWatchlistIds = new Set();
 
-// --- NSFW GATE ---
+// --- NSFW GATE & GLOBAL BLUR TOGGLE ---
+let nsfwBlurEnabled = localStorage.getItem('oshimy_nsfw_blur') !== 'off';
+
+function applyNsfwBlurState() {
+    const isNsfwBoard = Boolean(currentBoard && BOARDS[currentBoard] && BOARDS[currentBoard].type === 'nsfw');
+    if (isNsfwBoard && !nsfwBlurEnabled) {
+        document.body.classList.add('nsfw-blur-off');
+    } else {
+        document.body.classList.remove('nsfw-blur-off');
+    }
+}
+
+function toggleNsfwBlur() {
+    nsfwBlurEnabled = !nsfwBlurEnabled;
+    localStorage.setItem('oshimy_nsfw_blur', nsfwBlurEnabled ? 'on' : 'off');
+    applyNsfwBlurState();
+    renderBoardNav();
+    if (typeof showToast === 'function') {
+        showToast(
+            nsfwBlurEnabled
+                ? 'NSFW Blur: ON (Hover media to reveal)'
+                : 'NSFW Blur: OFF (All media unblurred)',
+            2500
+        );
+    }
+}
+
 function checkNSFWGate() {
     if (currentBoard && BOARDS[currentBoard] && BOARDS[currentBoard].type === 'nsfw') {
         if (!sessionStorage.getItem('nsfw_consent')) {
@@ -115,6 +141,7 @@ function router() {
             } else {
                 document.body.classList.remove('night-mode');
             }
+            applyNsfwBlurState();
         }
 
         if (postPart) {
@@ -128,6 +155,7 @@ function router() {
 
     // 2. HOME PAGE (No Board Selected)
     if (!currentBoard || !BOARDS[currentBoard]) {
+        document.body.classList.remove('nsfw-blur-off');
         if (homeView) homeView.style.display = "block";
         if (boardView) boardView.style.display = "none";
         if (threadView) threadView.style.display = "none";
@@ -135,6 +163,7 @@ function router() {
         if (topDivider) topDivider.style.display = "none";
         document.getElementById('boardTitle').innerText = "OshiMY - Portal";
         document.title = "OshiMY - Malaysian VTuber & Otaku Imageboard";
+        renderBoardNav();
         loadPortalStats();
         return;
     }
@@ -150,6 +179,7 @@ function router() {
     if (BOARDS[currentBoard].type === 'nsfw') {
         document.body.classList.add('night-mode');
     }
+    applyNsfwBlurState();
 
     // Check Gate
     if (!checkNSFWGate()) return;
@@ -208,6 +238,21 @@ function renderBoardNav() {
         const archLabel = isArch ? '⚡ Active' : '📦 Archive';
         const archHref = isArch ? `?b=${currentBoard}` : `?b=${currentBoard}&view=archive`;
         html += ` [ <a href="${archHref}" style="opacity:0.85; font-style:italic;">${archLabel}</a> ]`;
+
+        if (currentType === 'nsfw') {
+            const blurStateLabel = nsfwBlurEnabled ? 'Blur: ON' : 'Blur: OFF';
+            const btnActiveClass = nsfwBlurEnabled ? '' : ' blur-off-active';
+            const btnTitle = nsfwBlurEnabled
+                ? 'NSFW Blur is ON (Hover media to reveal). Click to unblur all media.'
+                : 'NSFW Blur is OFF (All media visible). Click to re-enable media blur.';
+            html += ` <button type="button" id="nsfwBlurToggleBtn" class="nsfw-blur-toggle-btn${btnActiveClass}" onclick="toggleNsfwBlur()" title="${btnTitle}" aria-pressed="${!nsfwBlurEnabled}">
+                <svg class="nsfw-eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                <span>${blurStateLabel}</span>
+            </button>`;
+        }
     }
 
     navContainer.innerHTML = html;
@@ -463,6 +508,10 @@ function renderCatalogGrid(threads) {
     }
 
     grid.innerHTML = html;
+
+    if (typeof hydratePixivEmbeds === 'function') hydratePixivEmbeds();
+    if (typeof hydrateTwitterEmbeds === 'function') hydrateTwitterEmbeds();
+    if (typeof hydrateRedditEmbeds === 'function') hydrateRedditEmbeds();
 }
 
 function getCatalogThumbnail(mediaUrl) {
@@ -480,10 +529,26 @@ function getCatalogThumbnail(mediaUrl) {
         return `<img src="${thumb}" onerror="if(this.src!=='${jpgFallback}')this.src='${jpgFallback}';" class="catalog-thumb" alt="YouTube Thumbnail" loading="lazy" decoding="async">`;
     }
     if (media.type === 'x') {
-        return `<div class="catalog-placeholder-icon" style="color:#1DA1F2;">𝕏</div>`;
+        const cleanHandle = media.handle || 'i';
+        return `
+            <div class="x-placeholder" data-tweet-id="${media.id}" data-tweet-handle="${escapeHtml(cleanHandle)}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                <div class="tweet-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                    <div class="catalog-placeholder-icon" style="color:#1DA1F2;">𝕏</div>
+                </div>
+            </div>
+        `;
     }
-    if (media.type === 'reddit' || media.type === 'reddit_video') {
-        return `<div class="catalog-placeholder-icon" style="color:#FF4500;">🤖</div>`;
+    if (media.type === 'reddit') {
+        return `
+            <div class="reddit-placeholder" data-reddit-url="${escapeHtml(media.url)}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                <div class="reddit-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                    <div class="catalog-placeholder-icon" style="color:#FF4500;">🤖</div>
+                </div>
+            </div>
+        `;
+    }
+    if (media.type === 'reddit_video') {
+        return `<div class="catalog-placeholder-icon" style="color:#FF4500;">🎥</div>`;
     }
     if (media.type === 'pixiv') {
         const thumb = `https://pixiv.re/${media.id}.jpg`;
@@ -495,7 +560,7 @@ function getCatalogThumbnail(mediaUrl) {
         return `<img src="${escapeHtml(primarySrc)}" class="catalog-thumb" alt="Pixiv Image" loading="lazy" decoding="async" onerror="if(this.dataset.triedHelper!=='true'){this.dataset.triedHelper='true';this.src='${escapeHtml(helperFallback)}';}else{this.onerror=null;this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\' style=\\'color:#0096fa;\\'>🎨</div>';}">`;
     }
     if (media.type === 'video') {
-        return `<div class="catalog-placeholder-icon">🎥</div>`;
+        return `<video src="${escapeHtml(media.url)}#t=0.001" preload="metadata" muted playsinline class="catalog-thumb" style="pointer-events:none;"></video>`;
     }
     if (media.type === 'audio') {
         return `<div class="catalog-placeholder-icon">🎵</div>`;
@@ -1114,6 +1179,8 @@ async function loadThreadView(threadId, isSilent = false) {
             } else {
                 document.body.classList.remove('night-mode');
             }
+            applyNsfwBlurState();
+            renderBoardNav();
         }
 
         // Keep browser URL clean and easily shareable for Discord/social previews

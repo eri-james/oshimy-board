@@ -25,24 +25,123 @@ body.night-mode .home-container { background-color: #2b2b2b; color: #ccc; border
 body.night-mode .ins-card { background: #333; border-color: #555; }
 
 /* --- NSFW BLUR EFFECTS --- */
-/* Apply heavy blur to all thumbnails in NSFW mode */
-body.night-mode .thread-image,
-body.night-mode .media-container img,
-body.night-mode .media-container video,
-body.night-mode .file-placeholder {
-    filter: blur(30px);
-    transition: filter 0.3s ease, transform 0.3s ease;
-    opacity: 0.7;
+/* Top Bar NSFW Blur Toggle Button (Eye Open Icon) */
+.nsfw-blur-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 6px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    border: 1.5px solid #ff0000;
+    background: rgba(255, 0, 0, 0.14);
+    color: #ffffff;
+    font-size: 0.85em;
+    font-weight: 800;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+    white-space: nowrap;
 }
 
-/* Reveal on Hover (PC) */
-body.night-mode .thread-image:hover,
-body.night-mode .media-container:hover img,
-body.night-mode .media-container:hover video,
-body.night-mode .media-container:hover .file-placeholder {
-    filter: blur(0);
-    opacity: 1;
+.nsfw-blur-toggle-btn:hover {
+    background: rgba(255, 0, 0, 0.28);
+    border-color: #ff4d4d;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 10px rgba(255, 0, 0, 0.35);
+}
+
+.nsfw-blur-toggle-btn.blur-off-active {
+    background: #ff0000;
+    border-color: #ffffff;
+    color: #ffffff;
+    box-shadow: 0 0 12px rgba(255, 0, 0, 0.6);
+}
+
+.nsfw-blur-toggle-btn .nsfw-eye-icon {
+    width: 15px;
+    height: 15px;
+    stroke: currentColor;
+    flex-shrink: 0;
+    transition: transform 0.2s ease;
+}
+
+.nsfw-blur-toggle-btn:hover .nsfw-eye-icon {
+    transform: scale(1.1);
+}
+
+/* Apply heavy blur to all thumbnails, embeds (Reddit/X/Pixiv/YouTube), and Catalog tiles in NSFW mode when blur is ON */
+body.night-mode:not(.nsfw-blur-off) .thread-image,
+body.night-mode:not(.nsfw-blur-off) .media-container img,
+body.night-mode:not(.nsfw-blur-off) .media-container video,
+body.night-mode:not(.nsfw-blur-off) .file-placeholder .tweet-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .file-placeholder .pixiv-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .file-placeholder .reddit-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .catalog-thumb,
+body.night-mode:not(.nsfw-blur-off) .catalog-thumb-container img,
+body.night-mode:not(.nsfw-blur-off) .catalog-thumb-container video,
+body.night-mode:not(.nsfw-blur-off) .catalog-thumb-container .tweet-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .catalog-thumb-container .pixiv-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .catalog-thumb-container .reddit-thumb-slot {
+    filter: blur(26px);
+    transition: filter 0.26s ease, opacity 0.26s ease, transform 0.26s ease;
+    opacity: 0.72;
+}
+
+/* Reveal on Hover (PC) - Works seamlessly across standard images, videos, Reddit/X/Pixiv embeds, and Catalog View tiles */
+body.night-mode:not(.nsfw-blur-off) .thread-image:hover,
+body.night-mode:not(.nsfw-blur-off) .media-container:hover,
+body.night-mode:not(.nsfw-blur-off) .media-container:hover .thread-image,
+body.night-mode:not(.nsfw-blur-off) .media-container:hover img,
+body.night-mode:not(.nsfw-blur-off) .media-container:hover video,
+body.night-mode:not(.nsfw-blur-off) .media-container:hover .tweet-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .media-container:hover .pixiv-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .media-container:hover .reddit-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .file-placeholder:hover,
+body.night-mode:not(.nsfw-blur-off) .file-placeholder:hover .thread-image,
+body.night-mode:not(.nsfw-blur-off) .file-placeholder:hover img,
+body.night-mode:not(.nsfw-blur-off) .file-placeholder:hover video,
+body.night-mode:not(.nsfw-blur-off) .file-placeholder:hover .tweet-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .file-placeholder:hover .pixiv-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .file-placeholder:hover .reddit-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .catalog-tile:hover .catalog-thumb,
+body.night-mode:not(.nsfw-blur-off) .catalog-tile:hover .thread-image,
+body.night-mode:not(.nsfw-blur-off) .catalog-tile:hover .catalog-thumb-container img,
+body.night-mode:not(.nsfw-blur-off) .catalog-tile:hover .catalog-thumb-container video,
+body.night-mode:not(.nsfw-blur-off) .catalog-tile:hover .catalog-thumb-container .tweet-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .catalog-tile:hover .catalog-thumb-container .pixiv-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .catalog-tile:hover .catalog-thumb-container .reddit-thumb-slot,
+body.night-mode:not(.nsfw-blur-off) .catalog-thumb-container:hover .catalog-thumb,
+body.night-mode:not(.nsfw-blur-off) .catalog-thumb-container:hover img,
+body.night-mode:not(.nsfw-blur-off) .catalog-thumb-container:hover video {
+    filter: blur(0) !important;
+    opacity: 1 !important;
     transform: scale(1.02);
+}
+
+/* Global Blur OFF state (when toggled via the top Eye button) */
+body.night-mode.nsfw-blur-off .thread-image,
+body.night-mode.nsfw-blur-off .media-container,
+body.night-mode.nsfw-blur-off .media-container img,
+body.night-mode.nsfw-blur-off .media-container video,
+body.night-mode.nsfw-blur-off .file-placeholder,
+body.night-mode.nsfw-blur-off .file-placeholder .tweet-thumb-slot,
+body.night-mode.nsfw-blur-off .file-placeholder .pixiv-thumb-slot,
+body.night-mode.nsfw-blur-off .file-placeholder .reddit-thumb-slot,
+body.night-mode.nsfw-blur-off .catalog-thumb,
+body.night-mode.nsfw-blur-off .catalog-thumb-container img,
+body.night-mode.nsfw-blur-off .catalog-thumb-container video,
+body.night-mode.nsfw-blur-off .catalog-thumb-container .tweet-thumb-slot,
+body.night-mode.nsfw-blur-off .catalog-thumb-container .pixiv-thumb-slot,
+body.night-mode.nsfw-blur-off .catalog-thumb-container .reddit-thumb-slot {
+    filter: blur(0) !important;
+    opacity: 1 !important;
+}
+
+/* Keep Catalog reply count badge crisp above blurred catalog thumbnails */
+body.night-mode .catalog-badge-overlay {
+    z-index: 5;
+    filter: blur(0) !important;
 }
 
 /* Video Indicator: Keep Play Button Overlay clearly visible above blurred media */
