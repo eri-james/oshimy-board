@@ -17,17 +17,68 @@ function getVxRedditUrl(url) {
     return cleanUrl.replace(/https?:\/\/(?:www\.|old\.|new\.|m\.|sh\.)?reddit\.com/i, 'https://vxreddit.com');
 }
 
+function isSpoilerMediaUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    return /(?:^spoiler:|#spoiler$)/i.test(url.trim());
+}
+
+function stripSpoilerFlag(url) {
+    if (!url || typeof url !== 'string') return '';
+    return url.trim().replace(/^spoiler:/i, '').replace(/#spoiler$/i, '').trim();
+}
+
+function formatSpoilerMediaUrl(url, isSpoiler) {
+    const clean = stripSpoilerFlag(url);
+    if (!clean) return '';
+    return isSpoiler ? `${clean}#spoiler` : clean;
+}
+
+function getSpoilerOverlayHtml(isSpoiler) {
+    if (!isSpoiler) return '';
+    return `
+        <div class="spoiler-overlay" aria-hidden="true">
+            <svg class="spoiler-eye-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+            <span class="spoiler-label">SPOILER</span>
+        </div>
+    `;
+}
+
+function syncSpoilerToggleUI(mode = 'main') {
+    const isQr = mode === 'qr';
+    const checkbox = document.getElementById(isQr ? 'qrSpoilerInput' : 'spoilerInput');
+    const pill = document.getElementById(isQr ? 'qrSpoilerTogglePill' : 'spoilerTogglePill');
+    const label = document.getElementById(isQr ? 'qrSpoilerToggleLabel' : 'spoilerToggleLabel');
+    const checked = Boolean(checkbox && checkbox.checked);
+
+    if (pill) {
+        pill.classList.toggle('active', checked);
+    }
+    if (label) {
+        label.innerText = checked ? 'Spoiler: ON' : 'Spoiler';
+    }
+    if (!isQr) {
+        const previewImg = document.getElementById('uploadPreviewImg');
+        if (previewImg) {
+            previewImg.classList.toggle('spoiler-preview-blur', checked);
+        }
+    }
+}
+
 // --- CENTRALIZED MEDIA TYPE DETECTION ---
 function getMediaType(url) {
     if (!url || typeof url !== 'string') return null;
-    const cleanUrl = url.trim();
+    const isSpoiler = isSpoilerMediaUrl(url);
+    const cleanUrl = stripSpoilerFlag(url);
     if (!cleanUrl) return null;
 
     // 1. YouTube Detection (standard, shorts, live, embed, youtu.be, music.youtube)
     const ytRegex = /(?:https?:\/\/)?(?:www\.|m\.|music\.)?(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|v\/|shorts\/|live\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i;
     const ytMatch = cleanUrl.match(ytRegex);
     if (ytMatch) {
-        return { type: 'youtube', id: ytMatch[1], url: cleanUrl };
+        return { type: 'youtube', id: ytMatch[1], url: cleanUrl, isSpoiler };
     }
 
     // 2. Twitter / X Detection (handles twitter.com, x.com, vxtwitter, fxtwitter, fixupx, /status/ and /i/status/)
@@ -40,20 +91,21 @@ function getMediaType(url) {
             type: 'x', 
             handle: isNotHandle ? null : rawHandle, 
             id: xMatch[2], 
-            url: cleanUrl 
+            url: cleanUrl,
+            isSpoiler
         };
     }
 
     // Twitter CDN Images (pbs.twimg.com)
     if (cleanUrl.match(/(?:https?:\/\/)?pbs\.twimg\.com\/media\/[^\s]+/i)) {
-        return { type: 'image', url: cleanUrl };
+        return { type: 'image', url: cleanUrl, isSpoiler };
     }
 
     // 3. Pixiv Artwork Link (pixiv.net/artworks/:id)
     const pixivRegex = /(?:https?:\/\/)?(?:www\.)?pixiv\.net\/(?:[a-zA-Z-]+\/)?artworks\/(\d+)/i;
     const pixivMatch = cleanUrl.match(pixivRegex);
     if (pixivMatch) {
-        return { type: 'pixiv', id: pixivMatch[1], url: cleanUrl };
+        return { type: 'pixiv', id: pixivMatch[1], url: cleanUrl, isSpoiler };
     }
 
     // 4. Pixiv Direct CDN Images (i.pximg.net, i.pixiv.re, pixiv.re - requires proxy or proxy helper)
@@ -69,13 +121,14 @@ function getMediaType(url) {
             type: 'pixiv_image', 
             url: fullUrl,
             helperUrl,
-            proxyUrl
+            proxyUrl,
+            isSpoiler
         };
     }
 
     // 5. Reddit CDN Images (i.redd.it, preview.redd.it, external-preview.redd.it)
     if (cleanUrl.match(/(?:https?:\/\/)?(?:i|preview|external-preview)\.redd\.it\/[^\s]+/i)) {
-        return { type: 'image', url: cleanUrl };
+        return { type: 'image', url: cleanUrl, isSpoiler };
     }
 
     // 6. Reddit Direct Video (v.redd.it - mapped to vxreddit merged audio+video helper)
@@ -84,8 +137,8 @@ function getMediaType(url) {
     if (redditVideoMatch) {
         const vid = redditVideoMatch[1];
         const vxUrl = `https://vxreddit.com/comments/${vid}`;
-        const videoUrl = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent('https://v.redd.it/' + vid + '/HLS_720.m3u8')}&audio_url=${encodeURIComponent('https://v.redd.it/' + vid + '/HLS_AUDIO_64.m3u8')}`;
-        return { type: 'reddit_video', id: vid, url: cleanUrl, vxUrl, videoUrl };
+        const videoUrl = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent('https://v.redd.it/' + vid + '/CMAF_720.m3u8')}&audio_url=${encodeURIComponent('https://v.redd.it/' + vid + '/CMAF_AUDIO_128.m3u8')}`;
+        return { type: 'reddit_video', id: vid, url: cleanUrl, vxUrl, videoUrl, isSpoiler };
     }
 
     // 7. Reddit Post & Share Link Detection (handles reddit.com, vxreddit.com, rxddit.com, redd.it)
@@ -96,21 +149,21 @@ function getMediaType(url) {
         const id = redditPostMatch[2] || redditPostMatch[3] || redditPostMatch[4] || redditPostMatch[5] || redditPostMatch[6];
         const isShare = !!(redditPostMatch[3] || redditPostMatch[5]);
         const vxUrl = getVxRedditUrl(cleanUrl);
-        return { type: 'reddit', subreddit, id, isShare, url: cleanUrl, vxUrl };
+        return { type: 'reddit', subreddit, id, isShare, url: cleanUrl, vxUrl, isSpoiler };
     }
 
     // 8. Direct HTML5 Video Detection
     if (cleanUrl.match(/\.(mp4|webm|ogv|mov|m4v)(?:\?.*)?$/i)) {
-        return { type: 'video', url: cleanUrl };
+        return { type: 'video', url: cleanUrl, isSpoiler };
     }
 
     // 9. Direct HTML5 Audio Detection
     if (cleanUrl.match(/\.(mp3|wav|ogg|m4a|aac|opus|flac)(?:\?.*)?$/i)) {
-        return { type: 'audio', url: cleanUrl };
+        return { type: 'audio', url: cleanUrl, isSpoiler };
     }
 
     // 10. Default Fallback: Treat as Image
-    return { type: 'image', url: cleanUrl };
+    return { type: 'image', url: cleanUrl, isSpoiler };
 }
 
 // --- EMBED METADATA SESSION CACHE & THUMBNAIL HELPER PROXIES ---
@@ -153,15 +206,19 @@ function renderMedia(url) {
     const media = getMediaType(url);
     if (!media) return "";
 
+    const spoilerClass = media.isSpoiler ? ' spoiler-media' : '';
+    const spoilerOverlay = getSpoilerOverlayHtml(media.isSpoiler);
+
     // 1. Lite YouTube Facade Card (WebP thumbnail + zero-JS overhead until clicked)
     if (media.type === 'youtube') {
         const webpThumb = `https://i.ytimg.com/vi_webp/${media.id}/hqdefault.webp`;
         const jpgFallback = `https://i.ytimg.com/vi/${media.id}/mqdefault.jpg`;
         return `
-            <div class="media-container yt-lite-facade" onclick="openLightbox('youtube', '${media.id}')" title="Click to play YouTube Video (${media.id})">
+            <div class="media-container yt-lite-facade${spoilerClass}" onclick="openLightbox('youtube', '${media.id}')" title="Click to play YouTube Video (${media.id})">
                 <img src="${webpThumb}" onerror="if(this.src!=='${jpgFallback}')this.src='${jpgFallback}';" alt="YouTube Thumbnail" loading="lazy" decoding="async" style="max-width:200px; max-height:200px; object-fit:cover; display:block;">
                 <div class="play-overlay yt-play-badge">▶</div>
                 <div class="pixiv-badge" style="background:#ff0000;">YouTube</div>
+                ${spoilerOverlay}
             </div>
         `;
     } 
@@ -171,12 +228,13 @@ function renderMedia(url) {
         const handleLabel = media.handle ? `@${escapeHtml(media.handle)}` : '𝕏 Post';
         const cleanHandle = media.handle || 'i';
         return `
-            <div class="media-container file-placeholder x-placeholder" data-tweet-id="${media.id}" data-tweet-handle="${escapeHtml(cleanHandle)}" onclick="openLightbox('x', '${media.id}', '${escapeHtml(cleanHandle)}')" title="Click to view Tweet by ${handleLabel}">
+            <div class="media-container file-placeholder x-placeholder${spoilerClass}" data-tweet-id="${media.id}" data-tweet-handle="${escapeHtml(cleanHandle)}" onclick="openLightbox('x', '${media.id}', '${escapeHtml(cleanHandle)}')" title="Click to view Tweet by ${handleLabel}">
                 <div class="tweet-thumb-slot" id="tweet_slot_${media.id}" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
                     <div class="file-ext" style="color:#1DA1F2; font-size:24px; font-weight:900;">𝕏</div>
                     <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px;">${handleLabel}</div>
                     <div style="font-size:10px; color:#aaa; margin-top:2px;">View Tweet &amp; Media</div>
                 </div>
+                ${spoilerOverlay}
             </div>
         `;
     }
@@ -185,7 +243,7 @@ function renderMedia(url) {
     if (media.type === 'pixiv') {
         const helperFallback = `https://pixiv.re/${media.id}.jpg`;
         return `
-            <div class="media-container file-placeholder pixiv-placeholder" data-pixiv-id="${media.id}" onclick="openLightbox('pixiv', '${media.id}')" title="Click to view Pixiv Artwork #${media.id}">
+            <div class="media-container file-placeholder pixiv-placeholder${spoilerClass}" data-pixiv-id="${media.id}" onclick="openLightbox('pixiv', '${media.id}')" title="Click to view Pixiv Artwork #${media.id}">
                 <div class="pixiv-thumb-slot" id="pixiv_slot_${media.id}" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;">
                     <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">
                         <img src="${helperFallback}" class="thread-image" loading="lazy" decoding="async" alt="Pixiv #${media.id}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
@@ -196,6 +254,7 @@ function renderMedia(url) {
                         <div class="pixiv-badge">pixiv</div>
                     </div>
                 </div>
+                ${spoilerOverlay}
             </div>
         `;
     }
@@ -204,6 +263,14 @@ function renderMedia(url) {
     if (media.type === 'pixiv_image') {
         const primarySrc = media.proxyUrl || `/api/proxy/pixiv?url=${encodeURIComponent(media.url)}`;
         const helperFallback = media.helperUrl || media.url.replace(/^https?:\/\/[a-zA-Z0-9-]+\.pximg\.net\//i, 'https://i.pixiv.re/');
+        if (media.isSpoiler) {
+            return `
+                <div class="media-container spoiler-media" onclick="const img=this.querySelector('img'); openLightbox('pixiv_image', img ? (img.currentSrc || img.src) : '${escapeHtml(primarySrc)}', '${escapeHtml(media.url)}')" title="Click to expand Pixiv image (Spoiler)">
+                    <img src="${escapeHtml(primarySrc)}" class="thread-image" loading="lazy" decoding="async" alt="Pixiv image" onerror="if(this.dataset.triedHelper !== 'true'){ this.dataset.triedHelper='true'; this.src='${escapeHtml(helperFallback)}'; } else { this.style.display='none'; }">
+                    ${spoilerOverlay}
+                </div>
+            `;
+        }
         return `
             <img src="${escapeHtml(primarySrc)}" class="thread-image" loading="lazy" decoding="async" alt="Pixiv image" onclick="openLightbox('pixiv_image', this.currentSrc || this.src, '${escapeHtml(media.url)}')" onerror="if(this.dataset.triedHelper !== 'true'){ this.dataset.triedHelper='true'; this.src='${escapeHtml(helperFallback)}'; } else { this.style.display='none'; }" title="Click to expand Pixiv image">
         `;
@@ -213,7 +280,7 @@ function renderMedia(url) {
     if (media.type === 'reddit') {
         const isShareParam = media.isShare ? 'true' : 'false';
         return `
-            <div class="media-container file-placeholder reddit-placeholder" data-reddit-url="${escapeHtml(media.url)}" data-vx-url="${escapeHtml(media.vxUrl || '')}" onclick="openLightbox('reddit', '${escapeHtml(media.url)}', '${escapeHtml(media.subreddit)}', '${escapeHtml(media.id)}', ${isShareParam})" title="Click to view Reddit post on r/${escapeHtml(media.subreddit)}">
+            <div class="media-container file-placeholder reddit-placeholder${spoilerClass}" data-reddit-url="${escapeHtml(media.url)}" data-vx-url="${escapeHtml(media.vxUrl || '')}" onclick="openLightbox('reddit', '${escapeHtml(media.url)}', '${escapeHtml(media.subreddit)}', '${escapeHtml(media.id)}', ${isShareParam})" title="Click to view Reddit post on r/${escapeHtml(media.subreddit)}">
                 <div class="reddit-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
                     <div style="display:flex; align-items:center; justify-content:center; width:44px; height:44px; border-radius:50%; background:rgba(255, 69, 0, 0.15); margin-bottom:8px;">
                         <svg width="26" height="26" viewBox="0 0 24 24" fill="#FF4500">
@@ -223,6 +290,7 @@ function renderMedia(url) {
                     <div style="font-size:12px; font-weight:bold; color:#fff; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:1.2;">r/${escapeHtml(media.subreddit)}</div>
                     <div style="font-size:10px; color:#ff8c5a; margin-top:4px; font-weight:600; line-height:1.2;">${media.isShare ? 'Reddit Video / Post' : 'View Post &amp; Media'}</div>
                 </div>
+                ${spoilerOverlay}
             </div>
         `;
     }
@@ -230,12 +298,13 @@ function renderMedia(url) {
     // 6. Reddit Video Card (v.redd.it with vxreddit streaming helper)
     if (media.type === 'reddit_video') {
         return `
-            <div class="media-container file-placeholder reddit-placeholder" data-reddit-url="${escapeHtml(media.url)}" data-vx-url="${escapeHtml(media.vxUrl || '')}" onclick="openLightbox('reddit_video', '${media.id}')" title="Click to play Reddit Video with Audio">
+            <div class="media-container file-placeholder reddit-placeholder${spoilerClass}" data-reddit-url="${escapeHtml(media.url)}" data-vx-url="${escapeHtml(media.vxUrl || '')}" onclick="openLightbox('reddit_video', '${media.id}')" title="Click to play Reddit Video with Audio">
                 <div class="reddit-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
                     <div class="file-ext" style="color:#FF4500; font-size:28px;">🎥</div>
                     <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px;">Reddit Video</div>
                     <div class="play-overlay">▶</div>
                 </div>
+                ${spoilerOverlay}
             </div>
         `;
     }
@@ -243,9 +312,10 @@ function renderMedia(url) {
     // 7. Direct Video
     if (media.type === 'video') {
         return `
-            <div class="media-container" onclick="openLightbox('video', '${escapeHtml(media.url)}')" style="cursor:pointer;" title="Click to play Video">
+            <div class="media-container${spoilerClass}" onclick="openLightbox('video', '${escapeHtml(media.url)}')" style="cursor:pointer;" title="Click to play Video">
                 <video src="${escapeHtml(media.url)}#t=0.001" preload="metadata" muted playsinline style="max-width:200px; max-height:200px; object-fit:cover; display:block; pointer-events:none; border:none;"></video>
                 <div class="play-overlay">▶</div>
+                ${spoilerOverlay}
             </div>
         `;
     }
@@ -253,16 +323,25 @@ function renderMedia(url) {
     // 8. Direct Audio
     if (media.type === 'audio') {
         return `
-            <div class="media-container file-placeholder" onclick="openLightbox('audio', '${escapeHtml(media.url)}')" style="cursor:pointer; background:#2c3e50;" title="Click to play Audio">
+            <div class="media-container file-placeholder${spoilerClass}" onclick="openLightbox('audio', '${escapeHtml(media.url)}')" style="cursor:pointer; background:#2c3e50;" title="Click to play Audio">
                 <div class="file-ext" style="color:#00e5ff;">🎵</div>
                 <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px;">Audio File</div>
                 <div class="play-overlay" style="width:36px; height:36px; font-size:18px;">▶</div>
+                ${spoilerOverlay}
             </div>
         `;
     }
 
     // 9. Standard Image (including Catbox, i.redd.it, pbs.twimg.com) with wsrv.nl WebP thumbnail proxy
     const optimizedThumb = getOptimizedThumbUrl(media.url, 360);
+    if (media.isSpoiler) {
+        return `
+            <div class="media-container spoiler-media" onclick="openLightbox('image', '${escapeHtml(media.url)}')" title="Click to expand full-resolution image (Spoiler)">
+                <img src="${escapeHtml(optimizedThumb)}" data-full-src="${escapeHtml(media.url)}" class="thread-image" loading="lazy" decoding="async" alt="Post attachment" onerror="if(this.src !== this.dataset.fullSrc){ this.src = this.dataset.fullSrc; } else { this.onerror=null; this.style.display='none'; }">
+                ${spoilerOverlay}
+            </div>
+        `;
+    }
     return `
         <img src="${escapeHtml(optimizedThumb)}" data-full-src="${escapeHtml(media.url)}" class="thread-image" loading="lazy" decoding="async" alt="Post attachment" onclick="openLightbox('image', '${escapeHtml(media.url)}')" onerror="if(this.src !== this.dataset.fullSrc){ this.src = this.dataset.fullSrc; } else { this.onerror=null; this.style.display='none'; }" title="Click to expand full-resolution image">
     `;
@@ -1346,23 +1425,42 @@ if (typeof window !== 'undefined') {
 
 // --- LIVE MEDIA INPUT DETECTOR ---
 function initMediaInputDetector() {
-    const bindDetector = (inputEl, badgeEl) => {
+    const bindDetector = (inputEl, badgeEl, mode = 'main') => {
         if (!inputEl) return;
+        const isQr = mode === 'qr';
+        const rowEl = document.getElementById(isQr ? 'qrAttachmentMetaRow' : 'mediaAttachmentMetaRow');
+        const spoilerBarEl = document.getElementById(isQr ? 'qrSpoilerBar' : 'mediaSpoilerBar');
+        const spoilerCheckEl = document.getElementById(isQr ? 'qrSpoilerInput' : 'spoilerInput');
+
         const updateBadge = () => {
             const val = inputEl.value.trim();
             if (!badgeEl) return;
             if (!val) {
                 badgeEl.style.display = 'none';
                 badgeEl.innerHTML = '';
+                if (spoilerBarEl) spoilerBarEl.style.display = 'none';
+                if (rowEl) rowEl.style.display = 'none';
+                if (spoilerCheckEl) {
+                    spoilerCheckEl.checked = false;
+                    syncSpoilerToggleUI(mode);
+                }
                 return;
             }
 
             const media = getMediaType(val);
             if (!media) {
                 badgeEl.style.display = 'none';
+                if (spoilerBarEl) spoilerBarEl.style.display = 'none';
+                if (rowEl) rowEl.style.display = 'none';
                 return;
             }
 
+            if (rowEl) rowEl.style.display = 'flex';
+            if (spoilerBarEl) spoilerBarEl.style.display = 'inline-flex';
+            if (spoilerCheckEl && media.isSpoiler && !spoilerCheckEl.checked) {
+                spoilerCheckEl.checked = true;
+                syncSpoilerToggleUI(mode);
+            }
             badgeEl.style.display = 'block';
             if (media.type === 'reddit') {
                 badgeEl.style.background = 'rgba(255, 69, 0, 0.15)';
@@ -1418,8 +1516,8 @@ function initMediaInputDetector() {
         inputEl.addEventListener('paste', () => setTimeout(updateBadge, 50));
     };
 
-    bindDetector(document.getElementById('imageInput'), document.getElementById('mediaDetectedBadge'));
-    bindDetector(document.getElementById('qrImage'), document.getElementById('qrMediaBadge'));
+    bindDetector(document.getElementById('imageInput'), document.getElementById('mediaDetectedBadge'), 'main');
+    bindDetector(document.getElementById('qrImage'), document.getElementById('qrMediaBadge'), 'qr');
 }
 
 // --- CLIENT-SIDE WEBP IMAGE COMPRESSION, VIDEO METADATA VALIDATION & CATBOX.MOE UPLOAD CONTROLLER ---
@@ -1611,9 +1709,14 @@ function clearUploadedMedia() {
     const urlInput = document.getElementById('imageInput');
     const previewBox = document.getElementById('uploadPreviewBox');
     const previewImg = document.getElementById('uploadPreviewImg');
+    const spoilerInput = document.getElementById('spoilerInput');
     if (currentPreviewObjectUrl) {
         try { URL.revokeObjectURL(currentPreviewObjectUrl); } catch (_) {}
         currentPreviewObjectUrl = null;
+    }
+    if (spoilerInput) {
+        spoilerInput.checked = false;
+        syncSpoilerToggleUI('main');
     }
     if (urlInput) {
         urlInput.value = '';
@@ -1623,6 +1726,7 @@ function clearUploadedMedia() {
     if (previewImg) {
         previewImg.src = '';
         previewImg.style.display = 'block';
+        previewImg.classList.remove('spoiler-preview-blur');
     }
 }
 
@@ -1849,6 +1953,11 @@ function initMediaUpload() {
 if (typeof window !== 'undefined') {
     window.clearUploadedMedia = clearUploadedMedia;
     window.uploadMediaFile = uploadMediaFile;
+    window.syncSpoilerToggleUI = syncSpoilerToggleUI;
+    window.formatSpoilerMediaUrl = formatSpoilerMediaUrl;
+    window.getSpoilerOverlayHtml = getSpoilerOverlayHtml;
+    window.isSpoilerMediaUrl = isSpoilerMediaUrl;
+    window.stripSpoilerFlag = stripSpoilerFlag;
 }
 
 // Auto-initialize controls on DOM ready

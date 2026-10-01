@@ -156,7 +156,7 @@ async function resolveSocialMedia(rawUrl, origin) {
     if (!rawUrl || typeof rawUrl !== 'string') {
         return { type: 'none', imageUrl: null, videoUrl: null, videoType: null, source: null };
     }
-    const cleanUrl = rawUrl.trim();
+    const cleanUrl = rawUrl.trim().replace(/^spoiler:/i, '').replace(/#spoiler$/i, '').trim();
     if (!cleanUrl) {
         return { type: 'none', imageUrl: null, videoUrl: null, videoType: null, source: null };
     }

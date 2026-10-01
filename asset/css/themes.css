@@ -138,6 +138,46 @@ body.night-mode.nsfw-blur-off .catalog-thumb-container .reddit-thumb-slot {
     opacity: 1 !important;
 }
 
+/* SPOILER OVERRIDE IN NSFW BOARDS: Ignore global blur OFF setting so Spoiler media always stays blurred until hovered */
+body.night-mode .spoiler-overlay {
+    border-color: rgba(255, 77, 77, 0.75);
+    box-shadow: 0 4px 18px rgba(255, 0, 0, 0.45);
+}
+
+body.night-mode.nsfw-blur-off .spoiler-media > img,
+body.night-mode.nsfw-blur-off .spoiler-media > video,
+body.night-mode.nsfw-blur-off .spoiler-media .thread-image,
+body.night-mode.nsfw-blur-off .spoiler-media .catalog-thumb,
+body.night-mode.nsfw-blur-off .spoiler-media .tweet-thumb-slot,
+body.night-mode.nsfw-blur-off .spoiler-media .pixiv-thumb-slot,
+body.night-mode.nsfw-blur-off .spoiler-media .reddit-thumb-slot {
+    filter: blur(26px) !important;
+    opacity: 0.72 !important;
+}
+
+body.night-mode .spoiler-media:not(:hover) .play-overlay {
+    opacity: 0 !important;
+}
+
+body.night-mode.nsfw-blur-off .spoiler-media:hover > img,
+body.night-mode.nsfw-blur-off .spoiler-media:hover > video,
+body.night-mode.nsfw-blur-off .spoiler-media:hover .thread-image,
+body.night-mode.nsfw-blur-off .spoiler-media:hover .catalog-thumb,
+body.night-mode.nsfw-blur-off .spoiler-media:hover .tweet-thumb-slot,
+body.night-mode.nsfw-blur-off .spoiler-media:hover .pixiv-thumb-slot,
+body.night-mode.nsfw-blur-off .spoiler-media:hover .reddit-thumb-slot,
+body.night-mode.nsfw-blur-off .catalog-tile:hover .spoiler-media .catalog-thumb,
+body.night-mode.nsfw-blur-off .catalog-tile:hover .spoiler-media .thread-image,
+body.night-mode.nsfw-blur-off .catalog-tile:hover .spoiler-media img,
+body.night-mode.nsfw-blur-off .catalog-tile:hover .spoiler-media video,
+body.night-mode.nsfw-blur-off .catalog-tile:hover .spoiler-media .tweet-thumb-slot,
+body.night-mode.nsfw-blur-off .catalog-tile:hover .spoiler-media .pixiv-thumb-slot,
+body.night-mode.nsfw-blur-off .catalog-tile:hover .spoiler-media .reddit-thumb-slot {
+    filter: blur(0) !important;
+    opacity: 1 !important;
+    transform: scale(1.02);
+}
+
 /* Keep Catalog reply count badge crisp above blurred catalog thumbnails */
 body.night-mode .catalog-badge-overlay {
     z-index: 5;

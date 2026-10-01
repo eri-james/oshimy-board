@@ -148,7 +148,19 @@
                     </div>
                 </div>
             </div>
-            <div id="mediaDetectedBadge" style="display:none; font-size:0.8em; margin-top:4px; margin-bottom:6px; padding:4px 8px; border-radius:4px; font-weight:bold;"></div>
+            <div id="mediaAttachmentMetaRow" class="media-attachment-meta-row" style="display:none;">
+                <div id="mediaDetectedBadge" style="display:none; font-size:0.8em; padding:4px 8px; border-radius:4px; font-weight:bold; flex:1;"></div>
+                <div id="mediaSpoilerBar" class="media-spoiler-bar" style="display:none;">
+                    <label class="spoiler-toggle-pill" id="spoilerTogglePill" for="spoilerInput" title="Blur media thumbnail with a SPOILER warning overlay (ignores NSFW global blur OFF)">
+                        <input type="checkbox" id="spoilerInput" onchange="syncSpoilerToggleUI('main')">
+                        <svg class="spoiler-pill-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                        <span id="spoilerToggleLabel">Spoiler</span>
+                    </label>
+                </div>
+            </div>
             
             <!-- Collapsible Media Format Tips -->
             <details class="media-help-drawer">
@@ -385,7 +397,19 @@
                 <input type="url" id="qrImage" placeholder="Media URL (Pixiv/X/YT/Reddit/Image/Video)" style="flex-grow:1;">
                 <button type="button" id="qrUploadBtn" class="qr-upload-btn">Upload</button>
             </div>
-            <div id="qrMediaBadge" style="display:none; font-size:0.75em; padding:3px 6px; border-radius:4px; font-weight:bold;"></div>
+            <div id="qrAttachmentMetaRow" class="media-attachment-meta-row" style="display:none;">
+                <div id="qrMediaBadge" style="display:none; font-size:0.75em; padding:3px 6px; border-radius:4px; font-weight:bold; flex:1;"></div>
+                <div id="qrSpoilerBar" class="media-spoiler-bar qr-spoiler-bar" style="display:none;">
+                    <label class="spoiler-toggle-pill" id="qrSpoilerTogglePill" for="qrSpoilerInput" title="Blur media thumbnail with a SPOILER warning overlay">
+                        <input type="checkbox" id="qrSpoilerInput" onchange="syncSpoilerToggleUI('qr')">
+                        <svg class="spoiler-pill-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                        <span id="qrSpoilerToggleLabel">Spoiler</span>
+                    </label>
+                </div>
+            </div>
             <input type="file" id="qrHiddenFileInput" accept="image/*" style="display:none;">
             <div class="qr-footer">
                 <div id="qrStatus" style="font-size:0.78em; opacity:0.85; flex:1; min-height:16px;"></div>

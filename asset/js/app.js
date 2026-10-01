@@ -481,6 +481,8 @@ function renderCatalogGrid(threads) {
 
     let html = "";
     for (const th of list) {
+        const isSpoilerThumb = typeof isSpoilerMediaUrl === 'function' && isSpoilerMediaUrl(th.media_url);
+        const spoilerOverlay = (isSpoilerThumb && typeof getSpoilerOverlayHtml === 'function') ? getSpoilerOverlayHtml(true) : '';
         const thumb = getCatalogThumbnail(th.media_url);
         const subject = escapeHtml(th.subject || 'No Subject');
         const snippet = escapeHtml((th.comment || '').replace(/\n+/g, ' ')).substring(0, 90);
@@ -491,8 +493,9 @@ function renderCatalogGrid(threads) {
 
         html += `
             <a href="?b=${currentBoard}&t=${th.id}" class="catalog-tile" id="cat_${th.id}">
-                <div class="catalog-thumb-container">
+                <div class="catalog-thumb-container${isSpoilerThumb ? ' spoiler-media' : ''}">
                     ${thumb}
+                    ${spoilerOverlay}
                     <span class="catalog-badge-overlay">R: ${replies}</span>
                 </div>
                 <div class="catalog-info">
@@ -1506,6 +1509,7 @@ async function submitQuickReply() {
     const commentInput = document.getElementById('qrComment');
     const nameInput = document.getElementById('qrName');
     const imageInput = document.getElementById('qrImage');
+    const qrSpoilerInput = document.getElementById('qrSpoilerInput');
     const dock = document.getElementById('quickReplyDock');
 
     const threadId = activeQrThreadId || currentThreadId || dock?.getAttribute('data-thread-id');
@@ -1514,11 +1518,17 @@ async function submitQuickReply() {
         return;
     }
 
+    const rawMediaUrl = imageInput ? imageInput.value : '';
+    const isSpoiler = Boolean(qrSpoilerInput && qrSpoilerInput.checked);
+    const formattedMediaUrl = (typeof formatSpoilerMediaUrl === 'function')
+        ? formatSpoilerMediaUrl(rawMediaUrl, isSpoiler)
+        : rawMediaUrl;
+
     await submitReplyCore({
         threadId,
         comment: commentInput ? commentInput.value : '',
         name: nameInput ? nameInput.value : '',
-        media_url: imageInput ? imageInput.value : '',
+        media_url: formattedMediaUrl,
         source: 'qr'
     });
 }
@@ -1621,14 +1631,25 @@ function initQuickReply() {
 
     // Live media detector inside QR
     if (imageInput && badge) {
+        const qrRowEl = document.getElementById('qrAttachmentMetaRow');
+        const qrSpoilerBarEl = document.getElementById('qrSpoilerBar');
+        const qrSpoilerCheckEl = document.getElementById('qrSpoilerInput');
         const updateQrBadge = () => {
             const val = imageInput.value.trim();
             if (!val) {
                 badge.style.display = 'none';
                 badge.innerHTML = '';
+                if (qrSpoilerBarEl) qrSpoilerBarEl.style.display = 'none';
+                if (qrRowEl) qrRowEl.style.display = 'none';
+                if (qrSpoilerCheckEl) {
+                    qrSpoilerCheckEl.checked = false;
+                    if (typeof syncSpoilerToggleUI === 'function') syncSpoilerToggleUI('qr');
+                }
                 return;
             }
             const media = typeof getMediaType === 'function' ? getMediaType(val) : null;
+            if (qrRowEl) qrRowEl.style.display = 'flex';
+            if (qrSpoilerBarEl) qrSpoilerBarEl.style.display = 'inline-flex';
             badge.style.display = 'block';
             if (media && (media.type === 'pixiv' || media.type === 'pixiv_image')) {
                 badge.style.background = 'rgba(0, 150, 250, 0.15)';
@@ -1722,10 +1743,18 @@ async function submitReplyCore({ threadId, comment, name, media_url, source = 'm
     const mainComment = document.getElementById('commentInput');
     const qrImage = document.getElementById('qrImage');
     const mainImage = document.getElementById('imageInput');
+    const qrSpoilerInput = document.getElementById('qrSpoilerInput');
     if (qrComment) qrComment.value = "";
     if (mainComment) mainComment.value = "";
-    if (qrImage) qrImage.value = "";
+    if (qrImage) {
+        qrImage.value = "";
+        qrImage.dispatchEvent(new Event('input'));
+    }
     if (mainImage) mainImage.value = "";
+    if (qrSpoilerInput) {
+        qrSpoilerInput.checked = false;
+        if (typeof syncSpoilerToggleUI === 'function') syncSpoilerToggleUI('qr');
+    }
     if (typeof clearUploadedMedia === 'function') clearUploadedMedia();
 
     const identityPayload = getPostIdentityPayload(name);
@@ -1948,8 +1977,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const subjectInput = document.getElementById('subjectInput');
         const commentInput = document.getElementById('commentInput');
         const imageInput = document.getElementById('imageInput');
+        const spoilerInput = document.getElementById('spoilerInput');
 
         if (!commentInput.value.trim()) return;
+
+        const isSpoiler = Boolean(spoilerInput && spoilerInput.checked);
+        const formattedMediaUrl = (typeof formatSpoilerMediaUrl === 'function')
+            ? formatSpoilerMediaUrl(imageInput.value, isSpoiler)
+            : imageInput.value.trim();
 
         if (currentThreadId) {
             // Reply via optimistic submit core
@@ -1957,7 +1992,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 threadId: currentThreadId,
                 comment: commentInput.value,
                 name: nameInput.value,
-                media_url: imageInput.value,
+                media_url: formattedMediaUrl,
                 source: 'main'
             });
             return;
@@ -1968,7 +2003,7 @@ document.addEventListener('DOMContentLoaded', () => {
         submitBtn.innerText = "Posting...";
 
         // Validate media URL if provided
-        const mediaVal = imageInput.value.trim();
+        const mediaVal = formattedMediaUrl;
         if (mediaVal && typeof validateMediaUrl === 'function') {
             const check = await validateMediaUrl(mediaVal);
             if (!check.valid) {
@@ -1990,7 +2025,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     name: identityPayload.name,
                     subject: subjectInput.value,
                     comment: commentInput.value,
-                    media_url: imageInput.value,
+                    media_url: formattedMediaUrl,
                     post_as_anonymous: identityPayload.post_as_anonymous,
                     show_vanity_flair: identityPayload.show_vanity_flair,
                     guest_flair: identityPayload.guest_flair

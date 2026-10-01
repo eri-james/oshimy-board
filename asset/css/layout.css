@@ -307,6 +307,178 @@ body.night-mode .post-link-btn:hover {
     object-fit: cover;
 }
 
+/* --- SPOILER ATTACHMENT TOGGLE BAR & THUMBNAIL OVERLAY --- */
+.media-attachment-meta-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+
+.media-spoiler-bar {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.spoiler-toggle-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1.5px solid var(--border-color);
+    background: var(--reply-bg);
+    color: var(--text-color);
+    font-size: 0.8em;
+    font-weight: 800;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
+}
+
+.spoiler-toggle-pill:hover {
+    border-color: var(--main-accent);
+    transform: translateY(-1px);
+}
+
+.spoiler-toggle-pill input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    padding: 0;
+    cursor: pointer;
+    accent-color: #f59e0b;
+}
+
+.spoiler-toggle-pill .spoiler-pill-eye {
+    width: 15px;
+    height: 15px;
+    stroke: currentColor;
+    flex-shrink: 0;
+}
+
+.spoiler-toggle-pill.active {
+    background: rgba(245, 158, 11, 0.18);
+    border-color: #f59e0b;
+    color: #d97706;
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.25);
+}
+
+body.night-mode .spoiler-toggle-pill.active {
+    background: rgba(245, 158, 11, 0.22);
+    border-color: #fbbf24;
+    color: #fbbf24;
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.35);
+}
+
+#uploadPreviewImg.spoiler-preview-blur {
+    filter: blur(10px);
+    transition: filter 0.2s ease;
+}
+
+/* Spoiler Media Container & Thumbnail Overlay */
+.media-container.spoiler-media {
+    min-width: 115px;
+    min-height: 90px;
+    background: #111;
+}
+
+.spoiler-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 13px;
+    border-radius: 10px;
+    background: rgba(12, 12, 16, 0.84);
+    border: 1.5px solid rgba(255, 255, 255, 0.38);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    color: #ffffff;
+    z-index: 18;
+    pointer-events: none;
+    user-select: none;
+    filter: blur(0) !important;
+    opacity: 1 !important;
+    transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.spoiler-overlay .spoiler-eye-icon {
+    width: 22px;
+    height: 22px;
+    stroke: #ffffff;
+    display: block;
+    flex-shrink: 0;
+}
+
+.spoiler-overlay .spoiler-label {
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: #ffffff;
+    line-height: 1.1;
+    white-space: nowrap;
+}
+
+/* Blur all media thumbnails marked as Spoiler across SFW & NSFW boards */
+.spoiler-media > img,
+.spoiler-media > video,
+.spoiler-media .thread-image,
+.spoiler-media .catalog-thumb,
+.spoiler-media .tweet-thumb-slot,
+.spoiler-media .pixiv-thumb-slot,
+.spoiler-media .reddit-thumb-slot {
+    filter: blur(26px) !important;
+    opacity: 0.72 !important;
+    transition: filter 0.26s ease, opacity 0.26s ease, transform 0.26s ease;
+}
+
+/* Hide play button while Spoiler overlay is active in the center */
+.spoiler-media .play-overlay {
+    opacity: 0 !important;
+    transition: opacity 0.22s ease, transform 0.2s ease;
+}
+
+/* Unblur Spoiler thumbnail and fade out SPOILER badge on hover */
+.spoiler-media:hover > img,
+.spoiler-media:hover > video,
+.spoiler-media:hover .thread-image,
+.spoiler-media:hover .catalog-thumb,
+.spoiler-media:hover .tweet-thumb-slot,
+.spoiler-media:hover .pixiv-thumb-slot,
+.spoiler-media:hover .reddit-thumb-slot,
+.catalog-tile:hover .spoiler-media .catalog-thumb,
+.catalog-tile:hover .spoiler-media .thread-image,
+.catalog-tile:hover .spoiler-media img,
+.catalog-tile:hover .spoiler-media video,
+.catalog-tile:hover .spoiler-media .tweet-thumb-slot,
+.catalog-tile:hover .spoiler-media .pixiv-thumb-slot,
+.catalog-tile:hover .spoiler-media .reddit-thumb-slot {
+    filter: blur(0) !important;
+    opacity: 1 !important;
+    transform: scale(1.02);
+}
+
+.spoiler-media:hover .spoiler-overlay,
+.catalog-tile:hover .spoiler-media .spoiler-overlay {
+    opacity: 0 !important;
+    transform: translate(-50%, -50%) scale(0.9);
+}
+
+.spoiler-media:hover .play-overlay {
+    opacity: 1 !important;
+}
+
 .file-placeholder.pixiv-thumb-loaded,
 .file-placeholder.x-thumb-loaded,
 .file-placeholder.reddit-thumb-loaded,
