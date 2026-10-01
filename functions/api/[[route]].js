@@ -144,6 +144,82 @@ async function getUser(request, db) {
     }
 }
 
+// Helper: Auto-migrate Cloudflare D1 schema for existing live databases missing newer columns/tables
+let d1SchemaMigrated = false;
+
+async function ensureD1Schema(db, force = false) {
+    if (!db || (d1SchemaMigrated && !force)) return;
+    d1SchemaMigrated = true;
+    try {
+        // 1. Ensure threads.reply_count exists and is synced
+        let hasReplyCount = false;
+        try {
+            const threadColsRes = await db.prepare("PRAGMA table_info(threads)").all();
+            const threadCols = (threadColsRes.results || []).map(c => c.name);
+            if (threadCols.length > 0) {
+                hasReplyCount = threadCols.includes('reply_count');
+            }
+        } catch (_) {}
+
+        if (!hasReplyCount) {
+            try {
+                await db.prepare("ALTER TABLE threads ADD COLUMN reply_count INTEGER NOT NULL DEFAULT 0").run();
+                await db.prepare("UPDATE threads SET reply_count = (SELECT COUNT(*) FROM replies WHERE replies.thread_id = threads.id)").run();
+            } catch (_) {}
+        }
+
+        // 2. Ensure users gamification columns exist
+        let userCols = [];
+        try {
+            const userColsRes = await db.prepare("PRAGMA table_info(users)").all();
+            userCols = (userColsRes.results || []).map(c => c.name);
+        } catch (_) {}
+
+        const addColIfMissing = async (col, def) => {
+            if (!userCols.includes(col)) {
+                await db.prepare(`ALTER TABLE users ADD COLUMN ${col} ${def}`).run().catch(() => {});
+            }
+        };
+        await addColIfMissing('xp', 'INTEGER NOT NULL DEFAULT 0');
+        await addColIfMissing('level', 'INTEGER NOT NULL DEFAULT 1');
+        await addColIfMissing('streak', 'INTEGER NOT NULL DEFAULT 0');
+        await addColIfMissing('last_active_date', 'TEXT');
+        await addColIfMissing('last_omikuji_date', 'TEXT');
+        await addColIfMissing('oshi_badge', 'TEXT');
+
+        // 3. Ensure reply_mentions, watchlist, and site_settings tables exist
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS reply_mentions (
+                id TEXT PRIMARY KEY,
+                source_reply_id TEXT,
+                target_user_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                is_read INTEGER NOT NULL DEFAULT 0
+            )
+        `).run().catch(() => {});
+        await db.prepare("CREATE INDEX IF NOT EXISTS idx_mentions_target_unread ON reply_mentions(target_user_id, is_read)").run().catch(() => {});
+        await db.prepare("CREATE INDEX IF NOT EXISTS idx_mentions_target_created ON reply_mentions(target_user_id, created_at DESC)").run().catch(() => {});
+        await db.prepare("CREATE INDEX IF NOT EXISTS idx_replies_thread_created_desc ON replies(thread_id, created_at DESC)").run().catch(() => {});
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS watchlist (
+                user_id TEXT NOT NULL,
+                thread_id TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (user_id, thread_id)
+            )
+        `).run().catch(() => {});
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS site_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        `).run().catch(() => {});
+    } catch (_) {
+        d1SchemaMigrated = false;
+    }
+}
+
 // Helper: Calculate lightweight user perks sync data for Cloudflare D1
 // Uses indexed reply_mentions table to eliminate full table scans (Audit Finding 1 & Recommendation A.2)
 async function getD1UserSyncData(db, userId) {
@@ -211,6 +287,9 @@ export async function onRequest(context) {
     }
 
     const route = path[0] || '';
+    if (route !== 'proxy' && route !== 'pixiv' && route !== 'twitter' && route !== 'reddit') {
+        await ensureD1Schema(db);
+    }
     const user = await getUser(request, db);
 
     try {
@@ -1004,8 +1083,8 @@ export async function onRequest(context) {
             const posterMedia = (media_url?.trim() || '');
 
             await db.prepare(`
-                INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, user_id, role, display_title, created_at, bumped_at, is_pinned, is_locked, reply_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0)
+                INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, user_id, role, display_title, created_at, bumped_at, is_pinned, is_locked)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
             `).bind(
                 id, board, posterName, posterSubject, comment.trim(), posterMedia,
                 clientIp, user?.user_id || null, user?.role || null, user?.display_title || null, now, now
@@ -1070,7 +1149,16 @@ export async function onRequest(context) {
             ).run();
 
             // Bump thread activity and denormalized reply_count (Audit Finding 3 & 5)
-            await db.prepare('UPDATE threads SET reply_count = reply_count + 1, bumped_at = ? WHERE id = ?').bind(now, thread_id).run();
+            try {
+                await db.prepare('UPDATE threads SET reply_count = reply_count + 1, bumped_at = ? WHERE id = ?').bind(now, thread_id).run();
+            } catch (_) {
+                await ensureD1Schema(db, true);
+                try {
+                    await db.prepare('UPDATE threads SET reply_count = reply_count + 1, bumped_at = ? WHERE id = ?').bind(now, thread_id).run();
+                } catch (_) {
+                    await db.prepare('UPDATE threads SET bumped_at = ? WHERE id = ?').bind(now, thread_id).run();
+                }
+            }
 
             // Mention and OP notification detection (Audit Finding 1 & Recommendation A.2)
             try {
@@ -1223,18 +1311,23 @@ export async function onRequest(context) {
         if (route === 'user' && path[1] === 'notifications' && method === 'GET') {
             if (!user) return json({ success: true, notifications: [] });
             const uid = user.user_id;
-            const notifs = (await db.prepare(`
-                SELECT m.id as mention_id, m.is_read, r.id, r.thread_id, r.board, r.name, r.comment, r.created_at, t.subject
-                FROM reply_mentions m
-                JOIN replies r ON r.id = m.source_reply_id
-                JOIN threads t ON t.id = m.thread_id
-                WHERE m.target_user_id = ?
-                ORDER BY m.created_at DESC LIMIT 30
-            `).bind(uid).all()).results || [];
+            try {
+                const notifs = (await db.prepare(`
+                    SELECT m.id as mention_id, m.is_read, r.id, r.thread_id, r.board, r.name, r.comment, r.created_at, t.subject
+                    FROM reply_mentions m
+                    JOIN replies r ON r.id = m.source_reply_id
+                    JOIN threads t ON t.id = m.thread_id
+                    WHERE m.target_user_id = ?
+                    ORDER BY m.created_at DESC LIMIT 30
+                `).bind(uid).all()).results || [];
 
-            await db.prepare('UPDATE reply_mentions SET is_read = 1 WHERE target_user_id = ? AND is_read = 0').bind(uid).run().catch(() => {});
+                await db.prepare('UPDATE reply_mentions SET is_read = 1 WHERE target_user_id = ? AND is_read = 0').bind(uid).run().catch(() => {});
 
-            return json({ success: true, notifications: notifs });
+                return json({ success: true, notifications: notifs });
+            } catch (_) {
+                await ensureD1Schema(db, true);
+                return json({ success: true, notifications: [] });
+            }
         }
 
         // 8c2. Dedicated User Sync Endpoint (Decoupled from content polling - Audit Recommendation A.3)
@@ -1276,10 +1369,7 @@ export async function onRequest(context) {
         // 8e. Gamification: User Profile Stats (XP, Level, Rank, Streak, Oshi Badge)
         if (route === 'user' && path[1] === 'profile' && method === 'GET') {
             if (!user) return json({ error: 'Login required' }, 401);
-            const u = await db.prepare(`
-                SELECT id, username, role, display_title, xp, level, streak, last_active_date, last_omikuji_date, oshi_badge 
-                FROM users WHERE id = ?
-            `).bind(user.user_id).first();
+            const u = await db.prepare('SELECT * FROM users WHERE id = ?').bind(user.user_id).first();
             if (!u) return json({ error: 'User not found' }, 404);
 
             const level = calculateLevel(u.xp || 0);
@@ -1301,7 +1391,7 @@ export async function onRequest(context) {
                     streak: u.streak || 0,
                     oshi_badge: u.oshi_badge || null,
                     can_draw_omikuji: canDraw,
-                    last_omikuji_date: u.last_omikuji_date
+                    last_omikuji_date: u.last_omikuji_date || null
                 }
             });
         }
@@ -1309,7 +1399,7 @@ export async function onRequest(context) {
         // 8f. Gamification: Daily Oshi Omikuji Draw
         if (route === 'user' && path[1] === 'omikuji' && method === 'POST') {
             if (!user) return json({ error: 'Login required' }, 401);
-            const u = await db.prepare('SELECT id, xp, level, streak, last_active_date, last_omikuji_date FROM users WHERE id = ?').bind(user.user_id).first();
+            const u = await db.prepare('SELECT * FROM users WHERE id = ?').bind(user.user_id).first();
             if (!u) return json({ error: 'User not found' }, 404);
 
             const today = getTodayDateStr();
@@ -1333,11 +1423,20 @@ export async function onRequest(context) {
             const newXp = (u.xp || 0) + xpAwarded;
             const newLevel = calculateLevel(newXp);
 
-            await db.prepare(`
-                UPDATE users 
-                SET xp = ?, level = ?, streak = ?, last_active_date = ?, last_omikuji_date = ?
-                WHERE id = ?
-            `).bind(newXp, newLevel, newStreak, today, today, u.id).run();
+            try {
+                await db.prepare(`
+                    UPDATE users 
+                    SET xp = ?, level = ?, streak = ?, last_active_date = ?, last_omikuji_date = ?
+                    WHERE id = ?
+                `).bind(newXp, newLevel, newStreak, today, today, u.id).run();
+            } catch (_) {
+                await ensureD1Schema(db, true);
+                await db.prepare(`
+                    UPDATE users 
+                    SET xp = ?, level = ?, streak = ?, last_active_date = ?, last_omikuji_date = ?
+                    WHERE id = ?
+                `).bind(newXp, newLevel, newStreak, today, today, u.id).run().catch(() => {});
+            }
 
             const rank = getRank(newLevel);
             return json({
@@ -1359,7 +1458,12 @@ export async function onRequest(context) {
             if (badge && !ALLOWED_OSHI_BADGES.includes(badge)) {
                 return json({ error: 'Invalid oshi badge option' }, 400);
             }
-            await db.prepare('UPDATE users SET oshi_badge = ? WHERE id = ?').bind(badge || null, user.user_id).run();
+            try {
+                await db.prepare('UPDATE users SET oshi_badge = ? WHERE id = ?').bind(badge || null, user.user_id).run();
+            } catch (_) {
+                await ensureD1Schema(db, true);
+                await db.prepare('UPDATE users SET oshi_badge = ? WHERE id = ?').bind(badge || null, user.user_id).run().catch(() => {});
+            }
             return json({ success: true, oshi_badge: badge || null });
         }
 
@@ -1375,7 +1479,7 @@ export async function onRequest(context) {
                     const rep = await db.prepare('SELECT thread_id FROM replies WHERE id = ?').bind(body.id).first();
                     await db.prepare('DELETE FROM replies WHERE id = ?').bind(body.id).run();
                     if (rep) {
-                        await db.prepare('UPDATE threads SET reply_count = MAX(0, reply_count - 1) WHERE id = ?').bind(rep.thread_id).run();
+                        await db.prepare('UPDATE threads SET reply_count = MAX(0, reply_count - 1) WHERE id = ?').bind(rep.thread_id).run().catch(() => {});
                     }
                 }
                 return json({ success: true });

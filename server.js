@@ -1077,7 +1077,11 @@ app.post('/api/replies', (req, res) => {
         `).run(id, thread_id, thread.board, posterName, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now);
 
         // Bump thread activity and denormalized reply_count (Audit Finding 3 & 5)
-        db.prepare('UPDATE threads SET reply_count = reply_count + 1, bumped_at = ? WHERE id = ?').run(now, thread_id);
+        try {
+            db.prepare('UPDATE threads SET reply_count = reply_count + 1, bumped_at = ? WHERE id = ?').run(now, thread_id);
+        } catch (_) {
+            db.prepare('UPDATE threads SET bumped_at = ? WHERE id = ?').run(now, thread_id);
+        }
 
         // Mention and OP notification detection (Audit Finding 1 & Recommendation A.2)
         try {
