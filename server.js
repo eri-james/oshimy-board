@@ -21,8 +21,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '30mb' }));
+app.use(express.urlencoded({ extended: true, limit: '30mb' }));
 
 // Board definitions
 const BOARDS = {
@@ -40,35 +40,86 @@ const BOARDS = {
     'hg':    { title: '/hg/ - H Games',                 type: 'nsfw', fanName: 'Gacha Cultist' }
 };
 
-const ALLOWED_STAMPS = ['🌱', '🔥', '😭', '🏮'];
+const ALLOWED_STAMPS = ['kusa', 'tskr', 'uoooh', 'ikz', 'oshi', 'glowstick', '🌱', '🔥', '😭', '🏮'];
+
+const SERVER_BOARD_FAN_NAMES = {
+    'myvt':  ['Oshi-min', 'Gachikoi', 'DD Lurker', 'Kaigai-niki (MY)', 'Superchat Whale', 'Mamak Watcher'],
+    'vt':    ['Shrimp', 'Kenzoku', 'Takodachi', 'Dragoon', 'Ruffian', 'Niji-anon', 'DD Clip Watcher'],
+    'vg':    ['Sweaty Gamer', 'Gacha Salt Miner', 'F2P BTW', 'Frame Perfect Anon', 'Backlog Warrior'],
+    'amg':   ['Seasonal Watcher', 'Manga Reader', 'LN Purist', 'Sakuga Enjoyer', 'Seiyuu Otaku'],
+    'ca':    ['CF Booth Pilgrim', 'Cosplay Photog', 'Sketchbook Anon', 'Itasha Driver', 'Rigger-san'],
+    'tech':  ['ThinkPad Enjoyer', 'Arch BTW', 'Homelab Anon', 'VRAM Hoarder', 'Mechanical Keycapper'],
+    'mamak': ['Teh Tarik Kurang Manis', 'Roti Canai Banjir', 'Bossku', 'Lepak Anon', 'Maggi Goreng Doubly'],
+    'rqr':   ['Janny Summoner', 'Rule Lawyer', 'Feedback Anon', 'Bug Hunter'],
+    'myvth': ['Bonk Patrol Target', 'Halal-not Anon', 'Cultured Oshi-min', '3AM Lurker'],
+    'vth':   ['Cultured Shrimp', 'Seiso Reject', 'Lewdtuber Enjoyer', 'Bonk Evader'],
+    'hm':    ['6-Digit Scholar', 'Tag Filterer', 'Uncensored Seeker', 'Doujin Connoisseur'],
+    'hg':    ['VN Reader', 'RPGMaker Veteran', 'Illusionist', 'Save File Collector']
+};
 
 function getDefaultBoardName(board, rawName) {
     const clean = (rawName || '').trim();
     if (!clean || clean.toLowerCase() === 'anonymous') {
+        const list = SERVER_BOARD_FAN_NAMES[board];
+        if (list && list.length > 0) {
+            return list[Math.floor(Math.random() * list.length)];
+        }
         return BOARDS[board]?.fanName || 'Anonymous';
     }
     return clean;
 }
 
 function buildUserVanityFlair(userId, showVanity, guestFlair) {
-    if (!showVanity) return null;
-    if (userId) {
+    if (userId && showVanity) {
         try {
-            const u = db.prepare('SELECT xp, oshi_badge FROM users WHERE id = ?').get(userId);
+            const u = db.prepare('SELECT xp, level, streak, oshi_badge FROM users WHERE id = ?').get(userId);
             if (u) {
                 const lvl = calculateLevel(u.xp || 0);
                 const rank = getRank(lvl);
-                const parts = [`${rank.badge} Lv.${lvl} ${rank.title}`];
-                if (u.oshi_badge && ALLOWED_OSHI_BADGES.includes(u.oshi_badge)) {
-                    parts.push(u.oshi_badge);
-                }
-                return parts.join('|');
+                return JSON.stringify({
+                    rankBadge: rank.badge,
+                    rankTitle: rank.title,
+                    level: lvl,
+                    streak: u.streak || 0,
+                    oshiBadge: (u.oshi_badge && ALLOWED_OSHI_BADGES.includes(u.oshi_badge)) ? u.oshi_badge : null
+                });
             }
         } catch (_) {}
     }
-    if (guestFlair && typeof guestFlair === 'string') {
+    if (guestFlair && typeof guestFlair === 'object') {
+        if (guestFlair.oshiBadge && ALLOWED_OSHI_BADGES.includes(guestFlair.oshiBadge)) {
+            return JSON.stringify({ oshiBadge: guestFlair.oshiBadge });
+        }
+    } else if (guestFlair && typeof guestFlair === 'string') {
         const sanitized = guestFlair.trim().slice(0, 80);
-        if (sanitized) return sanitized;
+        if (ALLOWED_OSHI_BADGES.includes(sanitized)) {
+            return JSON.stringify({ oshiBadge: sanitized });
+        }
+    }
+    return null;
+}
+
+// Verify genuine binary file signature (magic bytes) to prevent disguised files
+function detectMagicMime(buf) {
+    if (!buf || buf.length < 12) return null;
+    // JPEG: FF D8 FF
+    if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg';
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image/png';
+    // GIF: 47 49 46 38 ('GIF8')
+    if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return 'image/gif';
+    // WebP: 'RIFF' .... 'WEBP'
+    if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+        buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) {
+        return 'image/webp';
+    }
+    // MP4: bytes 4..7 === 'ftyp' (66 74 79 70)
+    if (buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70) {
+        return 'video/mp4';
+    }
+    // WebM / Matroska EBML header: 1A 45 DF A3
+    if (buf[0] === 0x1A && buf[1] === 0x45 && buf[2] === 0xDF && buf[3] === 0xA3) {
+        return 'video/webm';
     }
     return null;
 }
@@ -826,27 +877,59 @@ app.get('/api/reddit/post', async (req, res) => {
     }
 });
 
-// Stateless Media Upload Proxy (Catbox.moe Primary with userhash -> ImgBB Failover, Zero DB storage)
+// Stateless Media Upload Proxy (Catbox.moe Primary with userhash -> ImgBB Failover for images, Zero DB storage)
 app.post('/api/upload', async (req, res) => {
     const { image_base64, file_base64, filename, mime_type } = req.body || {};
     const rawBase64 = image_base64 || file_base64;
     if (!rawBase64 || typeof rawBase64 !== 'string') {
-        return res.status(400).json({ error: 'Missing image_base64 payload' });
+        return res.status(400).json({ error: 'Missing media payload' });
     }
 
     try {
         const base64Clean = rawBase64.replace(/^data:[^;]+;base64,/, '');
         const buffer = Buffer.from(base64Clean, 'base64');
-        if (buffer.length > 32 * 1024 * 1024) {
-            return res.status(413).json({ error: 'File exceeds 32MB limit' });
+
+        // 1. Verify genuine binary magic bytes & allowed format whitelist
+        const detectedMime = detectMagicMime(buffer);
+        const allowedMimes = {
+            'image/jpeg': { ext: 'jpg',  maxBytes: 5 * 1024 * 1024,  label: 'Static Image (JPG)' },
+            'image/png':  { ext: 'png',  maxBytes: 5 * 1024 * 1024,  label: 'Static Image (PNG)' },
+            'image/webp': { ext: 'webp', maxBytes: 5 * 1024 * 1024,  label: 'WebP Image' },
+            'image/gif':  { ext: 'gif',  maxBytes: 8 * 1024 * 1024,  label: 'Animated GIF' },
+            'video/mp4':  { ext: 'mp4',  maxBytes: 20 * 1024 * 1024, label: 'MP4 Video' },
+            'video/webm': { ext: 'webm', maxBytes: 20 * 1024 * 1024, label: 'WebM Video' }
+        };
+
+        const rule = detectedMime ? allowedMimes[detectedMime] : null;
+        if (!rule) {
+            return res.status(415).json({
+                error: 'Unsupported file format. Allowed: JPG, PNG, WebP (max 5MB), GIF (max 8MB), and MP4/WebM video (max 20MB).'
+            });
         }
 
-        const safeName = (filename || 'upload.webp').replace(/[^a-zA-Z0-9._-]/g, '_');
-        const safeMime = mime_type || 'image/webp';
-        const blob = new Blob([buffer], { type: safeMime });
+        // Prevent WebM vs MKV spoofing if user uploaded an .mkv file (both share EBML header 1A 45 DF A3)
+        if (detectedMime === 'video/webm' && filename && /\.mkv$/i.test(filename)) {
+            return res.status(415).json({
+                error: 'MKV videos are not supported by browsers. Please upload MP4 or WebM.'
+            });
+        }
+
+        // 2. Enforce tiered size limits
+        if (buffer.length > rule.maxBytes) {
+            const maxMB = Math.round(rule.maxBytes / (1024 * 1024));
+            const actualMB = (buffer.length / (1024 * 1024)).toFixed(1);
+            return res.status(413).json({
+                error: `${rule.label} is ${actualMB}MB, which exceeds the ${maxMB}MB limit.`
+            });
+        }
+
+        const isVideo = detectedMime.startsWith('video/');
+        const baseName = (filename || `oshimy_${Date.now()}`).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const safeName = `${baseName}.${rule.ext}`;
+        const blob = new Blob([buffer], { type: detectedMime });
         const catboxUserhash = process.env.CATBOX_USERHASH || '1e5680e58e931a1d509c280dc';
 
-        // 1. Primary: Catbox.moe permanent upload with userhash
+        // 3. Primary: Catbox.moe permanent upload with userhash
         try {
             const catboxForm = new FormData();
             catboxForm.append('reqtype', 'fileupload');
@@ -854,7 +937,7 @@ app.post('/api/upload', async (req, res) => {
             catboxForm.append('fileToUpload', blob, safeName);
 
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 15000);
+            const timeout = setTimeout(() => controller.abort(), 25000);
             const catboxResp = await fetch('https://catbox.moe/user/api.php', {
                 method: 'POST',
                 body: catboxForm,
@@ -866,14 +949,26 @@ app.post('/api/upload', async (req, res) => {
             if (catboxResp.ok) {
                 const text = (await catboxResp.text()).trim();
                 if (text.startsWith('https://files.catbox.moe/')) {
-                    return res.json({ success: true, url: text, provider: 'catbox.moe' });
+                    return res.json({
+                        success: true,
+                        url: text,
+                        provider: 'catbox.moe',
+                        media_kind: isVideo ? 'video' : 'image'
+                    });
                 }
             }
         } catch (catErr) {
-            console.warn('[Upload] Catbox primary warning, trying permanent ImgBB fallback:', catErr.message);
+            console.warn('[Upload] Catbox primary warning:', catErr.message);
         }
 
-        // 2. Secondary Permanent Failover: ImgBB
+        // 4. If Video: do not fallback to ImgBB (ImgBB only supports images)
+        if (isVideo) {
+            return res.status(502).json({
+                error: 'Catbox.moe video upload timed out or is temporarily unreachable. Please try again shortly.'
+            });
+        }
+
+        // 5. Secondary Permanent Failover for Images only: ImgBB
         const imgbbKey = process.env.IMGBB_API_KEY || '6d885f930c72cd28e6520e6c7494704f';
         const imgbbForm = new FormData();
         imgbbForm.append('image', base64Clean);
@@ -883,7 +978,12 @@ app.post('/api/upload', async (req, res) => {
         });
         const imgbbData = await imgbbResp.json();
         if (imgbbData.success && imgbbData.data && imgbbData.data.url) {
-            return res.json({ success: true, url: imgbbData.data.url, provider: 'imgbb' });
+            return res.json({
+                success: true,
+                url: imgbbData.data.url,
+                provider: 'imgbb',
+                media_kind: 'image'
+            });
         }
 
         return res.status(502).json({ error: 'All permanent image hosts failed to accept the upload' });
@@ -1104,7 +1204,9 @@ app.get('/api/thread', (req, res) => {
 
 // 4. Create New Thread
 app.post('/api/threads', (req, res) => {
-    const { board, name, subject, comment, media_url, show_vanity, hide_identity, guest_flair } = req.body;
+    const { board, name, subject, comment, media_url, show_vanity, show_vanity_flair, hide_identity, post_as_anonymous, guest_flair } = req.body;
+    const hideId = hide_identity !== undefined ? Boolean(hide_identity) : Boolean(post_as_anonymous);
+    const showVanity = show_vanity_flair !== undefined ? Boolean(show_vanity_flair) : (show_vanity !== false);
 
     if (!board || !BOARDS[board]) {
         return res.status(400).json({ error: 'Invalid board' });
@@ -1124,10 +1226,10 @@ app.post('/api/threads', (req, res) => {
         const posterMedia = (media_url && media_url.trim()) ? media_url.trim() : '';
 
         const userId = req.user ? req.user.user_id : null;
-        // Decoupled Vanity: If hide_identity is enabled, omit public role/display_title while keeping vanity_flair
-        const role = (req.user && !hide_identity) ? req.user.role : null;
-        const displayTitle = (req.user && !hide_identity) ? req.user.display_title : null;
-        const vanityFlair = buildUserVanityFlair(userId, show_vanity !== false, guest_flair);
+        // Decoupled Vanity: If hideId is enabled, omit public role/display_title while keeping vanity_flair
+        const role = (req.user && !hideId) ? req.user.role : null;
+        const displayTitle = (req.user && !hideId) ? req.user.display_title : null;
+        const vanityFlair = buildUserVanityFlair(userId, showVanity, guest_flair);
 
         try {
             db.prepare(`
@@ -1175,7 +1277,9 @@ app.post('/api/threads', (req, res) => {
 
 // 5. Create Reply
 app.post('/api/replies', (req, res) => {
-    const { thread_id, board, name, comment, media_url, show_vanity, hide_identity, guest_flair } = req.body;
+    const { thread_id, board, name, comment, media_url, show_vanity, show_vanity_flair, hide_identity, post_as_anonymous, guest_flair } = req.body;
+    const hideId = hide_identity !== undefined ? Boolean(hide_identity) : Boolean(post_as_anonymous);
+    const showVanity = show_vanity_flair !== undefined ? Boolean(show_vanity_flair) : (show_vanity !== false);
 
     if (!thread_id) {
         return res.status(400).json({ error: 'Missing thread_id' });
@@ -1202,9 +1306,9 @@ app.post('/api/replies', (req, res) => {
         const posterMedia = (media_url && media_url.trim()) ? media_url.trim() : '';
 
         const userId = req.user ? req.user.user_id : null;
-        const role = (req.user && !hide_identity) ? req.user.role : null;
-        const displayTitle = (req.user && !hide_identity) ? req.user.display_title : null;
-        const vanityFlair = buildUserVanityFlair(userId, show_vanity !== false, guest_flair);
+        const role = (req.user && !hideId) ? req.user.role : null;
+        const displayTitle = (req.user && !hideId) ? req.user.display_title : null;
+        const vanityFlair = buildUserVanityFlair(userId, showVanity, guest_flair);
 
         try {
             db.prepare(`
@@ -1294,14 +1398,16 @@ app.post('/api/replies', (req, res) => {
 
 // 5b. Lightweight "Kusa / Wotagei" Stamp Reactions
 app.post('/api/reactions/toggle', (req, res) => {
-    const { target_type, target_id, stamp } = req.body || {};
-    if (!target_id || !ALLOWED_STAMPS.includes(stamp)) {
+    const { post_type, target_type, post_id, target_id, stamp } = req.body || {};
+    const targetId = post_id || target_id;
+    const targetType = post_type || target_type;
+    if (!targetId || !ALLOWED_STAMPS.includes(stamp)) {
         return res.status(400).json({ error: 'Invalid reaction parameters' });
     }
 
-    const table = target_type === 'thread' ? 'threads' : 'replies';
+    const table = targetType === 'thread' ? 'threads' : 'replies';
     try {
-        const post = db.prepare(`SELECT id, user_id, ip_hash, reactions FROM ${table} WHERE id = ?`).get(target_id);
+        const post = db.prepare(`SELECT id, user_id, ip_hash, reactions FROM ${table} WHERE id = ?`).get(targetId);
         if (!post) {
             return res.status(404).json({ error: 'Post not found' });
         }
@@ -1316,30 +1422,34 @@ app.post('/api/reactions/toggle', (req, res) => {
             reactionsObj = {};
         }
 
-        const existing = db.prepare('SELECT 1 FROM post_reactions WHERE post_id = ? AND stamp = ? AND ip_hash = ?').get(target_id, stamp, ipHash);
+        const existing = db.prepare('SELECT 1 FROM post_reactions WHERE post_id = ? AND stamp = ? AND ip_hash = ?').get(targetId, stamp, ipHash);
         let active = false;
 
         if (existing) {
-            db.prepare('DELETE FROM post_reactions WHERE post_id = ? AND stamp = ? AND ip_hash = ?').run(target_id, stamp, ipHash);
+            db.prepare('DELETE FROM post_reactions WHERE post_id = ? AND stamp = ? AND ip_hash = ?').run(targetId, stamp, ipHash);
             const nextCount = Math.max(0, (parseInt(reactionsObj[stamp], 10) || 1) - 1);
             if (nextCount > 0) reactionsObj[stamp] = nextCount;
             else delete reactionsObj[stamp];
             active = false;
         } else {
-            db.prepare('INSERT OR IGNORE INTO post_reactions (post_id, stamp, ip_hash, created_at) VALUES (?, ?, ?, ?)').run(target_id, stamp, ipHash, Date.now());
+            try {
+                db.prepare('INSERT OR IGNORE INTO post_reactions (post_id, post_type, stamp, ip_hash, created_at) VALUES (?, ?, ?, ?, ?)').run(targetId, targetType === 'thread' ? 'thread' : 'reply', stamp, ipHash, Date.now());
+            } catch (_) {
+                db.prepare('INSERT OR IGNORE INTO post_reactions (post_id, stamp, ip_hash, created_at) VALUES (?, ?, ?, ?)').run(targetId, stamp, ipHash, Date.now());
+            }
             reactionsObj[stamp] = (parseInt(reactionsObj[stamp], 10) || 0) + 1;
             active = true;
 
-            // Award +2 XP to post author if reacted by someone else
+            // Award +5 XP to post author if reacted by someone else
             if (post.user_id && post.ip_hash !== ipHash) {
-                awardUserXP(db, post.user_id, 2);
+                awardUserXP(db, post.user_id, 5);
             }
         }
 
         const serialized = JSON.stringify(reactionsObj);
-        db.prepare(`UPDATE ${table} SET reactions = ? WHERE id = ?`).run(serialized, target_id);
+        db.prepare(`UPDATE ${table} SET reactions = ? WHERE id = ?`).run(serialized, targetId);
 
-        res.json({ success: true, reactions: reactionsObj, active });
+        res.json({ success: true, post_id: targetId, stamp, reactions: reactionsObj, active });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

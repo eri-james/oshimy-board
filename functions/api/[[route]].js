@@ -391,40 +391,94 @@ export async function onRequest(context) {
     const user = await getUser(request, db);
 
     try {
-        // Offloaded Image & Media Upload Proxy (Catbox.moe permanent primary with userhash + ImgBB fallback)
+        // Offloaded Image & Video Upload Proxy (Catbox.moe permanent primary with userhash + ImgBB fallback for images)
         if (route === 'upload' && method === 'POST') {
             const body = await request.json();
             const { image_base64, file_base64, filename, mime_type } = body || {};
             const rawBase64 = image_base64 || file_base64;
             if (!rawBase64) {
-                return json({ error: 'Missing image_base64 payload' }, 400);
+                return json({ error: 'Missing media payload' }, 400);
             }
 
             const cleanBase64 = String(rawBase64).replace(/^data:[^;]+;base64,/, '');
             const binaryStr = atob(cleanBase64);
             const len = binaryStr.length;
-            if (len > 15 * 1024 * 1024) {
-                return json({ error: 'File exceeds 15MB limit' }, 413);
+            if (len < 12) {
+                return json({ error: 'Invalid or empty file' }, 400);
+            }
+            if (len > 20 * 1024 * 1024) {
+                return json({ error: 'File exceeds 20MB maximum limit' }, 413);
             }
             const bytes = new Uint8Array(len);
             for (let i = 0; i < len; i++) {
                 bytes[i] = binaryStr.charCodeAt(i);
             }
-            const safeMime = mime_type || 'image/webp';
-            const ext = (safeMime.split('/')[1] || 'webp').replace(/[^a-z0-9]/gi, '');
-            const safeName = (filename || `oshimy_${Date.now()}.${ext}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+
+            // 1. Magic-byte signature detection
+            let detectedMime = null;
+            if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+                detectedMime = 'image/jpeg';
+            } else if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+                detectedMime = 'image/png';
+            } else if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
+                detectedMime = 'image/gif';
+            } else if (
+                bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+                bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+            ) {
+                detectedMime = 'image/webp';
+            } else if (bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+                detectedMime = 'video/mp4';
+            } else if (bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3) {
+                detectedMime = 'video/webm';
+            }
+
+            const allowedMimes = {
+                'image/jpeg': { ext: 'jpg',  maxBytes: 5 * 1024 * 1024,  label: 'Static Image (JPG)' },
+                'image/png':  { ext: 'png',  maxBytes: 5 * 1024 * 1024,  label: 'Static Image (PNG)' },
+                'image/webp': { ext: 'webp', maxBytes: 5 * 1024 * 1024,  label: 'WebP Image' },
+                'image/gif':  { ext: 'gif',  maxBytes: 8 * 1024 * 1024,  label: 'Animated GIF' },
+                'video/mp4':  { ext: 'mp4',  maxBytes: 20 * 1024 * 1024, label: 'MP4 Video' },
+                'video/webm': { ext: 'webm', maxBytes: 20 * 1024 * 1024, label: 'WebM Video' }
+            };
+
+            const rule = detectedMime ? allowedMimes[detectedMime] : null;
+            if (!rule) {
+                return json({
+                    error: 'Unsupported file format. Allowed: JPG, PNG, WebP (max 5MB), GIF (max 8MB), and MP4/WebM video (max 20MB).'
+                }, 415);
+            }
+
+            if (detectedMime === 'video/webm' && filename && /\.mkv$/i.test(filename)) {
+                return json({
+                    error: 'MKV videos are not supported by browsers. Please upload MP4 or WebM.'
+                }, 415);
+            }
+
+            // 2. Enforce tiered size limits
+            if (len > rule.maxBytes) {
+                const maxMB = Math.round(rule.maxBytes / (1024 * 1024));
+                const actualMB = (len / (1024 * 1024)).toFixed(1);
+                return json({
+                    error: `${rule.label} is ${actualMB}MB, which exceeds the ${maxMB}MB limit.`
+                }, 413);
+            }
+
+            const isVideo = detectedMime.startsWith('video/');
+            const baseName = (filename || `oshimy_${Date.now()}`).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const safeName = `${baseName}.${rule.ext}`;
             const catboxUserhash = env?.CATBOX_USERHASH || '1e5680e58e931a1d509c280dc';
 
-            // 1. Primary: Catbox.moe permanent upload API with userhash
+            // 3. Primary: Catbox.moe permanent upload API with userhash
             try {
                 const form = new FormData();
                 form.append('reqtype', 'fileupload');
                 form.append('userhash', catboxUserhash);
-                const blob = new Blob([bytes], { type: safeMime });
+                const blob = new Blob([bytes], { type: detectedMime });
                 form.append('fileToUpload', blob, safeName);
 
                 const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 15000);
+                const timeout = setTimeout(() => controller.abort(), 25000);
                 const catResp = await fetch('https://catbox.moe/user/api.php', {
                     method: 'POST',
                     body: form,
@@ -439,13 +493,21 @@ export async function onRequest(context) {
                         return json({
                             success: true,
                             url: textUrl,
-                            provider: 'catbox.moe'
+                            provider: 'catbox.moe',
+                            media_kind: isVideo ? 'video' : 'image'
                         });
                     }
                 }
             } catch (_) {}
 
-            // 2. Permanent Fallback: ImgBB if Catbox is unreachable
+            // 4. If Video: do not fallback to ImgBB (ImgBB only supports images)
+            if (isVideo) {
+                return json({
+                    error: 'Catbox.moe video upload timed out or is temporarily unreachable. Please try again shortly.'
+                }, 502);
+            }
+
+            // 5. Permanent Fallback for Images only: ImgBB
             const imgbbKey = env?.IMGBB_API_KEY || 'ba7dd29db4fb9b62ebfb8fae4c6c7922';
             const imgbbForm = new URLSearchParams();
             imgbbForm.append('image', cleanBase64);
@@ -458,7 +520,8 @@ export async function onRequest(context) {
                 return json({
                     success: true,
                     url: ibbData.data.url,
-                    provider: 'imgbb'
+                    provider: 'imgbb',
+                    media_kind: 'image'
                 });
             }
 

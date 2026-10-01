@@ -1410,7 +1410,110 @@ function initMediaInputDetector() {
     bindDetector(document.getElementById('qrImage'), document.getElementById('qrMediaBadge'));
 }
 
-// --- CLIENT-SIDE WEBP IMAGE COMPRESSION & CATBOX.MOE UPLOAD CONTROLLER ---
+// --- CLIENT-SIDE WEBP IMAGE COMPRESSION, VIDEO METADATA VALIDATION & CATBOX.MOE UPLOAD CONTROLLER ---
+const UPLOAD_LIMITS = {
+    STATIC_IMAGE_MAX_RAW: 15 * 1024 * 1024, // Up to 15MB raw before WebP compression
+    STATIC_IMAGE_MAX_FINAL: 5 * 1024 * 1024, // Max 5MB after WebP compression
+    GIF_MAX_BYTES: 8 * 1024 * 1024,          // Max 8MB for animated GIF
+    VIDEO_MAX_BYTES: 20 * 1024 * 1024,       // Max 20MB for MP4 / WebM
+    VIDEO_MAX_DURATION_SEC: 90,              // Max 90 seconds clip duration
+    VIDEO_MAX_LONG_EDGE: 1920,               // Max 1080p (1920x1080 or 1080x1920)
+    VIDEO_MAX_SHORT_EDGE: 1080
+};
+
+const ALLOWED_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const ALLOWED_VIDEO_MIMES = ['video/mp4', 'video/webm'];
+
+// Inspects an MP4/WebM file in <50ms using an offscreen <video> element to check duration, resolution & capture a preview frame
+function inspectAndValidateVideoFile(file) {
+    return new Promise((resolve, reject) => {
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.muted = true;
+        video.playsInline = true;
+        const objectUrl = URL.createObjectURL(file);
+        let settled = false;
+
+        const cleanup = () => {
+            try {
+                video.removeAttribute('src');
+                video.load();
+                URL.revokeObjectURL(objectUrl);
+            } catch (_) {}
+        };
+
+        const timer = setTimeout(() => {
+            if (!settled) {
+                settled = true;
+                cleanup();
+                reject(new Error('Could not read video metadata. Please ensure the file is a valid MP4 or WebM video.'));
+            }
+        }, 6000);
+
+        video.onerror = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            cleanup();
+            reject(new Error('Unsupported or corrupted video codec. Please use standard MP4 (H.264) or WebM (VP8/VP9).'));
+        };
+
+        video.onloadedmetadata = () => {
+            if (settled) return;
+            const duration = video.duration || 0;
+            const width = video.videoWidth || 0;
+            const height = video.videoHeight || 0;
+
+            if (duration > UPLOAD_LIMITS.VIDEO_MAX_DURATION_SEC) {
+                settled = true;
+                clearTimeout(timer);
+                cleanup();
+                reject(new Error(`Video is ${Math.round(duration)}s long. Maximum allowed clip duration is ${UPLOAD_LIMITS.VIDEO_MAX_DURATION_SEC}s (1m 30s).`));
+                return;
+            }
+
+            const longEdge = Math.max(width, height);
+            const shortEdge = Math.min(width, height);
+            if (longEdge > UPLOAD_LIMITS.VIDEO_MAX_LONG_EDGE || shortEdge > UPLOAD_LIMITS.VIDEO_MAX_SHORT_EDGE) {
+                settled = true;
+                clearTimeout(timer);
+                cleanup();
+                reject(new Error(`Video resolution (${width}×${height}) exceeds 1080p maximum (${UPLOAD_LIMITS.VIDEO_MAX_LONG_EDGE}×${UPLOAD_LIMITS.VIDEO_MAX_SHORT_EDGE}).`));
+                return;
+            }
+
+            // Seek slightly to grab a thumbnail frame for the preview box
+            video.currentTime = Math.min(0.2, duration / 2 || 0);
+        };
+
+        video.onseeked = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            let thumbDataUrl = '';
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.min(320, video.videoWidth || 320);
+                canvas.height = Math.min(180, video.videoHeight || 180);
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                thumbDataUrl = canvas.toDataURL('image/webp', 0.75);
+            } catch (_) {}
+
+            const meta = {
+                duration: Math.max(1, Math.round(video.duration || 0)),
+                width: video.videoWidth || 0,
+                height: video.videoHeight || 0,
+                thumbDataUrl
+            };
+            cleanup();
+            resolve(meta);
+        };
+
+        video.src = objectUrl;
+    });
+}
+
 // Automatically resizes large images (>2048px) and converts to WebP (0.85 quality) before uploading to Catbox.moe
 async function compressImageFileToWebP(file) {
     // Keep animated GIFs and Videos untouched so animations/audio are preserved
@@ -1487,13 +1590,41 @@ function clearUploadedMedia() {
         urlInput.dispatchEvent(new Event('input'));
     }
     if (previewBox) previewBox.style.display = 'none';
-    if (previewImg) previewImg.src = '';
+    if (previewImg) {
+        previewImg.src = '';
+        previewImg.style.display = 'block';
+    }
 }
 
 async function uploadMediaFile(file, targetInputEl = null) {
     if (!file) return;
-    if (file.size > 15 * 1024 * 1024) {
-        showToast("File exceeds 15MB upload limit.", 3500, "error");
+
+    const mime = (file.type || '').toLowerCase();
+    const fileName = (file.name || '').toLowerCase();
+
+    // 1. Strict Format Validation (JPG, PNG, WebP, GIF, MP4, WebM only)
+    if (fileName.endsWith('.mkv') || fileName.endsWith('.avi') || fileName.endsWith('.mov')) {
+        showToast("Unsupported video format. Only MP4 and WebM videos are allowed.", 4000, "error");
+        return;
+    }
+    const isAllowedImage = ALLOWED_IMAGE_MIMES.includes(mime);
+    const isAllowedVideo = ALLOWED_VIDEO_MIMES.includes(mime);
+    if (!isAllowedImage && !isAllowedVideo) {
+        showToast("Unsupported format. Allowed: JPG, PNG, WebP, GIF, MP4, and WebM.", 4000, "error");
+        return;
+    }
+
+    // 2. Tiered Size Validation
+    if (mime === 'image/gif' && file.size > UPLOAD_LIMITS.GIF_MAX_BYTES) {
+        showToast(`GIF is ${(file.size / (1024 * 1024)).toFixed(1)}MB. Max allowed for GIFs is 8MB.`, 4000, "error");
+        return;
+    }
+    if (isAllowedImage && mime !== 'image/gif' && file.size > UPLOAD_LIMITS.STATIC_IMAGE_MAX_RAW) {
+        showToast(`Image is ${(file.size / (1024 * 1024)).toFixed(1)}MB. Max raw image size is 15MB (5MB after WebP compression).`, 4000, "error");
+        return;
+    }
+    if (isAllowedVideo && file.size > UPLOAD_LIMITS.VIDEO_MAX_BYTES) {
+        showToast(`Video is ${(file.size / (1024 * 1024)).toFixed(1)}MB. Max allowed for MP4/WebM videos is 20MB.`, 4000, "error");
         return;
     }
 
@@ -1503,19 +1634,53 @@ async function uploadMediaFile(file, targetInputEl = null) {
     const previewImg = document.getElementById('uploadPreviewImg');
     const previewInfo = document.getElementById('uploadPreviewInfo');
 
+    let videoMeta = null;
+    if (isAllowedVideo) {
+        if (uploadBtn) {
+            uploadBtn.innerText = "Checking Video...";
+            uploadBtn.disabled = true;
+        }
+        try {
+            videoMeta = await inspectAndValidateVideoFile(file);
+        } catch (vErr) {
+            if (uploadBtn) {
+                uploadBtn.innerText = "📤 Upload (Catbox)";
+                uploadBtn.disabled = false;
+            }
+            showToast(vErr.message || "Invalid video file", 4500, "error");
+            return;
+        }
+    }
+
     if (uploadBtn) {
-        uploadBtn.innerText = "Optimizing & Uploading...";
+        uploadBtn.innerText = isAllowedVideo ? "Uploading Video..." : "Optimizing & Uploading...";
         uploadBtn.disabled = true;
     }
     if (previewBox && (!targetInputEl || targetInputEl.id === 'imageInput')) {
         previewBox.style.display = 'flex';
-        if (previewInfo) previewInfo.innerText = 'Compressing to WebP & uploading to Catbox.moe...';
+        if (previewInfo) {
+            previewInfo.innerText = isAllowedVideo
+                ? `Uploading ${videoMeta ? `${videoMeta.duration}s (${videoMeta.width}×${videoMeta.height})` : ''} video to Catbox.moe...`
+                : 'Compressing to WebP & uploading to Catbox.moe...';
+        }
     }
 
     try {
         const processed = await compressImageFileToWebP(file);
-        if (previewImg && processed.base64 && processed.mimeType.startsWith('image/')) {
-            previewImg.src = processed.base64;
+        if (!isAllowedVideo && mime !== 'image/gif' && processed.compressedSize > UPLOAD_LIMITS.STATIC_IMAGE_MAX_FINAL) {
+            throw new Error('Compressed image still exceeds 5MB limit.');
+        }
+
+        if (previewImg) {
+            if (isAllowedVideo && videoMeta && videoMeta.thumbDataUrl) {
+                previewImg.src = videoMeta.thumbDataUrl;
+                previewImg.style.display = 'block';
+            } else if (processed.base64 && processed.mimeType.startsWith('image/')) {
+                previewImg.src = processed.base64;
+                previewImg.style.display = 'block';
+            } else {
+                previewImg.style.display = 'none';
+            }
         }
 
         const resp = await fetch('/api/upload', {
@@ -1534,13 +1699,22 @@ async function uploadMediaFile(file, targetInputEl = null) {
                 urlInput.value = result.url;
                 urlInput.dispatchEvent(new Event('input'));
             }
-            const origKB = Math.max(1, Math.round(processed.originalSize / 1024));
-            const compKB = Math.max(1, Math.round(processed.compressedSize / 1024));
-            const savedPct = origKB > compKB ? ` (-${Math.round((1 - compKB / origKB) * 100)}% WebP)` : '';
-            if (previewInfo) {
-                previewInfo.innerHTML = `✓ Hosted on <b>${escapeHtml(result.provider || 'catbox.moe')}</b> (${compKB} KB${savedPct})`;
+            if (isAllowedVideo) {
+                const sizeMB = (processed.originalSize / (1024 * 1024)).toFixed(1);
+                const metaLabel = videoMeta ? ` • ${videoMeta.duration}s • ${videoMeta.width}×${videoMeta.height}` : '';
+                if (previewInfo) {
+                    previewInfo.innerHTML = `✓ 🎥 Video on <b>${escapeHtml(result.provider || 'catbox.moe')}</b> (${sizeMB} MB${metaLabel})`;
+                }
+                showToast(`Video uploaded to Catbox.moe! (${sizeMB} MB${metaLabel})`, 3500, "success");
+            } else {
+                const origKB = Math.max(1, Math.round(processed.originalSize / 1024));
+                const compKB = Math.max(1, Math.round(processed.compressedSize / 1024));
+                const savedPct = origKB > compKB ? ` (-${Math.round((1 - compKB / origKB) * 100)}% WebP)` : '';
+                if (previewInfo) {
+                    previewInfo.innerHTML = `✓ Hosted on <b>${escapeHtml(result.provider || 'catbox.moe')}</b> (${compKB} KB${savedPct})`;
+                }
+                showToast(`Uploaded to ${result.provider || 'Catbox.moe'}! (${compKB} KB${savedPct})`, 3200, "success");
             }
-            showToast(`Uploaded to ${result.provider || 'Catbox.moe'}! (${compKB} KB${savedPct})`, 3200, "success");
         } else {
             throw new Error(result.error || 'Upload failed');
         }

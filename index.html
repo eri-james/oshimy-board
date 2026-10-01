@@ -135,10 +135,10 @@
             
             <div id="uploadDropzone" class="upload-dropzone">
                 <div style="display: flex; gap: 8px; width: 100%; align-items: center;">
-                    <input type="url" id="imageInput" placeholder="Media URL (Pixiv/Reddit/X/YT/Catbox/Direct Image or Video) or Drop / Ctrl+V Image" style="flex-grow: 1; margin-bottom: 0;">
-                    <button type="button" id="uploadBtn" title="Auto-compress to WebP &amp; upload to Catbox.moe">📤 Upload (Catbox)</button>
+                    <input type="url" id="imageInput" placeholder="Media URL (Pixiv/Reddit/X/YT/Catbox/Direct Image or Video) or Drop / Ctrl+V Media" style="flex-grow: 1; margin-bottom: 0;">
+                    <button type="button" id="uploadBtn" title="Upload Image (WebP/GIF) or Video (MP4/WebM) to Catbox.moe">📤 Upload (Catbox)</button>
                 </div>
-                <div class="dropzone-hint">📎 Drag &amp; drop image here, press <kbd>Ctrl+V</kbd> to paste from clipboard, or paste a link</div>
+                <div class="dropzone-hint">📎 Drag &amp; drop or <kbd>Ctrl+V</kbd> paste — Images up to 5MB (auto-WebP), GIFs up to 8MB, MP4/WebM videos up to 20MB (≤90s, ≤1080p)</div>
                 <div id="uploadPreviewBox" class="upload-preview-box" style="display:none;">
                     <img id="uploadPreviewImg" src="" alt="Upload Preview">
                     <div class="upload-preview-meta">
@@ -154,7 +154,13 @@
                 <summary><span>ℹ️ Supported Media &amp; Upload Formats</span></summary>
                 <div class="media-help-content">
                     <ul>
-                        <li><b>Catbox.moe Upload (Drag &amp; Drop / Paste):</b> Drag an image onto the form, press <code>Ctrl+V</code> inside the comment box, or click <b>Upload (Catbox)</b>. Images are automatically optimized to WebP before uploading to <code>files.catbox.moe</code>.</li>
+                        <li><b>Catbox.moe Upload (Drag &amp; Drop / Paste):</b>
+                            <ul>
+                                <li><b>Images (<code>JPG</code>, <code>PNG</code>, <code>WebP</code>):</b> Auto-compressed to WebP (max 5MB).</li>
+                                <li><b>Animated GIFs (<code>GIF</code>):</b> Preserved untouched (max 8MB).</li>
+                                <li><b>Videos (<code>MP4</code>, <code>WebM</code> only):</b> Max 20MB, max 90 seconds duration, max 1080p resolution.</li>
+                            </ul>
+                        </li>
                         <li><b>Pixiv:</b> Artwork URLs (<code>pixiv.net/artworks/...</code>) and direct images (<code>i.pximg.net/...</code>).</li>
                         <li><b>Reddit:</b> Post links (<code>reddit.com/r/.../comments/...</code>, <code>redd.it/...</code>), videos (<code>v.redd.it</code>), images (<code>i.redd.it</code>), or <code>vxreddit.com</code> proxy links with integrated audio and video player.</li>
                         <li><b>X (Twitter):</b> Direct post URLs (<code>https://x.com/.../status/...</code>) rendered via FixTweet proxy with native video &amp; multi-image support.</li>
@@ -164,7 +170,7 @@
                 </div>
             </details>
             
-            <input type="file" id="hiddenFileInput" accept="image/*,video/mp4,video/webm" style="display: none;">
+            <input type="file" id="hiddenFileInput" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" style="display: none;">
             <button type="submit" id="submitBtn">Submit Post</button>
         </form>
     </div>
