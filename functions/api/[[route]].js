@@ -393,25 +393,44 @@ export async function onRequest(context) {
     try {
         // Offloaded Image & Video Upload Proxy (Catbox.moe permanent primary with userhash + ImgBB fallback for images)
         if (route === 'upload' && method === 'POST') {
-            const body = await request.json();
-            const { image_base64, file_base64, filename, mime_type } = body || {};
-            const rawBase64 = image_base64 || file_base64;
-            if (!rawBase64) {
-                return json({ error: 'Missing media payload' }, 400);
+            const reqContentType = (request.headers.get('content-type') || '').toLowerCase();
+            let bytes = null;
+            let filename = '';
+            let cleanBase64 = '';
+
+            if (reqContentType.includes('application/octet-stream')) {
+                const arrayBuf = await request.arrayBuffer();
+                bytes = new Uint8Array(arrayBuf);
+                try {
+                    filename = decodeURIComponent(request.headers.get('x-file-name') || '');
+                } catch (_) {
+                    filename = String(request.headers.get('x-file-name') || '');
+                }
+            } else {
+                const body = await request.json();
+                const { image_base64, file_base64, filename: bodyFilename } = body || {};
+                const rawBase64 = image_base64 || file_base64;
+                if (!rawBase64) {
+                    return json({ error: 'Missing media payload' }, 400);
+                }
+                filename = bodyFilename || '';
+                const strBase64 = String(rawBase64);
+                const commaIdx = strBase64.indexOf(',');
+                cleanBase64 = (commaIdx !== -1 ? strBase64.slice(commaIdx + 1) : strBase64).replace(/\s+/g, '');
+                const binaryStr = atob(cleanBase64);
+                const bLen = binaryStr.length;
+                bytes = new Uint8Array(bLen);
+                for (let i = 0; i < bLen; i++) {
+                    bytes[i] = binaryStr.charCodeAt(i);
+                }
             }
 
-            const cleanBase64 = String(rawBase64).replace(/^data:[^;]+;base64,/, '');
-            const binaryStr = atob(cleanBase64);
-            const len = binaryStr.length;
+            const len = bytes ? bytes.byteLength : 0;
             if (len < 12) {
                 return json({ error: 'Invalid or empty file' }, 400);
             }
             if (len > 20 * 1024 * 1024) {
                 return json({ error: 'File exceeds 20MB maximum limit' }, 413);
-            }
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {
-                bytes[i] = binaryStr.charCodeAt(i);
             }
 
             // 1. Magic-byte signature detection
@@ -465,25 +484,42 @@ export async function onRequest(context) {
             }
 
             const isVideo = detectedMime.startsWith('video/');
-            const baseName = (filename || `oshimy_${Date.now()}`).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const baseName = (filename || `oshimy_${Date.now()}`).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_') || `oshimy_${Date.now()}`;
             const safeName = `${baseName}.${rule.ext}`;
             const catboxUserhash = env?.CATBOX_USERHASH || '1e5680e58e931a1d509c280dc';
 
-            // 3. Primary: Catbox.moe permanent upload API with userhash
+            // 3. Primary: Catbox.moe permanent upload API using raw binary multipart body
+            // (Avoids Cloudflare Workers legacy FormData/Blob stringification corruption)
             try {
-                const form = new FormData();
-                form.append('reqtype', 'fileupload');
-                form.append('userhash', catboxUserhash);
-                const blob = new Blob([bytes], { type: detectedMime });
-                form.append('fileToUpload', blob, safeName);
+                const boundary = '----OshiMYCatboxBoundary' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+                const enc = new TextEncoder();
+                const headerBytes = enc.encode(
+                    `--${boundary}\r\n` +
+                    `Content-Disposition: form-data; name="reqtype"\r\n\r\n` +
+                    `fileupload\r\n` +
+                    `--${boundary}\r\n` +
+                    `Content-Disposition: form-data; name="userhash"\r\n\r\n` +
+                    `${catboxUserhash}\r\n` +
+                    `--${boundary}\r\n` +
+                    `Content-Disposition: form-data; name="fileToUpload"; filename="${safeName}"\r\n` +
+                    `Content-Type: ${detectedMime}\r\n\r\n`
+                );
+                const footerBytes = enc.encode(`\r\n--${boundary}--\r\n`);
+                const multipartBody = new Uint8Array(headerBytes.length + bytes.byteLength + footerBytes.length);
+                multipartBody.set(headerBytes, 0);
+                multipartBody.set(bytes, headerBytes.length);
+                multipartBody.set(footerBytes, headerBytes.length + bytes.byteLength);
 
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 25000);
                 const catResp = await fetch('https://catbox.moe/user/api.php', {
                     method: 'POST',
-                    body: form,
+                    body: multipartBody,
                     signal: controller.signal,
-                    headers: { 'User-Agent': 'OshiMY-Imageboard/1.0 (+https://oshimy.moe)' }
+                    headers: {
+                        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                        'User-Agent': 'OshiMY-Imageboard/1.0 (+https://oshimy.moe)'
+                    }
                 });
                 clearTimeout(timeout);
 
@@ -508,6 +544,14 @@ export async function onRequest(context) {
             }
 
             // 5. Permanent Fallback for Images only: ImgBB
+            if (!cleanBase64) {
+                let bin = '';
+                const chunk = 0x8000;
+                for (let i = 0; i < bytes.length; i += chunk) {
+                    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                }
+                cleanBase64 = btoa(bin);
+            }
             const imgbbKey = env?.IMGBB_API_KEY || 'ba7dd29db4fb9b62ebfb8fae4c6c7922';
             const imgbbForm = new URLSearchParams();
             imgbbForm.append('image', cleanBase64);

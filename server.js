@@ -21,6 +21,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 
+app.use('/api/upload', express.raw({ type: 'application/octet-stream', limit: '25mb' }));
 app.use(express.json({ limit: '30mb' }));
 app.use(express.urlencoded({ extended: true, limit: '30mb' }));
 
@@ -122,6 +123,34 @@ function detectMagicMime(buf) {
         return 'video/webm';
     }
     return null;
+}
+
+// Build raw binary multipart/form-data payload (avoids FormData/Blob binary corruption across runtimes)
+function buildCatboxMultipart(fileBytes, safeName, mimeType, userhash) {
+    const boundary = '----OshiMYCatboxBoundary' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const enc = new TextEncoder();
+    const parts = [
+        `--${boundary}\r\nContent-Disposition: form-data; name="reqtype"\r\n\r\nfileupload\r\n`
+    ];
+    if (userhash) {
+        parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="userhash"\r\n\r\n${userhash}\r\n`);
+    }
+    parts.push(
+        `--${boundary}\r\nContent-Disposition: form-data; name="fileToUpload"; filename="${safeName}"\r\nContent-Type: ${mimeType}\r\n\r\n`
+    );
+    const headerBytes = enc.encode(parts.join(''));
+    const footerBytes = enc.encode(`\r\n--${boundary}--\r\n`);
+    const u8 = fileBytes instanceof Uint8Array
+        ? new Uint8Array(fileBytes.buffer, fileBytes.byteOffset, fileBytes.byteLength)
+        : new Uint8Array(fileBytes);
+    const body = new Uint8Array(headerBytes.length + u8.length + footerBytes.length);
+    body.set(headerBytes, 0);
+    body.set(u8, headerBytes.length);
+    body.set(footerBytes, headerBytes.length + u8.length);
+    return {
+        body,
+        contentType: `multipart/form-data; boundary=${boundary}`
+    };
 }
 
 const ARCHIVE_TIME_MS = 3 * 24 * 60 * 60 * 1000; // 3 Days
@@ -879,15 +908,32 @@ app.get('/api/reddit/post', async (req, res) => {
 
 // Stateless Media Upload Proxy (Catbox.moe Primary with userhash -> ImgBB Failover for images, Zero DB storage)
 app.post('/api/upload', async (req, res) => {
-    const { image_base64, file_base64, filename, mime_type } = req.body || {};
-    const rawBase64 = image_base64 || file_base64;
-    if (!rawBase64 || typeof rawBase64 !== 'string') {
-        return res.status(400).json({ error: 'Missing media payload' });
-    }
-
     try {
-        const base64Clean = rawBase64.replace(/^data:[^;]+;base64,/, '');
-        const buffer = Buffer.from(base64Clean, 'base64');
+        let buffer = null;
+        let filename = '';
+
+        if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+            buffer = req.body;
+            try {
+                filename = decodeURIComponent(req.headers['x-file-name'] || '');
+            } catch (_) {
+                filename = String(req.headers['x-file-name'] || '');
+            }
+        } else {
+            const { image_base64, file_base64, filename: bodyFilename } = req.body || {};
+            const rawBase64 = image_base64 || file_base64;
+            if (!rawBase64 || typeof rawBase64 !== 'string') {
+                return res.status(400).json({ error: 'Missing media payload' });
+            }
+            filename = bodyFilename || '';
+            const commaIdx = rawBase64.indexOf(',');
+            const base64Clean = (commaIdx !== -1 ? rawBase64.slice(commaIdx + 1) : rawBase64).replace(/\s+/g, '');
+            buffer = Buffer.from(base64Clean, 'base64');
+        }
+
+        if (!buffer || buffer.length < 12) {
+            return res.status(400).json({ error: 'Invalid or empty media file' });
+        }
 
         // 1. Verify genuine binary magic bytes & allowed format whitelist
         const detectedMime = detectMagicMime(buffer);
@@ -924,25 +970,24 @@ app.post('/api/upload', async (req, res) => {
         }
 
         const isVideo = detectedMime.startsWith('video/');
-        const baseName = (filename || `oshimy_${Date.now()}`).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const baseName = (filename || `oshimy_${Date.now()}`).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_') || `oshimy_${Date.now()}`;
         const safeName = `${baseName}.${rule.ext}`;
-        const blob = new Blob([buffer], { type: detectedMime });
         const catboxUserhash = process.env.CATBOX_USERHASH || '1e5680e58e931a1d509c280dc';
 
-        // 3. Primary: Catbox.moe permanent upload with userhash
+        // 3. Primary: Catbox.moe permanent upload with raw binary multipart body
         try {
-            const catboxForm = new FormData();
-            catboxForm.append('reqtype', 'fileupload');
-            catboxForm.append('userhash', catboxUserhash);
-            catboxForm.append('fileToUpload', blob, safeName);
+            const { body: multipartBody, contentType } = buildCatboxMultipart(buffer, safeName, detectedMime, catboxUserhash);
 
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 25000);
             const catboxResp = await fetch('https://catbox.moe/user/api.php', {
                 method: 'POST',
-                body: catboxForm,
+                body: multipartBody,
                 signal: controller.signal,
-                headers: { 'User-Agent': 'OshiMY-Board/1.0 (+https://oshimy.moe)' }
+                headers: {
+                    'Content-Type': contentType,
+                    'User-Agent': 'OshiMY-Board/1.0 (+https://oshimy.moe)'
+                }
             });
             clearTimeout(timeout);
 
@@ -970,8 +1015,8 @@ app.post('/api/upload', async (req, res) => {
 
         // 5. Secondary Permanent Failover for Images only: ImgBB
         const imgbbKey = process.env.IMGBB_API_KEY || '6d885f930c72cd28e6520e6c7494704f';
-        const imgbbForm = new FormData();
-        imgbbForm.append('image', base64Clean);
+        const imgbbForm = new URLSearchParams();
+        imgbbForm.append('image', buffer.toString('base64'));
         const imgbbResp = await fetch(`https://api.imgbb.com/1/upload?key=${imgbbKey}`, {
             method: 'POST',
             body: imgbbForm

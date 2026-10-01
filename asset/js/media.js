@@ -140,8 +140,8 @@ function setCachedEmbedMeta(key, val) {
 function getOptimizedThumbUrl(rawUrl, width = 360) {
     if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
     if (rawUrl.startsWith('/') || rawUrl.startsWith('data:') || rawUrl.includes('wsrv.nl')) return rawUrl;
-    // Skip animated GIFs or Pixiv reverse-proxied URLs so animations/headers remain intact
-    if (/\.gif(?:\?|$)/i.test(rawUrl) || rawUrl.includes('pximg.net') || rawUrl.includes('pixiv.re')) {
+    // Skip animated GIFs, Catbox direct files, or Pixiv reverse-proxied URLs so files load directly without proxy delay
+    if (/\.gif(?:\?|$)/i.test(rawUrl) || rawUrl.includes('catbox.moe') || rawUrl.includes('pximg.net') || rawUrl.includes('pixiv.re')) {
         return rawUrl;
     }
     return `https://wsrv.nl/?url=${encodeURIComponent(rawUrl)}&w=${width}&output=webp&q=82&we`;
@@ -568,9 +568,16 @@ async function validateMediaUrl(url) {
     // Pixiv Direct Image (i.pximg.net): Test via reverse proxy to avoid 403 Forbidden
     const testUrl = (media.type === 'pixiv_image' && media.proxyUrl) ? media.proxyUrl : media.url;
 
+    // Trusted direct upload hosts already verified by /api/upload
+    if (/^https:\/\/(?:files\.catbox\.moe|i\.ibb\.co)\//i.test(testUrl)) {
+        return { valid: true, type: media.type };
+    }
+
     return new Promise((resolve) => {
         const img = new Image();
+        img.referrerPolicy = 'no-referrer';
         let finished = false;
+        let triedProxy = false;
         img.onload = () => {
             if (!finished) {
                 finished = true;
@@ -578,6 +585,11 @@ async function validateMediaUrl(url) {
             }
         };
         img.onerror = () => {
+            if (!triedProxy && !testUrl.startsWith('/') && !testUrl.includes('wsrv.nl')) {
+                triedProxy = true;
+                img.src = `https://wsrv.nl/?url=${encodeURIComponent(testUrl)}&w=360`;
+                return;
+            }
             if (!finished) {
                 finished = true;
                 resolve({ valid: false, error: "Image failed to load. Check that the URL is public and direct." });
@@ -1514,31 +1526,35 @@ function inspectAndValidateVideoFile(file) {
     });
 }
 
-// Automatically resizes large images (>2048px) and converts to WebP (0.85 quality) before uploading to Catbox.moe
-async function compressImageFileToWebP(file) {
-    // Keep animated GIFs and Videos untouched so animations/audio are preserved
-    if (!file || !file.type.startsWith('image/') || file.type === 'image/gif') {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve({
-                base64: reader.result,
-                mimeType: file.type || 'application/octet-stream',
-                filename: file.name || `upload_${Date.now()}`,
-                originalSize: file.size,
-                compressedSize: file.size
-            });
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-        });
+// Preserves original binary file untouched when <= 5MB; only compresses via canvas.toBlob when a static image exceeds 5MB
+let currentPreviewObjectUrl = null;
+
+async function prepareMediaBlobForUpload(file) {
+    // Keep animated GIFs, Videos, WebP, and any static image <= 5MB completely untouched (exact original bytes!)
+    if (
+        !file ||
+        !file.type.startsWith('image/') ||
+        file.type === 'image/gif' ||
+        file.type === 'image/webp' ||
+        file.size <= UPLOAD_LIMITS.STATIC_IMAGE_MAX_FINAL
+    ) {
+        return {
+            blob: file,
+            mimeType: file.type || 'application/octet-stream',
+            filename: file.name || `upload_${Date.now()}`,
+            originalSize: file.size,
+            compressedSize: file.size
+        };
     }
 
+    // Only compress oversized (> 5MB) static JPG/PNG images down to fit the 5MB limit
     return new Promise((resolve) => {
         const img = new Image();
         const objectUrl = URL.createObjectURL(file);
         img.onload = () => {
-            URL.revokeObjectURL(objectUrl);
             const MAX_DIM = 2048;
-            let { width, height } = img;
+            let width = img.naturalWidth || img.width;
+            let height = img.naturalHeight || img.height;
             if (width > MAX_DIM || height > MAX_DIM) {
                 if (width > height) {
                     height = Math.round((height * MAX_DIM) / width);
@@ -1553,29 +1569,39 @@ async function compressImageFileToWebP(file) {
             canvas.height = height;
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0, width, height);
+            URL.revokeObjectURL(objectUrl);
 
-            const dataUrl = canvas.toDataURL('image/webp', 0.85);
-            const approxBytes = Math.round((dataUrl.length - 23) * 0.75);
-            const baseName = (file.name || 'image').replace(/\.[^.]+$/, '');
-            resolve({
-                base64: dataUrl,
-                mimeType: 'image/webp',
-                filename: `${baseName}.webp`,
-                originalSize: file.size,
-                compressedSize: approxBytes
-            });
+            canvas.toBlob((blob) => {
+                if (blob && blob.size > 128) {
+                    const ext = blob.type === 'image/webp' ? 'webp' : (blob.type === 'image/jpeg' ? 'jpg' : 'png');
+                    const baseName = (file.name || 'image').replace(/\.[^.]+$/, '');
+                    resolve({
+                        blob,
+                        mimeType: blob.type || 'image/webp',
+                        filename: `${baseName}.${ext}`,
+                        originalSize: file.size,
+                        compressedSize: blob.size
+                    });
+                } else {
+                    resolve({
+                        blob: file,
+                        mimeType: file.type || 'image/jpeg',
+                        filename: file.name || `image_${Date.now()}.jpg`,
+                        originalSize: file.size,
+                        compressedSize: file.size
+                    });
+                }
+            }, 'image/webp', 0.85);
         };
         img.onerror = () => {
             URL.revokeObjectURL(objectUrl);
-            const reader = new FileReader();
-            reader.onload = () => resolve({
-                base64: reader.result,
+            resolve({
+                blob: file,
                 mimeType: file.type || 'image/png',
                 filename: file.name || `image_${Date.now()}.png`,
                 originalSize: file.size,
                 compressedSize: file.size
             });
-            reader.readAsDataURL(file);
         };
         img.src = objectUrl;
     });
@@ -1585,6 +1611,10 @@ function clearUploadedMedia() {
     const urlInput = document.getElementById('imageInput');
     const previewBox = document.getElementById('uploadPreviewBox');
     const previewImg = document.getElementById('uploadPreviewImg');
+    if (currentPreviewObjectUrl) {
+        try { URL.revokeObjectURL(currentPreviewObjectUrl); } catch (_) {}
+        currentPreviewObjectUrl = null;
+    }
     if (urlInput) {
         urlInput.value = '';
         urlInput.dispatchEvent(new Event('input'));
@@ -1620,7 +1650,7 @@ async function uploadMediaFile(file, targetInputEl = null) {
         return;
     }
     if (isAllowedImage && mime !== 'image/gif' && file.size > UPLOAD_LIMITS.STATIC_IMAGE_MAX_RAW) {
-        showToast(`Image is ${(file.size / (1024 * 1024)).toFixed(1)}MB. Max raw image size is 15MB (5MB after WebP compression).`, 4000, "error");
+        showToast(`Image is ${(file.size / (1024 * 1024)).toFixed(1)}MB. Max raw image size is 15MB (5MB after compression).`, 4000, "error");
         return;
     }
     if (isAllowedVideo && file.size > UPLOAD_LIMITS.VIDEO_MAX_BYTES) {
@@ -1653,7 +1683,7 @@ async function uploadMediaFile(file, targetInputEl = null) {
     }
 
     if (uploadBtn) {
-        uploadBtn.innerText = isAllowedVideo ? "Uploading Video..." : "Optimizing & Uploading...";
+        uploadBtn.innerText = isAllowedVideo ? "Uploading Video..." : "Uploading...";
         uploadBtn.disabled = true;
     }
     if (previewBox && (!targetInputEl || targetInputEl.id === 'imageInput')) {
@@ -1661,22 +1691,27 @@ async function uploadMediaFile(file, targetInputEl = null) {
         if (previewInfo) {
             previewInfo.innerText = isAllowedVideo
                 ? `Uploading ${videoMeta ? `${videoMeta.duration}s (${videoMeta.width}×${videoMeta.height})` : ''} video to Catbox.moe...`
-                : 'Compressing to WebP & uploading to Catbox.moe...';
+                : 'Uploading to Catbox.moe...';
         }
     }
 
     try {
-        const processed = await compressImageFileToWebP(file);
+        const processed = await prepareMediaBlobForUpload(file);
         if (!isAllowedVideo && mime !== 'image/gif' && processed.compressedSize > UPLOAD_LIMITS.STATIC_IMAGE_MAX_FINAL) {
-            throw new Error('Compressed image still exceeds 5MB limit.');
+            throw new Error('Image exceeds 5MB limit even after compression.');
         }
 
         if (previewImg) {
+            if (currentPreviewObjectUrl) {
+                try { URL.revokeObjectURL(currentPreviewObjectUrl); } catch (_) {}
+                currentPreviewObjectUrl = null;
+            }
             if (isAllowedVideo && videoMeta && videoMeta.thumbDataUrl) {
                 previewImg.src = videoMeta.thumbDataUrl;
                 previewImg.style.display = 'block';
-            } else if (processed.base64 && processed.mimeType.startsWith('image/')) {
-                previewImg.src = processed.base64;
+            } else if (processed.blob && processed.mimeType.startsWith('image/')) {
+                currentPreviewObjectUrl = URL.createObjectURL(processed.blob);
+                previewImg.src = currentPreviewObjectUrl;
                 previewImg.style.display = 'block';
             } else {
                 previewImg.style.display = 'none';
@@ -1685,12 +1720,12 @@ async function uploadMediaFile(file, targetInputEl = null) {
 
         const resp = await fetch('/api/upload', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                image_base64: processed.base64,
-                filename: processed.filename,
-                mime_type: processed.mimeType
-            })
+            headers: {
+                'Content-Type': 'application/octet-stream',
+                'X-File-Name': encodeURIComponent(processed.filename || 'upload'),
+                'X-Mime-Type': processed.mimeType || 'application/octet-stream'
+            },
+            body: processed.blob
         });
         const result = await resp.json();
 
@@ -1709,7 +1744,7 @@ async function uploadMediaFile(file, targetInputEl = null) {
             } else {
                 const origKB = Math.max(1, Math.round(processed.originalSize / 1024));
                 const compKB = Math.max(1, Math.round(processed.compressedSize / 1024));
-                const savedPct = origKB > compKB ? ` (-${Math.round((1 - compKB / origKB) * 100)}% WebP)` : '';
+                const savedPct = origKB > compKB ? ` (-${Math.round((1 - compKB / origKB) * 100)}%)` : '';
                 if (previewInfo) {
                     previewInfo.innerHTML = `✓ Hosted on <b>${escapeHtml(result.provider || 'catbox.moe')}</b> (${compKB} KB${savedPct})`;
                 }
