@@ -102,13 +102,50 @@
     <div id="formWrapper" class="post-box" style="display:none;">
         <div class="form-header" id="formTitle">Create New Thread</div>
         <form id="postForm">
-            <input type="text" id="nameInput" placeholder="Name (Anonymous)" value="Anonymous">
+            <div class="post-identity-row">
+                <input type="text" id="nameInput" placeholder="Name (Leave 'Anonymous' for random board Oshi Fan-Name)" value="Anonymous" style="flex:1; min-width:160px; margin-bottom:0;">
+                <button type="button" id="rollFanNameBtn" class="fan-name-roll-btn" onclick="rollBoardFanName()" title="Roll a board-themed Oshi Fan-Name">🎲 Roll Fan-Name</button>
+                <select id="guestOshiFlairSelect" class="guest-flair-select" title="Attach an optional Oshi Agency Flair badge to this post">
+                    <option value="">🏷️ Flair: None</option>
+                    <option value="VOGI">🏷️ VOGI</option>
+                    <option value="Project Orbit">🏷️ Project Orbit</option>
+                    <option value="Hoshizora Entertainment">🏷️ Hoshizora Ent.</option>
+                    <option value="VGakuenLive">🏷️ VGakuenLive</option>
+                    <option value="Indie">🏷️ MY Indie</option>
+                    <option value="Hololive">🏷️ Hololive</option>
+                    <option value="Nijisanji">🏷️ Nijisanji</option>
+                    <option value="Phase Connect">🏷️ Phase Connect</option>
+                </select>
+            </div>
+
+            <!-- Decoupled Vanity Controls (Visible when Logged In) -->
+            <div id="decoupledVanityBar" class="decoupled-vanity-bar" style="display:none;">
+                <label class="vanity-toggle-label" title="Post with an anonymous Fan-Name while still earning XP & notifications">
+                    <input type="checkbox" id="postAnonToggle" checked onchange="syncIdentityFormState()">
+                    <span>🕵️ Post Anonymously (Hide Username)</span>
+                </label>
+                <label class="vanity-toggle-label" title="Flex your Level Rank, Streak & Oshi Badge on this post without revealing your username">
+                    <input type="checkbox" id="showVanityToggle" checked>
+                    <span>✨ Flex Rank &amp; Oshi Badge</span>
+                </label>
+            </div>
+
             <input type="text" id="subjectInput" placeholder="Subject">
-            <textarea id="commentInput" placeholder="Write your comment..." required></textarea>
+            <textarea id="commentInput" placeholder="Write your comment... (Tip: Paste an image with Ctrl+V or drag &amp; drop onto this form!)" required></textarea>
             
-            <div style="display: flex; gap: 8px;">
-                <input type="url" id="imageInput" placeholder="Media URL (Pixiv/Reddit/X/YT/Direct Image or Video Link)" style="flex-grow: 1;">
-                <button type="button" id="uploadBtn">Upload Image</button>
+            <div id="uploadDropzone" class="upload-dropzone">
+                <div style="display: flex; gap: 8px; width: 100%; align-items: center;">
+                    <input type="url" id="imageInput" placeholder="Media URL (Pixiv/Reddit/X/YT/Catbox/Direct Image or Video) or Drop / Ctrl+V Image" style="flex-grow: 1; margin-bottom: 0;">
+                    <button type="button" id="uploadBtn" title="Auto-compress to WebP &amp; upload to Catbox.moe">📤 Upload (Catbox)</button>
+                </div>
+                <div class="dropzone-hint">📎 Drag &amp; drop image here, press <kbd>Ctrl+V</kbd> to paste from clipboard, or paste a link</div>
+                <div id="uploadPreviewBox" class="upload-preview-box" style="display:none;">
+                    <img id="uploadPreviewImg" src="" alt="Upload Preview">
+                    <div class="upload-preview-meta">
+                        <span id="uploadPreviewInfo">Ready</span>
+                        <button type="button" class="upload-clear-btn" onclick="clearUploadedMedia()">✕ Remove</button>
+                    </div>
+                </div>
             </div>
             <div id="mediaDetectedBadge" style="display:none; font-size:0.8em; margin-top:4px; margin-bottom:6px; padding:4px 8px; border-radius:4px; font-weight:bold;"></div>
             
@@ -117,17 +154,17 @@
                 <summary><span>ℹ️ Supported Media &amp; Upload Formats</span></summary>
                 <div class="media-help-content">
                     <ul>
+                        <li><b>Catbox.moe Upload (Drag &amp; Drop / Paste):</b> Drag an image onto the form, press <code>Ctrl+V</code> inside the comment box, or click <b>Upload (Catbox)</b>. Images are automatically optimized to WebP before uploading to <code>files.catbox.moe</code>.</li>
                         <li><b>Pixiv:</b> Artwork URLs (<code>pixiv.net/artworks/...</code>) and direct images (<code>i.pximg.net/...</code>).</li>
                         <li><b>Reddit:</b> Post links (<code>reddit.com/r/.../comments/...</code>, <code>redd.it/...</code>), videos (<code>v.redd.it</code>), images (<code>i.redd.it</code>), or <code>vxreddit.com</code> proxy links with integrated audio and video player.</li>
-                        <li><b>X (Twitter):</b> Direct post URLs (<code>https://x.com/.../status/...</code>) and twimg images.</li>
-                        <li><b>YouTube:</b> <code>youtube.com/watch?v=...</code>, <code>youtu.be/...</code>, Shorts, or Music.</li>
+                        <li><b>X (Twitter):</b> Direct post URLs (<code>https://x.com/.../status/...</code>) rendered via FixTweet proxy with native video &amp; multi-image support.</li>
+                        <li><b>YouTube:</b> <code>youtube.com/watch?v=...</code>, <code>youtu.be/...</code>, Shorts, or Music (instant Lite facade player).</li>
                         <li><b>Direct Images &amp; Video:</b> <code>.jpg</code>, <code>.png</code>, <code>.gif</code>, <code>.webp</code>, <code>.mp4</code>, <code>.webm</code>, <code>.mp3</code>.</li>
-                        <li><b>Upload Image:</b> Click <b>Upload Image</b> to upload directly from your device (free hosting via ImgBB).</li>
                     </ul>
                 </div>
             </details>
             
-            <input type="file" id="hiddenFileInput" accept="image/*" style="display: none;">
+            <input type="file" id="hiddenFileInput" accept="image/*,video/mp4,video/webm" style="display: none;">
             <button type="submit" id="submitBtn">Submit Post</button>
         </form>
     </div>

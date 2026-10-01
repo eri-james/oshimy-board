@@ -475,8 +475,9 @@ function getCatalogThumbnail(mediaUrl) {
     }
 
     if (media.type === 'youtube') {
-        const thumb = `https://img.youtube.com/vi/${media.id}/mqdefault.jpg`;
-        return `<img src="${thumb}" class="catalog-thumb" alt="YouTube Thumbnail" loading="lazy" decoding="async">`;
+        const thumb = `https://i.ytimg.com/vi_webp/${media.id}/mqdefault.webp`;
+        const jpgFallback = `https://i.ytimg.com/vi/${media.id}/mqdefault.jpg`;
+        return `<img src="${thumb}" onerror="if(this.src!=='${jpgFallback}')this.src='${jpgFallback}';" class="catalog-thumb" alt="YouTube Thumbnail" loading="lazy" decoding="async">`;
     }
     if (media.type === 'x') {
         return `<div class="catalog-placeholder-icon" style="color:#1DA1F2;">𝕏</div>`;
@@ -499,7 +500,233 @@ function getCatalogThumbnail(mediaUrl) {
     if (media.type === 'audio') {
         return `<div class="catalog-placeholder-icon">🎵</div>`;
     }
-    return `<img src="${escapeHtml(media.url)}" class="catalog-thumb" alt="Thumbnail" loading="lazy" decoding="async" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\'>🖼️</div>';">`;
+    const optThumb = typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(media.url, 260) : media.url;
+    return `<img src="${escapeHtml(optThumb)}" class="catalog-thumb" alt="Thumbnail" loading="lazy" decoding="async" onerror="if(this.src!=='${escapeHtml(media.url)}'){this.src='${escapeHtml(media.url)}';}else{this.onerror=null; this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\'>🖼️</div>';}">`;
+}
+
+// --- ANONYMOUS PER-THREAD POSTER IDS, OSHI FAN-NAMES, DECOUPLED VANITY & STAMP REACTIONS ---
+const CLIENT_BOARD_FAN_NAMES = {
+    'myvt':  ['Oshi-min', 'Gachikoi', 'DD Lurker', 'Kaigai-niki (MY)', 'Superchat Whale', 'Mamak Watcher'],
+    'vt':    ['Shrimp', 'Kenzoku', 'Takodachi', 'Dragoon', 'Ruffian', 'Niji-anon', 'DD Clip Watcher'],
+    'vg':    ['Sweaty Gamer', 'Gacha Salt Miner', 'F2P BTW', 'Frame Perfect Anon', 'Backlog Warrior'],
+    'amg':   ['Seasonal Watcher', 'Manga Reader', 'LN Purist', 'Sakuga Enjoyer', 'Seiyuu Otaku'],
+    'ca':    ['CF Booth Pilgrim', 'Cosplay Photog', 'Sketchbook Anon', 'Itasha Driver', 'Rigger-san'],
+    'tech':  ['ThinkPad Enjoyer', 'Arch BTW', 'Homelab Anon', 'VRAM Hoarder', 'Mechanical Keycapper'],
+    'mamak': ['Teh Tarik Kurang Manis', 'Roti Canai Banjir', 'Bossku', 'Lepak Anon', 'Maggi Goreng Doubly'],
+    'rqr':   ['Janny Summoner', 'Rule Lawyer', 'Feedback Anon', 'Bug Hunter'],
+    'myvth': ['Bonk Patrol Target', 'Halal-not Anon', 'Cultured Oshi-min', '3AM Lurker'],
+    'vth':   ['Cultured Shrimp', 'Seiso Reject', 'Lewdtuber Enjoyer', 'Bonk Evader'],
+    'hm':    ['6-Digit Scholar', 'Tag Filterer', 'Uncensored Seeker', 'Doujin Connoisseur'],
+    'hg':    ['VN Reader', 'RPGMaker Veteran', 'Illusionist', 'Save File Collector']
+};
+
+const STAMP_DEFINITIONS = [
+    { key: 'kusa',      emoji: '🌿', label: 'Kusa',      title: 'Kusa / LOL (草)' },
+    { key: 'tskr',      emoji: '🙏', label: 'TSKR',      title: 'Tasikaru / Blessed' },
+    { key: 'uoooh',     emoji: '😭', label: 'Uoooh',     title: 'Uoooh / Cute & Funny' },
+    { key: 'ikz',       emoji: '🔥', label: 'IKZ',       title: 'Ikuzo! / Let\'s Go!' },
+    { key: 'oshi',      emoji: '💖', label: 'Oshi',      title: 'Gachikoi / My Oshi' },
+    { key: 'glowstick', emoji: '🥖', label: 'Wotagei',   title: 'Penlight / Wotagei Cheer' }
+];
+
+let activeHighlightedPosterId = null;
+
+function rollBoardFanName() {
+    const nameInput = document.getElementById('nameInput');
+    if (!nameInput) return;
+    const list = CLIENT_BOARD_FAN_NAMES[currentBoard] || CLIENT_BOARD_FAN_NAMES['myvt'];
+    const currentVal = nameInput.value.trim();
+    const candidates = list.filter(n => n !== currentVal);
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)] || list[0];
+    nameInput.value = chosen;
+    const postAnonToggle = document.getElementById('postAnonToggle');
+    if (postAnonToggle) postAnonToggle.checked = true;
+}
+
+function syncIdentityFormState() {
+    const nameInput = document.getElementById('nameInput');
+    const postAnonToggle = document.getElementById('postAnonToggle');
+    if (!nameInput || !currentUser) return;
+
+    if (postAnonToggle && !postAnonToggle.checked) {
+        nameInput.value = currentUser.username;
+    } else if (nameInput.value === currentUser.username) {
+        nameInput.value = 'Anonymous';
+    }
+}
+
+function getPostIdentityPayload(rawName) {
+    const postAnonToggle = document.getElementById('postAnonToggle');
+    const showVanityToggle = document.getElementById('showVanityToggle');
+    const guestFlairSelect = document.getElementById('guestOshiFlairSelect');
+
+    const postAsAnon = currentUser ? (postAnonToggle ? postAnonToggle.checked : true) : true;
+    const showVanity = currentUser ? (showVanityToggle ? showVanityToggle.checked : true) : false;
+    const selectedFlair = guestFlairSelect ? guestFlairSelect.value : '';
+
+    let effectiveName = (rawName || '').trim();
+    if (currentUser && !postAsAnon && (!effectiveName || effectiveName.toLowerCase() === 'anonymous')) {
+        effectiveName = currentUser.username;
+    }
+
+    return {
+        name: effectiveName || 'Anonymous',
+        post_as_anonymous: postAsAnon,
+        show_vanity_flair: showVanity,
+        guest_flair: selectedFlair ? { oshiBadge: selectedFlair } : null
+    };
+}
+
+function renderPosterIdBadge(posterId) {
+    if (!posterId) return '';
+    const clean = String(posterId).substring(0, 8);
+    let hash = 0;
+    for (let i = 0; i < clean.length; i++) {
+        hash = clean.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const hue = Math.abs(hash) % 360;
+    const isActive = activeHighlightedPosterId === clean ? ' poster-id-active' : '';
+    return `<span class="poster-id-pill${isActive}" data-poster-id="${escapeHtml(clean)}" onclick="highlightPosterId('${escapeHtml(clean)}', event)" style="--pid-hue: ${hue};" title="Anonymous Thread ID (Click to highlight all posts by ID: ${escapeHtml(clean)})">ID: ${escapeHtml(clean)}</span>`;
+}
+
+function highlightPosterId(posterId, event) {
+    if (event) event.stopPropagation();
+    if (!posterId) return;
+
+    if (activeHighlightedPosterId === posterId) {
+        activeHighlightedPosterId = null;
+    } else {
+        activeHighlightedPosterId = posterId;
+    }
+
+    const allPills = document.querySelectorAll('.poster-id-pill');
+    let matchCount = 0;
+    allPills.forEach(pill => {
+        const pid = pill.getAttribute('data-poster-id');
+        const postCard = pill.closest('.op, .reply');
+        if (activeHighlightedPosterId && pid === activeHighlightedPosterId) {
+            pill.classList.add('poster-id-active');
+            if (postCard) postCard.classList.add('poster-id-card-highlight');
+            matchCount++;
+        } else {
+            pill.classList.remove('poster-id-active');
+            if (postCard) postCard.classList.remove('poster-id-card-highlight');
+        }
+    });
+
+    if (activeHighlightedPosterId && typeof showToast === 'function') {
+        showToast(`Highlighted ${matchCount} ${matchCount === 1 ? 'post' : 'posts'} by ID: ${posterId}`, 2200, 'info');
+    }
+}
+
+function renderVanityFlairBadges(vanityFlairRaw) {
+    if (!vanityFlairRaw) return '';
+    let flair = null;
+    try {
+        flair = typeof vanityFlairRaw === 'string' ? JSON.parse(vanityFlairRaw) : vanityFlairRaw;
+    } catch (_) {
+        return '';
+    }
+    if (!flair || typeof flair !== 'object') return '';
+
+    let html = '';
+    if (flair.rankTitle && flair.rankBadge) {
+        html += `<span class="vanity-rank-pill" title="Verified Anonymous Rank Flair (Decoupled from Account Identity)">${escapeHtml(flair.rankBadge)} Lv.${flair.level || 1} ${escapeHtml(flair.rankTitle)}</span>`;
+    }
+    if (flair.streak && flair.streak > 1) {
+        html += `<span class="vanity-streak-pill" title="${flair.streak}-Day Oshi Omikuji Streak">🔥 ${flair.streak}d</span>`;
+    }
+    if (flair.oshiBadge) {
+        html += `<span class="vanity-oshi-pill" title="Oshi Agency Flair">${escapeHtml(flair.oshiBadge)}</span>`;
+    }
+    return html;
+}
+
+function getMyStampedSet() {
+    try {
+        const arr = JSON.parse(localStorage.getItem('oshimy_my_stamps') || '[]');
+        return new Set(Array.isArray(arr) ? arr : []);
+    } catch (_) {
+        return new Set();
+    }
+}
+
+function saveMyStampedSet(set) {
+    try {
+        localStorage.setItem('oshimy_my_stamps', JSON.stringify(Array.from(set)));
+    } catch (_) {}
+}
+
+function renderStampReactionsBar(postId, postType, reactionsRaw) {
+    if (!postId || String(postId).startsWith('opt_')) return '';
+    let counts = {};
+    try {
+        counts = typeof reactionsRaw === 'string' ? JSON.parse(reactionsRaw || '{}') : (reactionsRaw || {});
+    } catch (_) {
+        counts = {};
+    }
+    const myStamps = getMyStampedSet();
+
+    const buttonsHtml = STAMP_DEFINITIONS.map(st => {
+        const c = parseInt(counts[st.key], 10) || 0;
+        const isMine = myStamps.has(`${postId}:${st.key}`);
+        const activeClass = isMine ? ' stamp-btn-active' : '';
+        const hasCountClass = c > 0 ? ' stamp-btn-has-count' : '';
+        return `<button type="button" class="stamp-reaction-btn${activeClass}${hasCountClass}" data-post-id="${escapeHtml(postId)}" data-stamp="${st.key}" onclick="togglePostReaction('${escapeHtml(postId)}', '${postType}', '${st.key}', this)" title="${escapeHtml(st.title)}"><span class="stamp-emoji">${st.emoji}</span><span class="stamp-label">${st.label}</span><span class="stamp-count">${c > 0 ? c : ''}</span></button>`;
+    }).join('');
+
+    return `<div class="stamp-reactions-bar" id="stamps_${escapeHtml(postId)}">${buttonsHtml}</div>`;
+}
+
+async function togglePostReaction(postId, postType, stamp, btnEl) {
+    if (!postId || !stamp) return;
+    const myStamps = getMyStampedSet();
+    const key = `${postId}:${stamp}`;
+    const wasActive = myStamps.has(key);
+
+    // Optimistic UI update
+    const countEl = btnEl ? btnEl.querySelector('.stamp-count') : null;
+    let curCount = countEl ? (parseInt(countEl.innerText, 10) || 0) : 0;
+    if (wasActive) {
+        myStamps.delete(key);
+        curCount = Math.max(0, curCount - 1);
+        if (btnEl) btnEl.classList.remove('stamp-btn-active');
+    } else {
+        myStamps.add(key);
+        curCount = curCount + 1;
+        if (btnEl) btnEl.classList.add('stamp-btn-active');
+    }
+    saveMyStampedSet(myStamps);
+    if (countEl) countEl.innerText = curCount > 0 ? String(curCount) : '';
+    if (btnEl) btnEl.classList.toggle('stamp-btn-has-count', curCount > 0);
+
+    try {
+        const res = await apiFetch('/reactions/toggle', {
+            method: 'POST',
+            body: { post_id: postId, post_type: postType, stamp }
+        });
+        if (res && res.success && res.reactions) {
+            const bar = document.getElementById(`stamps_${postId}`);
+            if (bar) {
+                STAMP_DEFINITIONS.forEach(st => {
+                    const b = bar.querySelector(`[data-stamp="${st.key}"]`);
+                    if (b) {
+                        const c = parseInt(res.reactions[st.key], 10) || 0;
+                        const cSpan = b.querySelector('.stamp-count');
+                        if (cSpan) cSpan.innerText = c > 0 ? String(c) : '';
+                        b.classList.toggle('stamp-btn-has-count', c > 0);
+                    }
+                });
+            }
+        }
+    } catch (_) {}
+}
+
+if (typeof window !== 'undefined') {
+    window.rollBoardFanName = rollBoardFanName;
+    window.syncIdentityFormState = syncIdentityFormState;
+    window.highlightPosterId = highlightPosterId;
+    window.togglePostReaction = togglePostReaction;
 }
 
 // Smart Diff: updates threads in place without wiping innerHTML
@@ -643,7 +870,8 @@ async function loadBoardView(isArchive = false, isSilent = false) {
     try {
         const signal = !isSilent && navAbortController ? navAbortController.signal : undefined;
         const viewParam = isArchive ? '&view=archive' : '';
-        const res = await apiFetch(`/threads?b=${currentBoard}${viewParam}`, { signal });
+        const modeParam = isCatalog ? '&mode=catalog' : '';
+        const res = await apiFetch(`/threads?b=${currentBoard}${viewParam}${modeParam}`, { signal });
         if (isSilent && res.notModified) {
             return; // 304 Not Modified: server confirmed zero changes during silent background update
         }
@@ -776,6 +1004,9 @@ function renderThreadPreview(th) {
     const replyCountText = th.reply_count > 0 
         ? `${th.reply_count} ${th.reply_count === 1 ? 'reply' : 'replies'}` 
         : `No replies yet`;
+    const posterIdHtml = renderPosterIdBadge(th.poster_id);
+    const vanityFlairHtml = renderVanityFlairBadges(th.vanity_flair);
+    const stampsBarHtml = renderStampReactionsBar(th.id, 'thread', th.reactions);
 
     return `
         <div class="thread" id="thread_${th.id}">
@@ -788,6 +1019,8 @@ function renderThreadPreview(th) {
                         <span class="subject">${escapeHtml(th.subject || '')}</span>
                         ${roleBadge}
                         <span class="name">${escapeHtml(th.name || 'Anonymous')}</span>
+                        ${vanityFlairHtml}
+                        ${posterIdHtml}
                         <span class="date">${dateStr}</span>
                         <span class="post-id">No. <a href="?b=${currentBoard}&t=${th.id}#post_${th.id}" onclick="quotePost('${th.id}', '${th.id}', event)" title="Quote post (Click) / Copy link (Right-click)">${th.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${th.id}', '${th.id}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a></span>
                         ${youTag}
@@ -797,6 +1030,7 @@ function renderThreadPreview(th) {
                     </div>
                     <div class="backlink-container" id="backlinks_${th.id}"></div>
                     <div class="comment">${formatComment(th.comment)}</div>
+                    ${stampsBarHtml}
                     <div style="font-size:0.85em; color:var(--text-color); opacity:0.8; margin-top:8px;">
                         [ <a href="?b=${currentBoard}&t=${th.id}" class="reply-count-link">${replyCountText}</a> ]
                     </div>
@@ -985,6 +1219,10 @@ async function loadThreadView(threadId, isSilent = false) {
                 `;
             }
 
+            const opPosterIdHtml = renderPosterIdBadge(th.poster_id);
+            const opVanityFlairHtml = renderVanityFlairBadges(th.vanity_flair);
+            const opStampsBarHtml = renderStampReactionsBar(th.id, 'thread', th.reactions);
+
             opContainer.innerHTML = `
                 <div class="op" id="post_${th.id}">
                     ${mediaHtml}
@@ -995,6 +1233,8 @@ async function loadThreadView(threadId, isSilent = false) {
                             <span class="subject">${escapeHtml(th.subject || '')}</span>
                             ${roleBadge}
                             <span class="name">${escapeHtml(th.name || 'Anonymous')}</span>
+                            ${opVanityFlairHtml}
+                            ${opPosterIdHtml}
                             <span class="date">${dateStr}</span>
                             <span class="post-id">No. <a href="?b=${currentBoard}&t=${th.id}#post_${th.id}" onclick="quotePost('${th.id}', '${th.id}', event)" title="Quote post (Click) / Copy link (Right-click)">${th.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${th.id}', '${th.id}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a></span>
                             ${youTag}
@@ -1003,6 +1243,7 @@ async function loadThreadView(threadId, isSilent = false) {
                         </div>
                         <div class="backlink-container" id="backlinks_${th.id}"></div>
                         <div class="comment">${formatComment(th.comment)}</div>
+                        ${opStampsBarHtml}
                     </div>
                 </div>
                 <hr style="margin: 15px 0; border-color: var(--border-color);">
@@ -1108,6 +1349,9 @@ function renderReplyCard(r, threadId, isPreview = false) {
     const postIdHtml = r.is_optimistic 
         ? `<span class="posting-badge">Posting</span>` 
         : `No. <a href="?b=${currentBoard}&t=${threadId}&r=${r.id}#post_${r.id}" onclick="quotePost('${r.id}', '${threadId}', event)" title="Quote post (Click) / Copy link (Right-click)">${r.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${r.id}', '${threadId}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a>`;
+    const posterIdHtml = renderPosterIdBadge(r.poster_id);
+    const vanityFlairHtml = renderVanityFlairBadges(r.vanity_flair);
+    const stampsBarHtml = renderStampReactionsBar(r.id, 'reply', r.reactions);
 
     return `
         <div class="reply-container${optClass}" id="post_${r.id}" data-created-at="${r.created_at || 0}" style="margin-bottom: 8px;">
@@ -1117,6 +1361,8 @@ function renderReplyCard(r, threadId, isPreview = false) {
                     <div class="post-header">
                         ${roleBadge}
                         <span class="name">${escapeHtml(r.name || 'Anonymous')}</span>
+                        ${vanityFlairHtml}
+                        ${posterIdHtml}
                         <span class="date">${dateStr}</span>
                         <span class="post-id" id="post_id_label_${r.id}">${postIdHtml}</span>
                         ${youTag}
@@ -1124,6 +1370,7 @@ function renderReplyCard(r, threadId, isPreview = false) {
                     </div>
                     <div class="backlink-container" id="backlinks_${r.id}"></div>
                     <div class="comment">${formatComment(r.comment)}</div>
+                    ${stampsBarHtml}
                 </div>
             </div>
         </div>
@@ -1330,7 +1577,7 @@ function initQuickReply() {
         imageInput.addEventListener('change', updateQrBadge);
     }
 
-    // Media upload inside QR
+    // Media upload inside QR (uses Catbox.moe + WebP compression helper)
     if (uploadBtn && hiddenFileInput && imageInput) {
         uploadBtn.onclick = () => hiddenFileInput.click();
         hiddenFileInput.onchange = async () => {
@@ -1338,20 +1585,10 @@ function initQuickReply() {
             if (!file) return;
             uploadBtn.innerText = "⏳";
             uploadBtn.disabled = true;
-            const formData = new FormData();
-            formData.append("image", file);
             try {
-                const resp = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
-                    method: "POST",
-                    body: formData
-                });
-                const result = await resp.json();
-                if (result.success && result.data && result.data.url) {
-                    imageInput.value = result.data.url;
-                    imageInput.dispatchEvent(new Event('input'));
+                if (typeof uploadMediaFile === 'function') {
+                    await uploadMediaFile(file, imageInput);
                 }
-            } catch (e) {
-                console.error('Upload failed:', e);
             } finally {
                 uploadBtn.innerText = "Upload";
                 uploadBtn.disabled = false;
@@ -1422,6 +1659,9 @@ async function submitReplyCore({ threadId, comment, name, media_url, source = 'm
     if (mainComment) mainComment.value = "";
     if (qrImage) qrImage.value = "";
     if (mainImage) mainImage.value = "";
+    if (typeof clearUploadedMedia === 'function') clearUploadedMedia();
+
+    const identityPayload = getPostIdentityPayload(name);
 
     try {
         const res = await apiFetch('/replies', {
@@ -1429,9 +1669,12 @@ async function submitReplyCore({ threadId, comment, name, media_url, source = 'm
             body: {
                 thread_id: threadId,
                 board: currentBoard,
-                name: (name || '').trim() || 'Anonymous',
+                name: identityPayload.name,
                 comment: comment.trim(),
-                media_url: mediaVal
+                media_url: mediaVal,
+                post_as_anonymous: identityPayload.post_as_anonymous,
+                show_vanity_flair: identityPayload.show_vanity_flair,
+                guest_flair: identityPayload.guest_flair
             }
         });
 
@@ -1445,18 +1688,18 @@ async function submitReplyCore({ threadId, comment, name, media_url, source = 'm
 
             // Sync optimistic element with real server data in place
             if (optimisticEl) {
-                optimisticEl.id = `post_${res.reply.id}`;
-                optimisticEl.classList.remove('reply-optimistic');
-                optimisticEl.classList.add('new-reply-flash');
-
-                const postHeader = optimisticEl.querySelector('.post-header');
-                if (postHeader) {
-                    const idLabel = postHeader.querySelector('.post-id');
-                    if (idLabel) {
-                        idLabel.innerHTML = `No. <a href="?b=${currentBoard}&t=${threadId}&r=${res.reply.id}#post_${res.reply.id}" onclick="quotePost('${res.reply.id}', '${threadId}', event)" title="Quote post (Click) / Copy link (Right-click)">${res.reply.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${res.reply.id}', '${threadId}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a> <span style="font-weight:bold; font-style:italic; font-size:0.9em;">(You)</span>`;
-                    }
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = renderReplyCard(res.reply, threadId, false);
+                const freshEl = tempDiv.firstElementChild;
+                if (freshEl) {
+                    freshEl.classList.add('new-reply-flash');
+                    optimisticEl.replaceWith(freshEl);
+                    optimisticEl = freshEl;
                 }
                 generateBacklinks();
+                if (typeof hydratePixivEmbeds === 'function') hydratePixivEmbeds();
+                if (typeof hydrateTwitterEmbeds === 'function') hydrateTwitterEmbeds();
+                if (typeof hydrateRedditEmbeds === 'function') hydrateRedditEmbeds();
             } else if (currentThreadId !== threadId) {
                 window.location.hash = `#thread_${threadId}`;
             }
@@ -1670,15 +1913,20 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        const identityPayload = getPostIdentityPayload(nameInput.value);
+
         try {
             const res = await apiFetch('/threads', {
                 method: 'POST',
                 body: {
                     board: currentBoard,
-                    name: nameInput.value,
+                    name: identityPayload.name,
                     subject: subjectInput.value,
                     comment: commentInput.value,
-                    media_url: imageInput.value
+                    media_url: imageInput.value,
+                    post_as_anonymous: identityPayload.post_as_anonymous,
+                    show_vanity_flair: identityPayload.show_vanity_flair,
+                    guest_flair: identityPayload.guest_flair
                 }
             });
 
@@ -1693,6 +1941,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 subjectInput.value = "";
                 commentInput.value = "";
                 imageInput.value = "";
+                if (typeof clearUploadedMedia === 'function') clearUploadedMedia();
                 const badge = document.getElementById('mediaDetectedBadge');
                 if (badge) { badge.style.display = 'none'; badge.innerHTML = ''; }
                 window.location.hash = `#thread_${res.thread.id}`;
@@ -1795,6 +2044,12 @@ function updateAuthUI(user) {
     if (bannerAdmin) {
         bannerAdmin.style.display = (user && user.role === 'admin') ? 'block' : 'none';
     }
+
+    const vanityBar = document.getElementById('decoupledVanityBar');
+    if (vanityBar) {
+        vanityBar.style.display = user ? 'flex' : 'none';
+    }
+    syncIdentityFormState();
 }
 
 function openAuthModal(mode = 'login') {

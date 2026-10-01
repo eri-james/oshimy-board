@@ -32,6 +32,21 @@ try {
     if (!threadCols.includes('reply_count')) {
         db.exec("ALTER TABLE threads ADD COLUMN reply_count INTEGER NOT NULL DEFAULT 0;");
     }
+    if (!threadCols.includes('vanity_flair')) {
+        db.exec("ALTER TABLE threads ADD COLUMN vanity_flair TEXT;");
+    }
+    if (!threadCols.includes('reactions')) {
+        db.exec("ALTER TABLE threads ADD COLUMN reactions TEXT DEFAULT '{}';");
+    }
+
+    const replyCols = db.prepare("PRAGMA table_info(replies)").all().map(c => c.name);
+    if (!replyCols.includes('vanity_flair')) {
+        db.exec("ALTER TABLE replies ADD COLUMN vanity_flair TEXT;");
+    }
+    if (!replyCols.includes('reactions')) {
+        db.exec("ALTER TABLE replies ADD COLUMN reactions TEXT DEFAULT '{}';");
+    }
+
     // Always ensure denormalized reply_count is accurately synced with replies table
     db.exec(`
         UPDATE threads
@@ -39,6 +54,14 @@ try {
     `);
 
     db.exec(`
+        CREATE TABLE IF NOT EXISTS post_reactions (
+            post_id TEXT NOT NULL,
+            stamp TEXT NOT NULL,
+            ip_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (post_id, stamp, ip_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_post_reactions_post ON post_reactions(post_id);
         CREATE TABLE IF NOT EXISTS reply_mentions (
             id TEXT PRIMARY KEY,
             source_reply_id TEXT,
@@ -74,6 +97,12 @@ export function verifyPassword(password, stored) {
 export function hashIp(ip) {
     if (!ip || ip === 'Unknown') return 'anon';
     return crypto.createHash('sha256').update(ip + '-myvt-salt').digest('hex').substring(0, 12);
+}
+
+// Thread-scoped anonymous poster ID (unlinkable across different threads)
+export function generatePosterId(ipHash, threadId) {
+    const raw = `${ipHash || 'anon'}:${threadId || 'global'}:oshimy-poster-salt`;
+    return crypto.createHash('sha256').update(raw).digest('base64url').replace(/[-_]/g, 'X').substring(0, 6);
 }
 
 // Generate unique ID (compatible with Firebase string keys)

@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS threads (
     is_pinned INTEGER DEFAULT 0,
     is_locked INTEGER DEFAULT 0,
     reply_count INTEGER NOT NULL DEFAULT 0,
+    vanity_flair TEXT,
+    reactions TEXT DEFAULT '{}',
     created_at INTEGER NOT NULL,
     bumped_at INTEGER NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -57,6 +59,8 @@ CREATE TABLE IF NOT EXISTS replies (
     user_id TEXT,
     role TEXT,
     display_title TEXT,
+    vanity_flair TEXT,
+    reactions TEXT DEFAULT '{}',
     created_at INTEGER NOT NULL,
     FOREIGN KEY (thread_id) REFERENCES threads(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -65,6 +69,16 @@ CREATE TABLE IF NOT EXISTS replies (
 CREATE INDEX IF NOT EXISTS idx_replies_thread_created ON replies(thread_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_replies_thread_created_desc ON replies(thread_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_replies_user_id ON replies(user_id);
+
+CREATE TABLE IF NOT EXISTS post_reactions (
+    post_id TEXT NOT NULL,
+    stamp TEXT NOT NULL,
+    ip_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (post_id, stamp, ip_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_post_reactions_post ON post_reactions(post_id);
 
 CREATE TABLE IF NOT EXISTS reply_mentions (
     id TEXT PRIMARY KEY,

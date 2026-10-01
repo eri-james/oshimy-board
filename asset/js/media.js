@@ -113,19 +113,55 @@ function getMediaType(url) {
     return { type: 'image', url: cleanUrl };
 }
 
+// --- EMBED METADATA SESSION CACHE & THUMBNAIL HELPER PROXIES ---
+const embedMemoryCache = new Map();
+
+function getCachedEmbedMeta(key) {
+    if (embedMemoryCache.has(key)) return embedMemoryCache.get(key);
+    try {
+        const raw = sessionStorage.getItem('oshimy_embed_' + key);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            embedMemoryCache.set(key, parsed);
+            return parsed;
+        }
+    } catch (_) {}
+    return null;
+}
+
+function setCachedEmbedMeta(key, val) {
+    embedMemoryCache.set(key, val);
+    try {
+        sessionStorage.setItem('oshimy_embed_' + key, JSON.stringify(val));
+    } catch (_) {}
+}
+
+// Offload external image thumbnails via wsrv.nl global CDN (converts to lightweight WebP)
+function getOptimizedThumbUrl(rawUrl, width = 360) {
+    if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
+    if (rawUrl.startsWith('/') || rawUrl.startsWith('data:') || rawUrl.includes('wsrv.nl')) return rawUrl;
+    // Skip animated GIFs or Pixiv reverse-proxied URLs so animations/headers remain intact
+    if (/\.gif(?:\?|$)/i.test(rawUrl) || rawUrl.includes('pximg.net') || rawUrl.includes('pixiv.re')) {
+        return rawUrl;
+    }
+    return `https://wsrv.nl/?url=${encodeURIComponent(rawUrl)}&w=${width}&output=webp&q=82&we`;
+}
+
 // --- CENTRALIZED MEDIA RENDERING ---
 function renderMedia(url) {
     if (!url) return "";
     const media = getMediaType(url);
     if (!media) return "";
 
-    // 1. YouTube Card
+    // 1. Lite YouTube Facade Card (WebP thumbnail + zero-JS overhead until clicked)
     if (media.type === 'youtube') {
-        const thumbUrl = `https://img.youtube.com/vi/${media.id}/mqdefault.jpg`;
+        const webpThumb = `https://i.ytimg.com/vi_webp/${media.id}/hqdefault.webp`;
+        const jpgFallback = `https://i.ytimg.com/vi/${media.id}/mqdefault.jpg`;
         return `
-            <div class="media-container" onclick="openLightbox('youtube', '${media.id}')" title="Click to play YouTube Video">
-                <img src="${thumbUrl}" alt="YouTube Thumbnail" loading="lazy" decoding="async">
-                <div class="play-overlay">▶</div>
+            <div class="media-container yt-lite-facade" onclick="openLightbox('youtube', '${media.id}')" title="Click to play YouTube Video (${media.id})">
+                <img src="${webpThumb}" onerror="if(this.src!=='${jpgFallback}')this.src='${jpgFallback}';" alt="YouTube Thumbnail" loading="lazy" decoding="async" style="max-width:200px; max-height:200px; object-fit:cover; display:block;">
+                <div class="play-overlay yt-play-badge">▶</div>
+                <div class="pixiv-badge" style="background:#ff0000;">YouTube</div>
             </div>
         `;
     } 
@@ -225,174 +261,281 @@ function renderMedia(url) {
         `;
     }
 
-    // 9. Standard Image (including i.redd.it and pbs.twimg.com)
+    // 9. Standard Image (including Catbox, i.redd.it, pbs.twimg.com) with wsrv.nl WebP thumbnail proxy
+    const optimizedThumb = getOptimizedThumbUrl(media.url, 360);
     return `
-        <img src="${escapeHtml(media.url)}" class="thread-image" loading="lazy" decoding="async" alt="Post attachment" onclick="openLightbox('image', '${escapeHtml(media.url)}')" onerror="this.onerror=null; this.style.display='none';" title="Click to expand image">
+        <img src="${escapeHtml(optimizedThumb)}" data-full-src="${escapeHtml(media.url)}" class="thread-image" loading="lazy" decoding="async" alt="Post attachment" onclick="openLightbox('image', '${escapeHtml(media.url)}')" onerror="if(this.src !== this.dataset.fullSrc){ this.src = this.dataset.fullSrc; } else { this.onerror=null; this.style.display='none'; }" title="Click to expand full-resolution image">
     `;
 }
 
-// Hydrates Pixiv artwork card placeholders with actual thumbnails from /api/pixiv/artwork
-async function hydratePixivEmbeds() {
-    const slots = document.querySelectorAll('.pixiv-placeholder[data-pixiv-id]');
-    if (!slots || slots.length === 0) return;
+// --- VIEWPORT-AWARE LAZY EMBED HYDRATION (IntersectionObserver + Session Cache) ---
+let embedHydrationObserver = null;
 
-    for (const placeholder of slots) {
-        const id = placeholder.getAttribute('data-pixiv-id');
-        if (!id || placeholder.getAttribute('data-hydrated') === 'true') continue;
-        placeholder.setAttribute('data-hydrated', 'true');
-
-        try {
-            const resp = await fetch(`/api/pixiv/artwork?id=${id}`);
-            const data = await resp.json();
-            if (data.success && data.artwork) {
-                const art = data.artwork;
-                const slot = placeholder.querySelector('.pixiv-thumb-slot');
-                if (slot) {
-                    const pagesBadge = (art.pageCount && art.pageCount > 1) 
-                        ? `<div class="pixiv-pages-badge">📚 ${art.pageCount}P</div>` 
-                        : '';
-                    if (art.proxyUrl) {
-                        const badgeText = art.isR18 ? 'pixiv • R-18' : 'pixiv';
-                        const badgeStyle = art.isR18 ? 'background:rgba(225, 29, 72, 0.95);' : '';
-                        const helperFallback = `https://pixiv.re/${id}.jpg`;
-                        slot.innerHTML = `
-                            <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">
-                                <img src="${art.proxyUrl}" class="thread-image" loading="lazy" decoding="async" alt="${escapeHtml(art.title)}" onerror="if(this.src!=='${helperFallback}'){this.src='${helperFallback}';}else{this.style.display='none';}" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
-                                <div class="pixiv-badge" style="${badgeStyle}">${badgeText}</div>
-                                ${pagesBadge}
-                            </div>
-                        `;
-                        placeholder.classList.add('pixiv-thumb-loaded');
-                    } else {
-                        slot.innerHTML = `
-                            <div class="file-ext" style="color:${art.isR18 ? '#e11d48' : '#0096fa'}; font-size:22px; font-weight:900;">${art.isR18 ? 'R-18' : 'pixiv'}</div>
-                            <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(art.title)}</div>
-                            <div style="font-size:10px; color:#aaa; margin-top:2px;">By ${escapeHtml(art.author)}</div>
-                            ${pagesBadge}
-                        `;
-                    }
-                    placeholder.title = `${art.isR18 ? '[R-18] ' : ''}${art.title} by ${art.author}${art.pageCount > 1 ? ` (${art.pageCount} images)` : ''} - Click to expand`;
-                }
+function getEmbedObserver() {
+    if (embedHydrationObserver || typeof IntersectionObserver === 'undefined') {
+        return embedHydrationObserver;
+    }
+    embedHydrationObserver = new IntersectionObserver((entries, obs) => {
+        for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const el = entry.target;
+            obs.unobserve(el);
+            if (el.classList.contains('pixiv-placeholder')) {
+                hydrateSinglePixivSlot(el);
+            } else if (el.classList.contains('x-placeholder')) {
+                hydrateSingleTwitterSlot(el);
+            } else if (el.classList.contains('reddit-placeholder')) {
+                hydrateSingleRedditSlot(el);
             }
-        } catch (_) {}
+        }
+    }, { rootMargin: '350px 0px' });
+    return embedHydrationObserver;
+}
+
+async function hydrateSinglePixivSlot(placeholder) {
+    const id = placeholder.getAttribute('data-pixiv-id');
+    if (!id || placeholder.getAttribute('data-hydrated') === 'true') return;
+    placeholder.setAttribute('data-hydrated', 'true');
+
+    const applyPixivArt = (art) => {
+        const slot = placeholder.querySelector('.pixiv-thumb-slot');
+        if (!slot) return;
+        const pagesBadge = (art.pageCount && art.pageCount > 1) 
+            ? `<div class="pixiv-pages-badge">📚 ${art.pageCount}P</div>` 
+            : '';
+        if (art.proxyUrl) {
+            const badgeText = art.isR18 ? 'pixiv • R-18' : 'pixiv';
+            const badgeStyle = art.isR18 ? 'background:rgba(225, 29, 72, 0.95);' : '';
+            const helperFallback = `https://pixiv.re/${id}.jpg`;
+            slot.innerHTML = `
+                <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">
+                    <img src="${art.proxyUrl}" class="thread-image" loading="lazy" decoding="async" alt="${escapeHtml(art.title)}" onerror="if(this.src!=='${helperFallback}'){this.src='${helperFallback}';}else{this.style.display='none';}" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                    <div class="pixiv-badge" style="${badgeStyle}">${badgeText}</div>
+                    ${pagesBadge}
+                </div>
+            `;
+            placeholder.classList.add('pixiv-thumb-loaded');
+        } else {
+            slot.innerHTML = `
+                <div class="file-ext" style="color:${art.isR18 ? '#e11d48' : '#0096fa'}; font-size:22px; font-weight:900;">${art.isR18 ? 'R-18' : 'pixiv'}</div>
+                <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(art.title)}</div>
+                <div style="font-size:10px; color:#aaa; margin-top:2px;">By ${escapeHtml(art.author)}</div>
+                ${pagesBadge}
+            `;
+        }
+        placeholder.title = `${art.isR18 ? '[R-18] ' : ''}${art.title} by ${art.author}${art.pageCount > 1 ? ` (${art.pageCount} images)` : ''} - Click to expand`;
+    };
+
+    const cached = getCachedEmbedMeta('pixiv_' + id);
+    if (cached) {
+        applyPixivArt(cached);
+        return;
+    }
+
+    try {
+        const resp = await fetch(`/api/pixiv/artwork?id=${id}`);
+        const data = await resp.json();
+        if (data.success && data.artwork) {
+            setCachedEmbedMeta('pixiv_' + id, data.artwork);
+            applyPixivArt(data.artwork);
+        }
+    } catch (_) {}
+}
+
+async function fetchTweetWithFixTweetFallback(id, handle) {
+    const cached = getCachedEmbedMeta('tw_' + id);
+    if (cached) return cached;
+
+    try {
+        const resp = await fetch(`/api/twitter/tweet?id=${id}&handle=${encodeURIComponent(handle || 'i')}`);
+        const data = await resp.json();
+        if (data.success && data.tweet) {
+            setCachedEmbedMeta('tw_' + id, data.tweet);
+            return data.tweet;
+        }
+    } catch (_) {}
+
+    // Direct client-side FixTweet helper proxy fallback (zero widgets.js bloat)
+    try {
+        const fxResp = await fetch(`https://api.fxtwitter.com/${encodeURIComponent(handle || 'i')}/status/${id}`);
+        if (fxResp.ok) {
+            const fxJson = await fxResp.json();
+            if (fxJson && fxJson.tweet) {
+                const t = fxJson.tweet;
+                const photos = t.media?.photos || [];
+                const vids = t.media?.videos || [];
+                const pages = photos.map((p, idx) => ({
+                    pageIndex: idx,
+                    displayUrl: p.url,
+                    helperUrl: p.url,
+                    originalUrl: p.url
+                }));
+                const mapped = {
+                    id,
+                    url: t.url || `https://x.com/${t.author?.screen_name || handle}/status/${id}`,
+                    text: t.text || '',
+                    authorName: t.author?.name || handle,
+                    authorHandle: t.author?.screen_name || handle,
+                    avatar: t.author?.avatar_url || '',
+                    likes: t.likes || 0,
+                    retweets: t.retweets || 0,
+                    hasMedia: photos.length > 0 || vids.length > 0,
+                    mediaType: vids.length > 0 ? 'video' : (photos.length > 0 ? 'image' : 'none'),
+                    videoUrl: vids[0]?.url || null,
+                    videoThumbnail: vids[0]?.thumbnail_url || photos[0]?.url || null,
+                    imageUrl: photos[0]?.url || null,
+                    pages,
+                    pageCount: pages.length
+                };
+                setCachedEmbedMeta('tw_' + id, mapped);
+                return mapped;
+            }
+        }
+    } catch (_) {}
+    return null;
+}
+
+async function hydrateSingleTwitterSlot(placeholder) {
+    const id = placeholder.getAttribute('data-tweet-id');
+    const handle = placeholder.getAttribute('data-tweet-handle') || 'i';
+    if (!id || placeholder.getAttribute('data-hydrated') === 'true') return;
+    placeholder.setAttribute('data-hydrated', 'true');
+
+    const t = await fetchTweetWithFixTweetFallback(id, handle);
+    if (!t) return;
+
+    const slot = placeholder.querySelector('.tweet-thumb-slot');
+    if (slot) {
+        const rawThumb = t.videoThumbnail || t.imageUrl;
+        if (rawThumb) {
+            const thumb = getOptimizedThumbUrl(rawThumb, 360);
+            const isVideo = t.mediaType === 'video';
+            const multiBadge = (t.pageCount && t.pageCount > 1) 
+                ? `<div class="pixiv-pages-badge" style="background:rgba(29,161,242,0.95);">📚 ${t.pageCount}P</div>` 
+                : '';
+            const playOverlay = isVideo 
+                ? `<div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>` 
+                : '';
+
+            slot.innerHTML = `
+                <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" class="thread-image" loading="lazy" decoding="async" alt="Tweet media" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                    ${playOverlay}
+                    ${multiBadge}
+                    <div class="pixiv-badge" style="background:#1DA1F2;">𝕏 @${escapeHtml(t.authorHandle)}</div>
+                </div>
+            `;
+            placeholder.classList.add('x-thumb-loaded');
+        } else if (t.text) {
+            slot.innerHTML = `
+                <div style="padding:8px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; width:100%;">
+                    <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; width:100%;">
+                        ${t.avatar ? `<img src="${escapeHtml(t.avatar)}" style="width:18px; height:18px; border-radius:50%; object-fit:cover;">` : '<span style="color:#1DA1F2; font-weight:bold; font-size:12px;">𝕏</span>'}
+                        <span style="font-size:11px; font-weight:bold; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">@${escapeHtml(t.authorHandle)}</span>
+                    </div>
+                    <div style="font-size:10px; color:#ccc; line-height:1.3; max-height:60px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;">
+                        ${escapeHtml(t.text)}
+                    </div>
+                </div>
+            `;
+        }
+        placeholder.title = `@${t.authorHandle}: "${(t.text || '').slice(0, 100)}..." - Click to open`;
     }
 }
 
-async function hydrateTwitterEmbeds() {
-    const slots = document.querySelectorAll('.x-placeholder[data-tweet-id]');
+async function hydrateSingleRedditSlot(placeholder) {
+    const postUrl = placeholder.getAttribute('data-reddit-url');
+    if (!postUrl || placeholder.getAttribute('data-hydrated') === 'true') return;
+    placeholder.setAttribute('data-hydrated', 'true');
+
+    const applyRedditPost = (p) => {
+        const slot = placeholder.querySelector('.reddit-thumb-slot');
+        if (!slot) return;
+        const rawThumb = p.thumbnailUrl || p.imageUrl || p.videoThumbnail || p.videoUrl;
+        if (rawThumb && (p.mediaType === 'image' || p.mediaType === 'video')) {
+            const thumb = getOptimizedThumbUrl(rawThumb, 360);
+            const isVideo = p.mediaType === 'video';
+            const playOverlay = isVideo 
+                ? `<div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>` 
+                : '';
+            const multiBadge = (p.pageCount && p.pageCount > 1) 
+                ? `<div class="pixiv-pages-badge" style="background:#FF4500;">📚 ${p.pageCount}P</div>` 
+                : '';
+            const scoreBadge = p.score 
+                ? `<div style="position:absolute; top:6px; right:6px; background:rgba(0,0,0,0.75); color:#ff6a33; font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px; backdrop-filter:blur(2px); z-index:2;">⬆️ ${escapeHtml(p.score)}</div>` 
+                : '';
+
+            slot.innerHTML = `
+                <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" referrerpolicy="no-referrer" class="thread-image" loading="lazy" decoding="async" alt="Reddit media" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                    ${playOverlay}
+                    ${multiBadge}
+                    ${scoreBadge}
+                    <div class="pixiv-badge" style="background:#FF4500;">r/${escapeHtml(p.subreddit)}</div>
+                </div>
+            `;
+            placeholder.classList.add('reddit-thumb-loaded');
+        } else if (p.title) {
+            const scoreSnippet = p.score ? `<span style="font-size:10px; color:#ff6a33; font-weight:bold;">⬆️ ${escapeHtml(p.score)}</span>` : '';
+            slot.innerHTML = `
+                <div style="padding:8px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; width:100%;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; width:100%; margin-bottom:4px;">
+                        <span style="color:#FF4500; font-weight:bold; font-size:11px;">r/${escapeHtml(p.subreddit)}</span>
+                        ${scoreSnippet}
+                    </div>
+                    <div style="font-size:10px; color:#9ca3af; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; width:100%; margin-bottom:4px;">by ${escapeHtml(p.author)}</div>
+                    <div style="font-size:11px; font-weight:bold; color:#fff; line-height:1.3; max-height:60px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;">
+                        ${escapeHtml(p.title)}
+                    </div>
+                </div>
+            `;
+        }
+        placeholder.title = `r/${p.subreddit}: "${p.title}"${p.pageCount > 1 ? ` (${p.pageCount} images)` : ''}${p.score ? ` (⬆️ ${p.score})` : ''} - Click to open`;
+    };
+
+    const cached = getCachedEmbedMeta('rd_' + postUrl);
+    if (cached) {
+        applyRedditPost(cached);
+        return;
+    }
+
+    try {
+        const resp = await fetch(`/api/reddit/post?url=${encodeURIComponent(postUrl)}`);
+        const data = await resp.json();
+        if (data.success && data.post) {
+            setCachedEmbedMeta('rd_' + postUrl, data.post);
+            applyRedditPost(data.post);
+        }
+    } catch (_) {}
+}
+
+function hydratePixivEmbeds() {
+    const slots = document.querySelectorAll('.pixiv-placeholder[data-pixiv-id]:not([data-hydrated="true"])');
     if (!slots || slots.length === 0) return;
-
+    const obs = getEmbedObserver();
     for (const placeholder of slots) {
-        const id = placeholder.getAttribute('data-tweet-id');
-        const handle = placeholder.getAttribute('data-tweet-handle') || 'i';
-        if (!id || placeholder.getAttribute('data-hydrated') === 'true') continue;
-        placeholder.setAttribute('data-hydrated', 'true');
-
-        try {
-            const resp = await fetch(`/api/twitter/tweet?id=${id}&handle=${encodeURIComponent(handle)}`);
-            const data = await resp.json();
-            if (data.success && data.tweet) {
-                const t = data.tweet;
-                const slot = placeholder.querySelector('.tweet-thumb-slot');
-                if (slot) {
-                    const thumb = t.videoThumbnail || t.imageUrl;
-                    if (thumb) {
-                        const isVideo = t.mediaType === 'video';
-                        const multiBadge = (t.pageCount && t.pageCount > 1) 
-                            ? `<div class="pixiv-pages-badge" style="background:rgba(29,161,242,0.95);">📚 ${t.pageCount}P</div>` 
-                            : '';
-                        const playOverlay = isVideo 
-                            ? `<div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>` 
-                            : '';
-
-                        slot.innerHTML = `
-                            <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
-                                <img src="${escapeHtml(thumb)}" class="thread-image" loading="lazy" decoding="async" alt="Tweet media" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
-                                ${playOverlay}
-                                ${multiBadge}
-                                <div class="pixiv-badge" style="background:#1DA1F2;">𝕏 @${escapeHtml(t.authorHandle)}</div>
-                            </div>
-                        `;
-                        placeholder.classList.add('x-thumb-loaded');
-                    } else if (t.text) {
-                        slot.innerHTML = `
-                            <div style="padding:8px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; width:100%;">
-                                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; width:100%;">
-                                    ${t.avatar ? `<img src="${escapeHtml(t.avatar)}" style="width:18px; height:18px; border-radius:50%; object-fit:cover;">` : '<span style="color:#1DA1F2; font-weight:bold; font-size:12px;">𝕏</span>'}
-                                    <span style="font-size:11px; font-weight:bold; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">@${escapeHtml(t.authorHandle)}</span>
-                                </div>
-                                <div style="font-size:10px; color:#ccc; line-height:1.3; max-height:60px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;">
-                                    ${escapeHtml(t.text)}
-                                </div>
-                            </div>
-                        `;
-                    }
-                    placeholder.title = `@${t.authorHandle}: "${t.text.slice(0, 100)}..." - Click to open`;
-                }
-            }
-        } catch (_) {}
+        if (obs) obs.observe(placeholder);
+        else hydrateSinglePixivSlot(placeholder);
     }
 }
 
-// Hydrates Reddit post card placeholders with actual thumbnails from /api/reddit/post
-async function hydrateRedditEmbeds() {
-    const slots = document.querySelectorAll('.reddit-placeholder[data-reddit-url]');
+function hydrateTwitterEmbeds() {
+    const slots = document.querySelectorAll('.x-placeholder[data-tweet-id]:not([data-hydrated="true"])');
     if (!slots || slots.length === 0) return;
-
+    const obs = getEmbedObserver();
     for (const placeholder of slots) {
-        const postUrl = placeholder.getAttribute('data-reddit-url');
-        if (!postUrl || placeholder.getAttribute('data-hydrated') === 'true') continue;
-        placeholder.setAttribute('data-hydrated', 'true');
+        if (obs) obs.observe(placeholder);
+        else hydrateSingleTwitterSlot(placeholder);
+    }
+}
 
-        try {
-            const resp = await fetch(`/api/reddit/post?url=${encodeURIComponent(postUrl)}`);
-            const data = await resp.json();
-            if (data.success && data.post) {
-                const p = data.post;
-                const slot = placeholder.querySelector('.reddit-thumb-slot');
-                if (slot) {
-                    const thumb = p.thumbnailUrl || p.imageUrl || p.videoThumbnail || p.videoUrl;
-                    if (thumb && (p.mediaType === 'image' || p.mediaType === 'video')) {
-                        const isVideo = p.mediaType === 'video';
-                        const playOverlay = isVideo 
-                            ? `<div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>` 
-                            : '';
-                        const multiBadge = (p.pageCount && p.pageCount > 1) 
-                            ? `<div class="pixiv-pages-badge" style="background:#FF4500;">📚 ${p.pageCount}P</div>` 
-                            : '';
-                        const scoreBadge = p.score 
-                            ? `<div style="position:absolute; top:6px; right:6px; background:rgba(0,0,0,0.75); color:#ff6a33; font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px; backdrop-filter:blur(2px); z-index:2;">⬆️ ${escapeHtml(p.score)}</div>` 
-                            : '';
-
-                        slot.innerHTML = `
-                            <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
-                                <img src="${escapeHtml(thumb)}" referrerpolicy="no-referrer" class="thread-image" loading="lazy" decoding="async" alt="Reddit media" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
-                                ${playOverlay}
-                                ${multiBadge}
-                                ${scoreBadge}
-                                <div class="pixiv-badge" style="background:#FF4500;">r/${escapeHtml(p.subreddit)}</div>
-                            </div>
-                        `;
-                        placeholder.classList.add('reddit-thumb-loaded');
-                    } else if (p.title) {
-                        const scoreSnippet = p.score ? `<span style="font-size:10px; color:#ff6a33; font-weight:bold;">⬆️ ${escapeHtml(p.score)}</span>` : '';
-                        slot.innerHTML = `
-                            <div style="padding:8px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; width:100%;">
-                                <div style="display:flex; align-items:center; justify-content:space-between; width:100%; margin-bottom:4px;">
-                                    <span style="color:#FF4500; font-weight:bold; font-size:11px;">r/${escapeHtml(p.subreddit)}</span>
-                                    ${scoreSnippet}
-                                </div>
-                                <div style="font-size:10px; color:#9ca3af; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; width:100%; margin-bottom:4px;">by ${escapeHtml(p.author)}</div>
-                                <div style="font-size:11px; font-weight:bold; color:#fff; line-height:1.3; max-height:60px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;">
-                                    ${escapeHtml(p.title)}
-                                </div>
-                            </div>
-                        `;
-                    }
-                    placeholder.title = `r/${p.subreddit}: "${p.title}"${p.pageCount > 1 ? ` (${p.pageCount} images)` : ''}${p.score ? ` (⬆️ ${p.score})` : ''} - Click to open`;
-                }
-            }
-        } catch (_) {}
+function hydrateRedditEmbeds() {
+    const slots = document.querySelectorAll('.reddit-placeholder[data-reddit-url]:not([data-hydrated="true"])');
+    if (!slots || slots.length === 0) return;
+    const obs = getEmbedObserver();
+    for (const placeholder of slots) {
+        if (obs) obs.observe(placeholder);
+        else hydrateSingleRedditSlot(placeholder);
     }
 }
 
@@ -662,7 +805,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         vid.play().catch(() => {});
     } 
     else if (type === 'youtube' && frame) {
-        frame.src = `https://www.youtube.com/embed/${content}?autoplay=1`;
+        frame.src = `https://www.youtube-nocookie.com/embed/${content}?autoplay=1&rel=0`;
         frame.style.display = 'block';
     } 
     else if (type === 'x') {
@@ -673,17 +816,15 @@ function openLightbox(type, content, extra1, extra2, extra3) {
             custom.innerHTML = `
                 <div style="background:#111827; color:#fff; border-radius:12px; padding:24px 20px; text-align:center; min-width:280px; max-width:600px; border:2px solid #1DA1F2; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
                     <div style="font-size:1.1em; color:#1DA1F2; font-weight:bold; margin-bottom:8px;">𝕏 Loading Tweet...</div>
-                    <div style="font-size:0.85em; opacity:0.7;">Fetching tweet media and contents...</div>
+                    <div style="font-size:0.85em; opacity:0.7;">Fetching tweet media and contents via FixTweet proxy...</div>
                 </div>
             `;
             custom.style.display = 'block';
         }
 
-        fetch(`/api/twitter/tweet?id=${tweetId}&handle=${encodeURIComponent(handle)}`)
-            .then(r => r.json())
-            .then(data => {
-                if (data.success && data.tweet) {
-                    const t = data.tweet;
+        fetchTweetWithFixTweetFallback(tweetId, handle)
+            .then(t => {
+                if (t) {
 
                     // 1. If it has a video: play native HTML5 video with controls and audio!
                     if (t.mediaType === 'video' && t.videoUrl) {
@@ -1269,60 +1410,236 @@ function initMediaInputDetector() {
     bindDetector(document.getElementById('qrImage'), document.getElementById('qrMediaBadge'));
 }
 
-// --- IMGBB UPLOAD CONTROLLER ---
+// --- CLIENT-SIDE WEBP IMAGE COMPRESSION & CATBOX.MOE UPLOAD CONTROLLER ---
+// Automatically resizes large images (>2048px) and converts to WebP (0.85 quality) before uploading to Catbox.moe
+async function compressImageFileToWebP(file) {
+    // Keep animated GIFs and Videos untouched so animations/audio are preserved
+    if (!file || !file.type.startsWith('image/') || file.type === 'image/gif') {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve({
+                base64: reader.result,
+                mimeType: file.type || 'application/octet-stream',
+                filename: file.name || `upload_${Date.now()}`,
+                originalSize: file.size,
+                compressedSize: file.size
+            });
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+    }
+
+    return new Promise((resolve) => {
+        const img = new Image();
+        const objectUrl = URL.createObjectURL(file);
+        img.onload = () => {
+            URL.revokeObjectURL(objectUrl);
+            const MAX_DIM = 2048;
+            let { width, height } = img;
+            if (width > MAX_DIM || height > MAX_DIM) {
+                if (width > height) {
+                    height = Math.round((height * MAX_DIM) / width);
+                    width = MAX_DIM;
+                } else {
+                    width = Math.round((width * MAX_DIM) / height);
+                    height = MAX_DIM;
+                }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            const dataUrl = canvas.toDataURL('image/webp', 0.85);
+            const approxBytes = Math.round((dataUrl.length - 23) * 0.75);
+            const baseName = (file.name || 'image').replace(/\.[^.]+$/, '');
+            resolve({
+                base64: dataUrl,
+                mimeType: 'image/webp',
+                filename: `${baseName}.webp`,
+                originalSize: file.size,
+                compressedSize: approxBytes
+            });
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            const reader = new FileReader();
+            reader.onload = () => resolve({
+                base64: reader.result,
+                mimeType: file.type || 'image/png',
+                filename: file.name || `image_${Date.now()}.png`,
+                originalSize: file.size,
+                compressedSize: file.size
+            });
+            reader.readAsDataURL(file);
+        };
+        img.src = objectUrl;
+    });
+}
+
+function clearUploadedMedia() {
+    const urlInput = document.getElementById('imageInput');
+    const previewBox = document.getElementById('uploadPreviewBox');
+    const previewImg = document.getElementById('uploadPreviewImg');
+    if (urlInput) {
+        urlInput.value = '';
+        urlInput.dispatchEvent(new Event('input'));
+    }
+    if (previewBox) previewBox.style.display = 'none';
+    if (previewImg) previewImg.src = '';
+}
+
+async function uploadMediaFile(file, targetInputEl = null) {
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) {
+        showToast("File exceeds 15MB upload limit.", 3500, "error");
+        return;
+    }
+
+    const uploadBtn = document.getElementById('uploadBtn');
+    const urlInput = targetInputEl || document.getElementById('imageInput');
+    const previewBox = document.getElementById('uploadPreviewBox');
+    const previewImg = document.getElementById('uploadPreviewImg');
+    const previewInfo = document.getElementById('uploadPreviewInfo');
+
+    if (uploadBtn) {
+        uploadBtn.innerText = "Optimizing & Uploading...";
+        uploadBtn.disabled = true;
+    }
+    if (previewBox && (!targetInputEl || targetInputEl.id === 'imageInput')) {
+        previewBox.style.display = 'flex';
+        if (previewInfo) previewInfo.innerText = 'Compressing to WebP & uploading to Catbox.moe...';
+    }
+
+    try {
+        const processed = await compressImageFileToWebP(file);
+        if (previewImg && processed.base64 && processed.mimeType.startsWith('image/')) {
+            previewImg.src = processed.base64;
+        }
+
+        const resp = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                image_base64: processed.base64,
+                filename: processed.filename,
+                mime_type: processed.mimeType
+            })
+        });
+        const result = await resp.json();
+
+        if (result.success && result.url) {
+            if (urlInput) {
+                urlInput.value = result.url;
+                urlInput.dispatchEvent(new Event('input'));
+            }
+            const origKB = Math.max(1, Math.round(processed.originalSize / 1024));
+            const compKB = Math.max(1, Math.round(processed.compressedSize / 1024));
+            const savedPct = origKB > compKB ? ` (-${Math.round((1 - compKB / origKB) * 100)}% WebP)` : '';
+            if (previewInfo) {
+                previewInfo.innerHTML = `✓ Hosted on <b>${escapeHtml(result.provider || 'catbox.moe')}</b> (${compKB} KB${savedPct})`;
+            }
+            showToast(`Uploaded to ${result.provider || 'Catbox.moe'}! (${compKB} KB${savedPct})`, 3200, "success");
+        } else {
+            throw new Error(result.error || 'Upload failed');
+        }
+    } catch (err) {
+        if (previewBox) previewBox.style.display = 'none';
+        showToast("Upload Error: " + (err.message || "Network error"), 4000, "error");
+    } finally {
+        if (uploadBtn) {
+            uploadBtn.innerText = "📤 Upload (Catbox)";
+            uploadBtn.disabled = false;
+        }
+    }
+}
+
 function initMediaUpload() {
     const uploadBtn = document.getElementById('uploadBtn');
-    if (!uploadBtn) return;
     const hiddenInput = document.getElementById('hiddenFileInput');
-    const urlInput = document.getElementById('imageInput');
+    const dropzone = document.getElementById('uploadDropzone');
+    const formWrapper = document.getElementById('formWrapper');
 
-    uploadBtn.onclick = () => {
-        if (hiddenInput) hiddenInput.click();
-    };
-
-    if (!hiddenInput) return;
-
-    hiddenInput.onchange = async () => {
-        const file = hiddenInput.files[0];
-        if (!file) return;
-
-        // Size check (max 32MB for ImgBB)
-        if (file.size > 32 * 1024 * 1024) {
-            showToast("File exceeds 32MB limit.", 3500, "error");
+    if (uploadBtn && hiddenInput) {
+        uploadBtn.onclick = () => hiddenInput.click();
+        hiddenInput.onchange = async () => {
+            const file = hiddenInput.files[0];
+            if (file) await uploadMediaFile(file);
             hiddenInput.value = "";
-            return;
-        }
+        };
+    }
 
-        uploadBtn.innerText = "Uploading...";
-        uploadBtn.disabled = true;
-        const formData = new FormData();
-        formData.append("image", file);
+    // Drag & Drop support on post form & dropzone
+    const bindDragDrop = (el, targetInputId) => {
+        if (!el || el.dataset.dragBound === 'true') return;
+        el.dataset.dragBound = 'true';
 
-        try {
-            const resp = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
-                method: "POST",
-                body: formData
-            });
-            const result = await resp.json();
-            if (result.success && result.data && result.data.url) {
-                if (urlInput) {
-                    urlInput.value = result.data.url;
-                    urlInput.dispatchEvent(new Event('input'));
-                    urlInput.focus();
+        el.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (dropzone) dropzone.classList.add('drag-over');
+            el.classList.add('drag-over');
+        });
+        el.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (dropzone) dropzone.classList.remove('drag-over');
+            el.classList.remove('drag-over');
+        });
+        el.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (dropzone) dropzone.classList.remove('drag-over');
+            el.classList.remove('drag-over');
+
+            const files = e.dataTransfer?.files;
+            if (files && files.length > 0) {
+                const file = files[0];
+                if (file.type.startsWith('image/') || file.type.startsWith('video/')) {
+                    const targetEl = document.getElementById(targetInputId || 'imageInput');
+                    await uploadMediaFile(file, targetEl);
+                } else {
+                    showToast("Please drop an image or video file.", 3000, "error");
                 }
-                showToast("Image uploaded successfully!", 3000, "success");
-            } else {
-                const errMsg = result.error?.message || "Upload failed";
-                showToast("Upload Failed: " + errMsg, 4000, "error");
             }
-        } catch (err) {
-            showToast("Network Error during upload", 4000, "error");
-        } finally {
-            uploadBtn.innerText = "Upload Image";
-            uploadBtn.disabled = false;
-            hiddenInput.value = "";
-        }
+        });
     };
+
+    bindDragDrop(dropzone, 'imageInput');
+    bindDragDrop(formWrapper, 'imageInput');
+    bindDragDrop(document.getElementById('quickReplyBox'), 'qrImage');
+
+    // Clipboard Paste (Ctrl+V) image upload support in comment & media inputs
+    const bindClipboardPaste = (el, targetInputId) => {
+        if (!el || el.dataset.pasteBound === 'true') return;
+        el.dataset.pasteBound = 'true';
+        el.addEventListener('paste', async (e) => {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+            for (const item of items) {
+                if (item.kind === 'file' && (item.type.startsWith('image/') || item.type.startsWith('video/'))) {
+                    e.preventDefault();
+                    const file = item.getAsFile();
+                    if (file) {
+                        const targetEl = document.getElementById(targetInputId || 'imageInput');
+                        await uploadMediaFile(file, targetEl);
+                    }
+                    return;
+                }
+            }
+        });
+    };
+
+    bindClipboardPaste(document.getElementById('commentInput'), 'imageInput');
+    bindClipboardPaste(document.getElementById('imageInput'), 'imageInput');
+    bindClipboardPaste(document.getElementById('qrComment'), 'qrImage');
+    bindClipboardPaste(document.getElementById('qrImage'), 'qrImage');
+}
+
+if (typeof window !== 'undefined') {
+    window.clearUploadedMedia = clearUploadedMedia;
+    window.uploadMediaFile = uploadMediaFile;
 }
 
 // Auto-initialize controls on DOM ready

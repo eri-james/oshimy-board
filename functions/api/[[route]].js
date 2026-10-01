@@ -90,6 +90,77 @@ const ALLOWED_OSHI_BADGES = [
     'Phase Connect'
 ];
 
+const BOARD_FAN_NAMES = {
+    'myvt':  ['Oshi-min', 'Gachikoi', 'DD Lurker', 'Kaigai-niki (MY)', 'Superchat Whale', 'Mamak Watcher'],
+    'vt':    ['Shrimp', 'Kenzoku', 'Takodachi', 'Dragoon', 'Ruffian', 'Niji-anon', 'DD Clip Watcher'],
+    'vg':    ['Sweaty Gamer', 'Gacha Salt Miner', 'F2P BTW', 'Frame Perfect Anon', 'Backlog Warrior'],
+    'amg':   ['Seasonal Watcher', 'Manga Reader', 'LN Purist', 'Sakuga Enjoyer', 'Seiyuu Otaku'],
+    'ca':    ['CF Booth Pilgrim', 'Cosplay Photog', 'Sketchbook Anon', 'Itasha Driver', 'Rigger-san'],
+    'tech':  ['ThinkPad Enjoyer', 'Arch BTW', 'Homelab Anon', 'VRAM Hoarder', 'Mechanical Keycapper'],
+    'mamak': ['Teh Tarik Kurang Manis', 'Roti Canai Banjir', 'Bossku', 'Lepak Anon', 'Maggi Goreng Doubly'],
+    'rqr':   ['Janny Summoner', 'Rule Lawyer', 'Feedback Anon', 'Bug Hunter'],
+    'myvth': ['Bonk Patrol Target', 'Halal-not Anon', 'Cultured Oshi-min', '3AM Lurker'],
+    'vth':   ['Cultured Shrimp', 'Seiso Reject', 'Lewdtuber Enjoyer', 'Bonk Evader'],
+    'hm':    ['6-Digit Scholar', 'Tag Filterer', 'Uncensored Seeker', 'Doujin Connoisseur'],
+    'hg':    ['VN Reader', 'RPGMaker Veteran', 'Illusionist', 'Save File Collector']
+};
+
+const ALLOWED_STAMPS = ['kusa', 'tskr', 'uoooh', 'ikz', 'oshi', 'glowstick'];
+
+function resolveAuthorName(rawName, board) {
+    const trimmed = (rawName || '').trim();
+    if (!trimmed || trimmed.toLowerCase() === 'anonymous') {
+        const list = BOARD_FAN_NAMES[board] || ['Anonymous'];
+        return list[Math.floor(Math.random() * list.length)];
+    }
+    return trimmed;
+}
+
+async function generatePosterIdEdge(ipHash, threadId) {
+    const enc = new TextEncoder();
+    const data = enc.encode((ipHash || 'anon') + '::thread_salt::' + (threadId || 'global'));
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 8);
+}
+
+async function attachPosterIdsEdge(postList, fallbackThreadId = null) {
+    if (!Array.isArray(postList)) return postList;
+    await Promise.all(postList.map(async (p) => {
+        const tid = p.thread_id || fallbackThreadId || p.id;
+        p.poster_id = await generatePosterIdEdge(p.ip_hash || 'anon', tid);
+        if (!p.reactions) p.reactions = '{}';
+    }));
+    return postList;
+}
+
+async function resolveVanityFlairEdge(db, userId, showVanity, guestFlair) {
+    if (userId && showVanity) {
+        try {
+            const u = await db.prepare('SELECT xp, level, streak, oshi_badge, last_omikuji_date FROM users WHERE id = ?').bind(userId).first();
+            if (u) {
+                const level = calculateLevel(u.xp || 0);
+                const rank = getRank(level);
+                return JSON.stringify({
+                    rankBadge: rank.badge,
+                    rankTitle: rank.title,
+                    level,
+                    streak: u.streak || 0,
+                    oshiBadge: u.oshi_badge || null
+                });
+            }
+        } catch (_) {}
+    }
+    if (guestFlair && typeof guestFlair === 'object') {
+        const safe = {};
+        if (guestFlair.oshiBadge && ALLOWED_OSHI_BADGES.includes(guestFlair.oshiBadge)) {
+            safe.oshiBadge = guestFlair.oshiBadge;
+        }
+        if (Object.keys(safe).length > 0) return JSON.stringify(safe);
+    }
+    return null;
+}
+
 function calculateLevel(xp) {
     const validXp = Math.max(0, parseInt(xp, 10) || 0);
     return Math.floor(validXp / 25) + 1;
@@ -151,22 +222,49 @@ async function ensureD1Schema(db, force = false) {
     if (!db || (d1SchemaMigrated && !force)) return;
     d1SchemaMigrated = true;
     try {
-        // 1. Ensure threads.reply_count exists and is synced
-        let hasReplyCount = false;
+        // 1. Ensure threads.reply_count, vanity_flair, reactions exist and are synced
+        let threadCols = [];
         try {
             const threadColsRes = await db.prepare("PRAGMA table_info(threads)").all();
-            const threadCols = (threadColsRes.results || []).map(c => c.name);
-            if (threadCols.length > 0) {
-                hasReplyCount = threadCols.includes('reply_count');
-            }
+            threadCols = (threadColsRes.results || []).map(c => c.name);
         } catch (_) {}
 
-        if (!hasReplyCount) {
+        if (threadCols.length > 0 && !threadCols.includes('reply_count')) {
             try {
                 await db.prepare("ALTER TABLE threads ADD COLUMN reply_count INTEGER NOT NULL DEFAULT 0").run();
                 await db.prepare("UPDATE threads SET reply_count = (SELECT COUNT(*) FROM replies WHERE replies.thread_id = threads.id)").run();
             } catch (_) {}
         }
+        if (threadCols.length > 0 && !threadCols.includes('vanity_flair')) {
+            await db.prepare("ALTER TABLE threads ADD COLUMN vanity_flair TEXT").run().catch(() => {});
+        }
+        if (threadCols.length > 0 && !threadCols.includes('reactions')) {
+            await db.prepare("ALTER TABLE threads ADD COLUMN reactions TEXT DEFAULT '{}'").run().catch(() => {});
+        }
+
+        // 1b. Ensure replies.vanity_flair and replies.reactions exist
+        try {
+            const replyColsRes = await db.prepare("PRAGMA table_info(replies)").all();
+            const replyCols = (replyColsRes.results || []).map(c => c.name);
+            if (replyCols.length > 0 && !replyCols.includes('vanity_flair')) {
+                await db.prepare("ALTER TABLE replies ADD COLUMN vanity_flair TEXT").run().catch(() => {});
+            }
+            if (replyCols.length > 0 && !replyCols.includes('reactions')) {
+                await db.prepare("ALTER TABLE replies ADD COLUMN reactions TEXT DEFAULT '{}'").run().catch(() => {});
+            }
+        } catch (_) {}
+
+        // 1c. Ensure post_reactions table exists
+        await db.prepare(`
+            CREATE TABLE IF NOT EXISTS post_reactions (
+                post_id TEXT NOT NULL,
+                post_type TEXT NOT NULL,
+                ip_hash TEXT NOT NULL,
+                stamp TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (post_id, ip_hash, stamp)
+            )
+        `).run().catch(() => {});
 
         // 2. Ensure users gamification columns exist
         let userCols = [];
@@ -287,12 +385,106 @@ export async function onRequest(context) {
     }
 
     const route = path[0] || '';
-    if (route !== 'proxy' && route !== 'pixiv' && route !== 'twitter' && route !== 'reddit') {
+    if (route !== 'proxy' && route !== 'pixiv' && route !== 'twitter' && route !== 'reddit' && route !== 'upload') {
         await ensureD1Schema(db);
     }
     const user = await getUser(request, db);
 
     try {
+        // Offloaded Image & Media Upload Proxy (Catbox.moe primary + ImgBB fallback)
+        if (route === 'upload' && method === 'POST') {
+            const body = await request.json();
+            const { image_base64, filename, mime_type } = body || {};
+            if (!image_base64) {
+                return json({ error: 'Missing image_base64 payload' }, 400);
+            }
+
+            const cleanBase64 = String(image_base64).replace(/^data:[^;]+;base64,/, '');
+            const binaryStr = atob(cleanBase64);
+            const len = binaryStr.length;
+            if (len > 15 * 1024 * 1024) {
+                return json({ error: 'File exceeds 15MB limit' }, 413);
+            }
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryStr.charCodeAt(i);
+            }
+            const safeMime = mime_type || 'image/webp';
+            const ext = (safeMime.split('/')[1] || 'webp').replace(/[^a-z0-9]/gi, '');
+            const safeName = (filename || `oshimy_${Date.now()}.${ext}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+
+            // 1. Primary: Catbox.moe anonymous upload API
+            try {
+                const form = new FormData();
+                form.append('reqtype', 'fileupload');
+                const blob = new Blob([bytes], { type: safeMime });
+                form.append('fileToUpload', blob, safeName);
+
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 15000);
+                const catResp = await fetch('https://catbox.moe/user/api.php', {
+                    method: 'POST',
+                    body: form,
+                    signal: controller.signal,
+                    headers: { 'User-Agent': 'OshiMY-Imageboard/1.0 (+https://oshimy.moe)' }
+                });
+                clearTimeout(timeout);
+
+                if (catResp.ok) {
+                    const textUrl = (await catResp.text()).trim();
+                    if (textUrl.startsWith('https://files.catbox.moe/')) {
+                        return json({
+                            success: true,
+                            url: textUrl,
+                            provider: 'catbox.moe'
+                        });
+                    }
+                }
+            } catch (_) {}
+
+            // 2. Fallback: Litterbox (72h Catbox mirror) or ImgBB if Catbox is unreachable
+            try {
+                const form = new FormData();
+                form.append('reqtype', 'fileupload');
+                form.append('time', '72h');
+                const blob = new Blob([bytes], { type: safeMime });
+                form.append('fileToUpload', blob, safeName);
+
+                const litResp = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
+                    method: 'POST',
+                    body: form,
+                    headers: { 'User-Agent': 'OshiMY-Imageboard/1.0' }
+                });
+                if (litResp.ok) {
+                    const litUrl = (await litResp.text()).trim();
+                    if (litUrl.startsWith('https://')) {
+                        return json({
+                            success: true,
+                            url: litUrl,
+                            provider: 'catbox-litterbox'
+                        });
+                    }
+                }
+            } catch (_) {}
+
+            const imgbbKey = env?.IMGBB_API_KEY || 'ba7dd29db4fb9b62ebfb8fae4c6c7922';
+            const imgbbForm = new URLSearchParams();
+            imgbbForm.append('image', cleanBase64);
+            const ibbResp = await fetch(`https://api.imgbb.com/1/upload?key=${imgbbKey}`, {
+                method: 'POST',
+                body: imgbbForm
+            });
+            const ibbData = await ibbResp.json();
+            if (ibbData?.success && ibbData?.data?.url) {
+                return json({
+                    success: true,
+                    url: ibbData.data.url,
+                    provider: 'imgbb'
+                });
+            }
+
+            return json({ error: 'All upstream image hosts failed' }, 502);
+        }
         // Pixiv Image Reverse Proxy for Cloudflare Pages (bypasses hotlink blocks)
         if (route === 'proxy' && path[1] === 'pixiv' && method === 'GET') {
             const targetUrl = url.searchParams.get('url');
@@ -926,10 +1118,11 @@ export async function onRequest(context) {
             if (isArchive) {
                 metaSql += ` AND bumped_at < ${cutoff}`;
             }
+            const isCatalog = url.searchParams.get('mode') === 'catalog';
             const meta = await db.prepare(metaSql).bind(board).first();
             const maxBump = meta?.max_bump || 0;
             const count = meta?.count || 0;
-            const etag = `W/"th-${board}-${isArchive ? 'arch' : 'act'}-${count}-${maxBump}"`;
+            const etag = `W/"th-${board}-${isArchive ? 'arch' : 'act'}-${isCatalog ? 'cat' : 'list'}-${count}-${maxBump}"`;
 
             if (request.headers.get('if-none-match') === etag) {
                 return new Response(null, {
@@ -953,12 +1146,17 @@ export async function onRequest(context) {
             const list = await db.prepare(sql).bind(board).all();
             const threads = list.results || [];
 
-            for (const th of threads) {
+            await Promise.all(threads.map(async (th) => {
+                th.poster_id = await generatePosterIdEdge(th.ip_hash || 'anon', th.id);
+                if (!th.reactions) th.reactions = '{}';
                 th.preview_replies = [];
-            }
+                if (isCatalog && th.comment && th.comment.length > 220) {
+                    th.comment = th.comment.substring(0, 220) + '…';
+                }
+            }));
 
-            // Preview replies: query latest replies for threads with replies
-            const threadsWithReplies = threads.filter(t => (t.reply_count || 0) > 0);
+            // Preview replies: query latest replies for threads with replies (skip when mode=catalog)
+            const threadsWithReplies = isCatalog ? [] : threads.filter(t => (t.reply_count || 0) > 0);
             if (threadsWithReplies.length > 0) {
                 const threadIds = threadsWithReplies.map(t => t.id);
                 const placeholders = threadIds.map(() => '?').join(',');
@@ -975,7 +1173,12 @@ export async function onRequest(context) {
                 `).bind(...threadIds).all();
 
                 const replyMap = new Map();
-                for (const r of (prev.results || [])) {
+                const prevResults = prev.results || [];
+                await Promise.all(prevResults.map(async (r) => {
+                    r.poster_id = await generatePosterIdEdge(r.ip_hash || 'anon', r.thread_id);
+                    if (!r.reactions) r.reactions = '{}';
+                }));
+                for (const r of prevResults) {
                     if (!replyMap.has(r.thread_id)) replyMap.set(r.thread_id, []);
                     replyMap.get(r.thread_id).push(r);
                 }
@@ -1010,7 +1213,7 @@ export async function onRequest(context) {
             // Delta Polling Optimization (Audit Recommendation C.2)
             if (since > 0) {
                 const repliesRes = await db.prepare('SELECT * FROM replies WHERE thread_id = ? AND created_at > ? ORDER BY created_at ASC').bind(id, since).all();
-                const replies = repliesRes.results || [];
+                const replies = await attachPosterIdsEdge(repliesRes.results || [], id);
                 if (replies.length === 0) {
                     return json({
                         success: true,
@@ -1031,6 +1234,8 @@ export async function onRequest(context) {
 
             const thread = await db.prepare('SELECT * FROM threads WHERE id = ?').bind(id).first();
             if (!thread) return json({ error: 'Not found' }, 404);
+            thread.poster_id = await generatePosterIdEdge(thread.ip_hash || 'anon', thread.id);
+            if (!thread.reactions) thread.reactions = '{}';
 
             const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}"`;
             if (request.headers.get('if-none-match') === etag) {
@@ -1045,7 +1250,8 @@ export async function onRequest(context) {
                 });
             }
 
-            const replies = (await db.prepare('SELECT * FROM replies WHERE thread_id = ? ORDER BY created_at ASC').bind(id).all()).results || [];
+            const rawReplies = (await db.prepare('SELECT * FROM replies WHERE thread_id = ? ORDER BY created_at ASC').bind(id).all()).results || [];
+            const replies = await attachPosterIdsEdge(rawReplies, id);
             const totalReplies = thread.reply_count || replies.length;
 
             const responseData = { 
@@ -1072,23 +1278,38 @@ export async function onRequest(context) {
         // 4. POST /api/threads
         if (route === 'threads' && method === 'POST') {
             const body = await request.json();
-            const { board, name, subject, comment, media_url } = body;
+            const { board, name, subject, comment, media_url, post_as_anonymous, show_vanity_flair, guest_flair } = body;
             if (!board || !BOARDS[board] || !comment?.trim()) return json({ error: 'Invalid input' }, 400);
 
             const id = '-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
             const now = Date.now();
             const clientIp = request.headers.get('cf-connecting-ip') || 'anon';
-            const posterName = (name?.trim() || 'Anonymous');
+            const posterName = resolveAuthorName(name, board);
             const posterSubject = (subject?.trim() || '');
             const posterMedia = (media_url?.trim() || '');
+            const hideIdentity = Boolean(post_as_anonymous);
+            const visibleRole = hideIdentity ? null : (user?.role || null);
+            const visibleTitle = hideIdentity ? null : (user?.display_title || null);
+            const vanityFlair = await resolveVanityFlairEdge(db, user?.user_id, show_vanity_flair !== false, guest_flair);
 
-            await db.prepare(`
-                INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, user_id, role, display_title, created_at, bumped_at, is_pinned, is_locked)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
-            `).bind(
-                id, board, posterName, posterSubject, comment.trim(), posterMedia,
-                clientIp, user?.user_id || null, user?.role || null, user?.display_title || null, now, now
-            ).run();
+            try {
+                await db.prepare(`
+                    INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, user_id, role, display_title, vanity_flair, reactions, created_at, bumped_at, is_pinned, is_locked)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, 0, 0)
+                `).bind(
+                    id, board, posterName, posterSubject, comment.trim(), posterMedia,
+                    clientIp, user?.user_id || null, visibleRole, visibleTitle, vanityFlair, now, now
+                ).run();
+            } catch (_) {
+                await ensureD1Schema(db, true);
+                await db.prepare(`
+                    INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, user_id, role, display_title, created_at, bumped_at, is_pinned, is_locked)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                `).bind(
+                    id, board, posterName, posterSubject, comment.trim(), posterMedia,
+                    clientIp, user?.user_id || null, visibleRole, visibleTitle, now, now
+                ).run();
+            }
 
             if (user?.user_id) {
                 await awardD1UserXp(db, user.user_id, XP_RULES.THREAD_CREATION);
@@ -1111,9 +1332,12 @@ export async function onRequest(context) {
                 comment: comment.trim(),
                 media_url: posterMedia,
                 ip_hash: clientIp,
+                poster_id: await generatePosterIdEdge(clientIp, id),
                 user_id: user?.user_id || null,
-                role: user?.role || null,
-                display_title: user?.display_title || null,
+                role: visibleRole,
+                display_title: visibleTitle,
+                vanity_flair: vanityFlair,
+                reactions: '{}',
                 created_at: now,
                 bumped_at: now,
                 is_pinned: 0,
@@ -1127,7 +1351,7 @@ export async function onRequest(context) {
         // 5. POST /api/replies
         if (route === 'replies' && method === 'POST') {
             const body = await request.json();
-            const { thread_id, name, comment, media_url } = body;
+            const { thread_id, name, comment, media_url, post_as_anonymous, show_vanity_flair, guest_flair } = body;
             if (!thread_id || !comment?.trim()) return json({ error: 'Missing comment or thread_id' }, 400);
 
             const thread = await db.prepare('SELECT * FROM threads WHERE id = ?').bind(thread_id).first();
@@ -1137,16 +1361,31 @@ export async function onRequest(context) {
             const id = '-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
             const now = Date.now();
             const clientIp = request.headers.get('cf-connecting-ip') || 'anon';
-            const posterName = (name?.trim() || 'Anonymous');
+            const posterName = resolveAuthorName(name, thread.board);
             const posterMedia = (media_url?.trim() || '');
+            const hideIdentity = Boolean(post_as_anonymous);
+            const visibleRole = hideIdentity ? null : (user?.role || null);
+            const visibleTitle = hideIdentity ? null : (user?.display_title || null);
+            const vanityFlair = await resolveVanityFlairEdge(db, user?.user_id, show_vanity_flair !== false, guest_flair);
 
-            await db.prepare(`
-                INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).bind(
-                id, thread_id, thread.board, posterName, comment.trim(), posterMedia,
-                clientIp, user?.user_id || null, user?.role || null, user?.display_title || null, now
-            ).run();
+            try {
+                await db.prepare(`
+                    INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, vanity_flair, reactions, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)
+                `).bind(
+                    id, thread_id, thread.board, posterName, comment.trim(), posterMedia,
+                    clientIp, user?.user_id || null, visibleRole, visibleTitle, vanityFlair, now
+                ).run();
+            } catch (_) {
+                await ensureD1Schema(db, true);
+                await db.prepare(`
+                    INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).bind(
+                    id, thread_id, thread.board, posterName, comment.trim(), posterMedia,
+                    clientIp, user?.user_id || null, visibleRole, visibleTitle, now
+                ).run();
+            }
 
             // Bump thread activity and denormalized reply_count (Audit Finding 3 & 5)
             try {
@@ -1219,13 +1458,68 @@ export async function onRequest(context) {
                 comment: comment.trim(),
                 media_url: posterMedia,
                 ip_hash: clientIp,
+                poster_id: await generatePosterIdEdge(clientIp, thread_id),
                 user_id: user?.user_id || null,
-                role: user?.role || null,
-                display_title: user?.display_title || null,
+                role: visibleRole,
+                display_title: visibleTitle,
+                vanity_flair: vanityFlair,
+                reactions: '{}',
                 created_at: now
             };
 
             return json({ success: true, reply: createdReply });
+        }
+
+        // 5b. POST /api/reactions/toggle (Lightweight "Kusa / Wotagei" Stamp Reactions)
+        if (route === 'reactions' && path[1] === 'toggle' && method === 'POST') {
+            const body = await request.json();
+            const { post_id, post_type, stamp } = body || {};
+            if (!post_id || !ALLOWED_STAMPS.includes(stamp)) {
+                return json({ error: 'Invalid reaction parameters' }, 400);
+            }
+            const table = post_type === 'thread' ? 'threads' : 'replies';
+            const target = await db.prepare(`SELECT id, user_id, reactions FROM ${table} WHERE id = ?`).bind(post_id).first();
+            if (!target) return json({ error: 'Post not found' }, 404);
+
+            const ipHash = request.headers.get('cf-connecting-ip') || 'anon';
+            let reactionsObj = {};
+            try {
+                reactionsObj = JSON.parse(target.reactions || '{}') || {};
+            } catch (_) {
+                reactionsObj = {};
+            }
+
+            const existing = await db.prepare(
+                'SELECT 1 FROM post_reactions WHERE post_id = ? AND ip_hash = ? AND stamp = ?'
+            ).bind(post_id, ipHash, stamp).first();
+
+            let active = false;
+            if (existing) {
+                await db.prepare('DELETE FROM post_reactions WHERE post_id = ? AND ip_hash = ? AND stamp = ?').bind(post_id, ipHash, stamp).run();
+                reactionsObj[stamp] = Math.max(0, (parseInt(reactionsObj[stamp], 10) || 1) - 1);
+                if (reactionsObj[stamp] <= 0) delete reactionsObj[stamp];
+                active = false;
+            } else {
+                await db.prepare(
+                    'INSERT INTO post_reactions (post_id, post_type, ip_hash, stamp, created_at) VALUES (?, ?, ?, ?, ?)'
+                ).bind(post_id, post_type === 'thread' ? 'thread' : 'reply', ipHash, stamp, Date.now()).run();
+                reactionsObj[stamp] = (parseInt(reactionsObj[stamp], 10) || 0) + 1;
+                active = true;
+                if (target.user_id) {
+                    await awardD1UserXp(db, target.user_id, 5);
+                }
+            }
+
+            const updatedJson = JSON.stringify(reactionsObj);
+            await db.prepare(`UPDATE ${table} SET reactions = ? WHERE id = ?`).bind(updatedJson, post_id).run().catch(() => {});
+
+            return json({
+                success: true,
+                post_id,
+                stamp,
+                active,
+                reactions: reactionsObj
+            });
         }
 
         // 6. POST /api/auth/register

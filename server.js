@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'url';
-import { db, hashPassword, verifyPassword, hashIp, generateId } from './server/db.js';
+import { db, hashPassword, verifyPassword, hashIp, generateId, generatePosterId } from './server/db.js';
 import { 
     calculateLevel, 
     getRank, 
@@ -26,19 +26,52 @@ app.use(express.urlencoded({ extended: true }));
 
 // Board definitions
 const BOARDS = {
-    'myvt':  { title: '/myvt/ - MY VTuber',             type: 'sfw' },
-    'vt':    { title: '/vt/ - SEA & Global VTuber',     type: 'sfw' },
-    'vg':    { title: '/vg/ - Video Games',             type: 'sfw' },
-    'amg':   { title: '/amg/ - Anime & Manga',          type: 'sfw' },
-    'ca':    { title: '/ca/ - Cosplay & Art',           type: 'sfw' },
-    'tech':  { title: '/tech/ - Tech Stuff',            type: 'sfw' },
-    'mamak': { title: '/mamak/ - MY Stuff & Off-topic', type: 'sfw' },
-    'rqr':   { title: '/rqr/ - Board Request & Report', type: 'sfw' },
-    'myvth': { title: '/myvth/ - MY VTuber Ecchi & H',  type: 'nsfw' },
-    'vth':   { title: '/vth/ - Vtuber Ecchi & H',       type: 'nsfw' },
-    'hm':    { title: '/hm/ - H Media',                 type: 'nsfw' },
-    'hg':    { title: '/hg/ - H Games',                 type: 'nsfw' }
+    'myvt':  { title: '/myvt/ - MY VTuber',             type: 'sfw',  fanName: 'Anon DD' },
+    'vt':    { title: '/vt/ - SEA & Global VTuber',     type: 'sfw',  fanName: 'Global DD' },
+    'vg':    { title: '/vg/ - Video Games',             type: 'sfw',  fanName: 'Anon Gamer' },
+    'amg':   { title: '/amg/ - Anime & Manga',          type: 'sfw',  fanName: 'Anon Otaku' },
+    'ca':    { title: '/ca/ - Cosplay & Art',           type: 'sfw',  fanName: 'Anon Creator' },
+    'tech':  { title: '/tech/ - Tech Stuff',            type: 'sfw',  fanName: 'Wizard Anon' },
+    'mamak': { title: '/mamak/ - MY Stuff & Off-topic', type: 'sfw',  fanName: 'Mamak Regular' },
+    'rqr':   { title: '/rqr/ - Board Request & Report', type: 'sfw',  fanName: 'Anon Reporter' },
+    'myvth': { title: '/myvth/ - MY VTuber Ecchi & H',  type: 'nsfw', fanName: 'Cultured DD' },
+    'vth':   { title: '/vth/ - Vtuber Ecchi & H',       type: 'nsfw', fanName: 'Cultured Anon' },
+    'hm':    { title: '/hm/ - H Media',                 type: 'nsfw', fanName: 'Fellow Degen' },
+    'hg':    { title: '/hg/ - H Games',                 type: 'nsfw', fanName: 'Gacha Cultist' }
 };
+
+const ALLOWED_STAMPS = ['🌱', '🔥', '😭', '🏮'];
+
+function getDefaultBoardName(board, rawName) {
+    const clean = (rawName || '').trim();
+    if (!clean || clean.toLowerCase() === 'anonymous') {
+        return BOARDS[board]?.fanName || 'Anonymous';
+    }
+    return clean;
+}
+
+function buildUserVanityFlair(userId, showVanity, guestFlair) {
+    if (!showVanity) return null;
+    if (userId) {
+        try {
+            const u = db.prepare('SELECT xp, oshi_badge FROM users WHERE id = ?').get(userId);
+            if (u) {
+                const lvl = calculateLevel(u.xp || 0);
+                const rank = getRank(lvl);
+                const parts = [`${rank.badge} Lv.${lvl} ${rank.title}`];
+                if (u.oshi_badge && ALLOWED_OSHI_BADGES.includes(u.oshi_badge)) {
+                    parts.push(u.oshi_badge);
+                }
+                return parts.join('|');
+            }
+        } catch (_) {}
+    }
+    if (guestFlair && typeof guestFlair === 'string') {
+        const sanitized = guestFlair.trim().slice(0, 80);
+        if (sanitized) return sanitized;
+    }
+    return null;
+}
 
 const ARCHIVE_TIME_MS = 3 * 24 * 60 * 60 * 1000; // 3 Days
 
@@ -793,6 +826,95 @@ app.get('/api/reddit/post', async (req, res) => {
     }
 });
 
+// Stateless Media Upload Proxy (Catbox.moe Primary -> Litterbox -> ImgBB Failover, Zero DB storage)
+app.post('/api/upload', async (req, res) => {
+    const { file_base64, filename, mime_type } = req.body || {};
+    if (!file_base64 || typeof file_base64 !== 'string') {
+        return res.status(400).json({ error: 'Missing file_base64 payload' });
+    }
+
+    try {
+        const base64Clean = file_base64.replace(/^data:[^;]+;base64,/, '');
+        const buffer = Buffer.from(base64Clean, 'base64');
+        if (buffer.length > 32 * 1024 * 1024) {
+            return res.status(413).json({ error: 'File exceeds 32MB limit' });
+        }
+
+        const safeName = (filename || 'upload.webp').replace(/[^a-zA-Z0-9._-]/g, '_');
+        const safeMime = mime_type || 'image/webp';
+        const blob = new Blob([buffer], { type: safeMime });
+
+        // 1. Primary: Catbox.moe anonymous upload
+        try {
+            const catboxForm = new FormData();
+            catboxForm.append('reqtype', 'fileupload');
+            catboxForm.append('fileToUpload', blob, safeName);
+
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 12000);
+            const catboxResp = await fetch('https://catbox.moe/user/api.php', {
+                method: 'POST',
+                body: catboxForm,
+                signal: controller.signal,
+                headers: { 'User-Agent': 'OshiMY-Board/1.0' }
+            });
+            clearTimeout(timeout);
+
+            if (catboxResp.ok) {
+                const text = (await catboxResp.text()).trim();
+                if (text.startsWith('https://files.catbox.moe/')) {
+                    return res.json({ success: true, url: text, provider: 'catbox.moe' });
+                }
+            }
+        } catch (catErr) {
+            console.warn('[Upload] Catbox primary warning, trying fallback:', catErr.message);
+        }
+
+        // 2. Secondary: Litterbox (Catbox 72h host)
+        try {
+            const litterForm = new FormData();
+            litterForm.append('reqtype', 'fileupload');
+            litterForm.append('time', '72h');
+            litterForm.append('fileToUpload', blob, safeName);
+
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 10000);
+            const litterResp = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
+                method: 'POST',
+                body: litterForm,
+                signal: controller.signal,
+                headers: { 'User-Agent': 'OshiMY-Board/1.0' }
+            });
+            clearTimeout(timeout);
+
+            if (litterResp.ok) {
+                const text = (await litterResp.text()).trim();
+                if (text.startsWith('https://litter.catbox.moe/')) {
+                    return res.json({ success: true, url: text, provider: 'litterbox.catbox.moe' });
+                }
+            }
+        } catch (_) {}
+
+        // 3. Tertiary: ImgBB Failover
+        const imgbbKey = process.env.IMGBB_API_KEY || '6d885f930c72cd28e6520e6c7494704f';
+        const imgbbForm = new FormData();
+        imgbbForm.append('image', base64Clean);
+        const imgbbResp = await fetch(`https://api.imgbb.com/1/upload?key=${imgbbKey}`, {
+            method: 'POST',
+            body: imgbbForm
+        });
+        const imgbbData = await imgbbResp.json();
+        if (imgbbData.success && imgbbData.data && imgbbData.data.url) {
+            return res.json({ success: true, url: imgbbData.data.url, provider: 'imgbb' });
+        }
+
+        return res.status(502).json({ error: 'All external image hosts failed to accept the upload' });
+    } catch (err) {
+        console.error('[Upload] Error:', err);
+        return res.status(500).json({ error: 'Upload processing failed' });
+    }
+});
+
 // 1. Boards List & Stats
 app.get('/api/boards', (req, res) => {
     try {
@@ -866,9 +988,13 @@ app.get('/api/threads', (req, res) => {
 
         const threads = db.prepare(query).all(board);
 
-        // Initialize preview_replies array on all threads
+        // Initialize preview_replies array and thread-scoped poster_id on all threads
+        const threadIpMap = new Map();
         for (const th of threads) {
             th.preview_replies = [];
+            th.poster_id = generatePosterId(th.ip_hash, th.id);
+            th.is_op = true;
+            threadIpMap.set(th.id, th.ip_hash);
         }
 
         // Preview replies: query the latest preview replies for threads that have replies
@@ -890,6 +1016,9 @@ app.get('/api/threads', (req, res) => {
 
             const replyMap = new Map();
             for (const r of previewReplies) {
+                r.poster_id = generatePosterId(r.ip_hash, r.thread_id);
+                const opIp = threadIpMap.get(r.thread_id);
+                r.is_op = Boolean(r.ip_hash && opIp && r.ip_hash === opIp);
                 if (!replyMap.has(r.thread_id)) {
                     replyMap.set(r.thread_id, []);
                 }
@@ -938,6 +1067,12 @@ app.get('/api/thread', (req, res) => {
                 });
             }
 
+            const opRow = db.prepare('SELECT ip_hash FROM threads WHERE id = ?').get(threadId);
+            for (const r of replies) {
+                r.poster_id = generatePosterId(r.ip_hash, threadId);
+                r.is_op = Boolean(r.ip_hash && opRow?.ip_hash && r.ip_hash === opRow.ip_hash);
+            }
+
             return res.json({
                 success: true,
                 thread: null,
@@ -952,8 +1087,11 @@ app.get('/api/thread', (req, res) => {
             return res.status(404).json({ error: 'Thread not found' });
         }
 
-        // HTTP Caching & 304 Not Modified based on thread bumped_at, lock/pin status
-        const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}"`;
+        thread.poster_id = generatePosterId(thread.ip_hash, thread.id);
+        thread.is_op = true;
+
+        // HTTP Caching & 304 Not Modified based on thread bumped_at, lock/pin status, and reactions
+        const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}-${(thread.reactions || '').length}"`;
         res.set('ETag', etag);
         res.set('Cache-Control', 'public, max-age=5, stale-while-revalidate=15');
 
@@ -966,6 +1104,11 @@ app.get('/api/thread', (req, res) => {
             WHERE thread_id = ? 
             ORDER BY created_at ASC
         `).all(threadId);
+
+        for (const r of replies) {
+            r.poster_id = generatePosterId(r.ip_hash, thread.id);
+            r.is_op = Boolean(r.ip_hash && thread.ip_hash && r.ip_hash === thread.ip_hash);
+        }
 
         const totalReplies = thread.reply_count || replies.length;
 
@@ -983,7 +1126,7 @@ app.get('/api/thread', (req, res) => {
 
 // 4. Create New Thread
 app.post('/api/threads', (req, res) => {
-    const { board, name, subject, comment, media_url } = req.body;
+    const { board, name, subject, comment, media_url, show_vanity, hide_identity, guest_flair } = req.body;
 
     if (!board || !BOARDS[board]) {
         return res.status(400).json({ error: 'Invalid board' });
@@ -998,18 +1141,27 @@ app.post('/api/threads', (req, res) => {
         const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
         const ipHash = hashIp(clientIp);
 
-        const posterName = (name && name.trim()) ? name.trim() : 'Anonymous';
+        const posterName = getDefaultBoardName(board, name);
         const posterSubject = (subject && subject.trim()) ? subject.trim() : '';
         const posterMedia = (media_url && media_url.trim()) ? media_url.trim() : '';
 
         const userId = req.user ? req.user.user_id : null;
-        const role = req.user ? req.user.role : null;
-        const displayTitle = req.user ? req.user.display_title : null;
+        // Decoupled Vanity: If hide_identity is enabled, omit public role/display_title while keeping vanity_flair
+        const role = (req.user && !hide_identity) ? req.user.role : null;
+        const displayTitle = (req.user && !hide_identity) ? req.user.display_title : null;
+        const vanityFlair = buildUserVanityFlair(userId, show_vanity !== false, guest_flair);
 
-        db.prepare(`
-            INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, user_id, role, display_title, created_at, bumped_at, is_pinned, is_locked)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
-        `).run(id, board, posterName, posterSubject, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now, now);
+        try {
+            db.prepare(`
+                INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, user_id, role, display_title, vanity_flair, reactions, created_at, bumped_at, is_pinned, is_locked)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, 0, 0)
+            `).run(id, board, posterName, posterSubject, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, vanityFlair, now, now);
+        } catch (_) {
+            db.prepare(`
+                INSERT INTO threads (id, board, name, subject, comment, media_url, ip_hash, user_id, role, display_title, created_at, bumped_at, is_pinned, is_locked)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+            `).run(id, board, posterName, posterSubject, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now, now);
+        }
 
         const created = {
             id,
@@ -1019,9 +1171,13 @@ app.post('/api/threads', (req, res) => {
             comment: comment.trim(),
             media_url: posterMedia,
             ip_hash: ipHash,
+            poster_id: generatePosterId(ipHash, id),
+            is_op: true,
             user_id: userId,
             role,
             display_title: displayTitle,
+            vanity_flair: vanityFlair,
+            reactions: '{}',
             created_at: now,
             bumped_at: now,
             is_pinned: 0,
@@ -1041,7 +1197,7 @@ app.post('/api/threads', (req, res) => {
 
 // 5. Create Reply
 app.post('/api/replies', (req, res) => {
-    const { thread_id, board, name, comment, media_url } = req.body;
+    const { thread_id, board, name, comment, media_url, show_vanity, hide_identity, guest_flair } = req.body;
 
     if (!thread_id) {
         return res.status(400).json({ error: 'Missing thread_id' });
@@ -1064,17 +1220,25 @@ app.post('/api/replies', (req, res) => {
         const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
         const ipHash = hashIp(clientIp);
 
-        const posterName = (name && name.trim()) ? name.trim() : 'Anonymous';
+        const posterName = getDefaultBoardName(thread.board, name);
         const posterMedia = (media_url && media_url.trim()) ? media_url.trim() : '';
 
         const userId = req.user ? req.user.user_id : null;
-        const role = req.user ? req.user.role : null;
-        const displayTitle = req.user ? req.user.display_title : null;
+        const role = (req.user && !hide_identity) ? req.user.role : null;
+        const displayTitle = (req.user && !hide_identity) ? req.user.display_title : null;
+        const vanityFlair = buildUserVanityFlair(userId, show_vanity !== false, guest_flair);
 
-        db.prepare(`
-            INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(id, thread_id, thread.board, posterName, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now);
+        try {
+            db.prepare(`
+                INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, vanity_flair, reactions, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)
+            `).run(id, thread_id, thread.board, posterName, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, vanityFlair, now);
+        } catch (_) {
+            db.prepare(`
+                INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(id, thread_id, thread.board, posterName, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now);
+        }
 
         // Bump thread activity and denormalized reply_count (Audit Finding 3 & 5)
         try {
@@ -1130,9 +1294,13 @@ app.post('/api/replies', (req, res) => {
             comment: comment.trim(),
             media_url: posterMedia,
             ip_hash: ipHash,
+            poster_id: generatePosterId(ipHash, thread_id),
+            is_op: Boolean(ipHash && thread.ip_hash && ipHash === thread.ip_hash),
             user_id: userId,
             role,
             display_title: displayTitle,
+            vanity_flair: vanityFlair,
+            reactions: '{}',
             created_at: now
         };
 
@@ -1141,6 +1309,59 @@ app.post('/api/replies', (req, res) => {
         }
 
         res.json({ success: true, reply: created });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 5b. Lightweight "Kusa / Wotagei" Stamp Reactions
+app.post('/api/reactions/toggle', (req, res) => {
+    const { target_type, target_id, stamp } = req.body || {};
+    if (!target_id || !ALLOWED_STAMPS.includes(stamp)) {
+        return res.status(400).json({ error: 'Invalid reaction parameters' });
+    }
+
+    const table = target_type === 'thread' ? 'threads' : 'replies';
+    try {
+        const post = db.prepare(`SELECT id, user_id, ip_hash, reactions FROM ${table} WHERE id = ?`).get(target_id);
+        if (!post) {
+            return res.status(404).json({ error: 'Post not found' });
+        }
+
+        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+        const ipHash = hashIp(clientIp);
+
+        let reactionsObj = {};
+        try {
+            reactionsObj = JSON.parse(post.reactions || '{}') || {};
+        } catch (_) {
+            reactionsObj = {};
+        }
+
+        const existing = db.prepare('SELECT 1 FROM post_reactions WHERE post_id = ? AND stamp = ? AND ip_hash = ?').get(target_id, stamp, ipHash);
+        let active = false;
+
+        if (existing) {
+            db.prepare('DELETE FROM post_reactions WHERE post_id = ? AND stamp = ? AND ip_hash = ?').run(target_id, stamp, ipHash);
+            const nextCount = Math.max(0, (parseInt(reactionsObj[stamp], 10) || 1) - 1);
+            if (nextCount > 0) reactionsObj[stamp] = nextCount;
+            else delete reactionsObj[stamp];
+            active = false;
+        } else {
+            db.prepare('INSERT OR IGNORE INTO post_reactions (post_id, stamp, ip_hash, created_at) VALUES (?, ?, ?, ?)').run(target_id, stamp, ipHash, Date.now());
+            reactionsObj[stamp] = (parseInt(reactionsObj[stamp], 10) || 0) + 1;
+            active = true;
+
+            // Award +2 XP to post author if reacted by someone else
+            if (post.user_id && post.ip_hash !== ipHash) {
+                awardUserXP(db, post.user_id, 2);
+            }
+        }
+
+        const serialized = JSON.stringify(reactionsObj);
+        db.prepare(`UPDATE ${table} SET reactions = ? WHERE id = ?`).run(serialized, target_id);
+
+        res.json({ success: true, reactions: reactionsObj, active });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

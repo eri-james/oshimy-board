@@ -1235,3 +1235,267 @@ body.night-mode .back-to-top-bubble:hover {
     50% { transform: scale(1.03); }
     100% { transform: scale(1); opacity: 1; }
 }
+
+/* ========================================================
+   9. POST IDENTITY, DECOUPLED VANITY & CATBOX UPLOAD DROPZONE
+   ======================================================== */
+.post-identity-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: center;
+}
+
+.fan-name-roll-btn {
+    padding: 8px 12px !important;
+    margin-top: 0 !important;
+    font-size: 0.82rem !important;
+    background: rgba(0, 132, 255, 0.14) !important;
+    color: var(--main-accent) !important;
+    border: 1px solid var(--main-accent) !important;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.fan-name-roll-btn:hover {
+    background: var(--main-accent) !important;
+    color: #fff !important;
+}
+
+.guest-flair-select {
+    padding: 8px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    color: var(--text-color);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.decoupled-vanity-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 7px 10px;
+    margin-bottom: 8px;
+    border-radius: 6px;
+    background: rgba(0, 132, 255, 0.08);
+    border: 1px dashed var(--border-color);
+    font-size: 0.82rem;
+    align-items: center;
+}
+
+.vanity-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.vanity-toggle-label input[type="checkbox"] {
+    width: auto !important;
+    margin: 0 !important;
+    accent-color: var(--main-accent);
+    cursor: pointer;
+}
+
+.upload-dropzone {
+    border: 1.5px dashed var(--border-color);
+    border-radius: 6px;
+    padding: 8px;
+    margin-bottom: 6px;
+    background: rgba(0, 0, 0, 0.03);
+    transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.upload-dropzone.drag-over,
+.post-box.drag-over {
+    border-color: var(--main-accent) !important;
+    background: rgba(0, 132, 255, 0.1) !important;
+    box-shadow: 0 0 0 3px rgba(0, 132, 255, 0.2);
+}
+
+.dropzone-hint {
+    font-size: 0.75rem;
+    opacity: 0.75;
+    margin-top: 5px;
+    text-align: center;
+}
+
+.dropzone-hint kbd {
+    background: rgba(0, 0, 0, 0.15);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.72rem;
+    font-family: monospace;
+}
+
+.upload-preview-box {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    border-radius: 6px;
+}
+
+.upload-preview-box img {
+    width: 44px;
+    height: 44px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+}
+
+.upload-preview-meta {
+    display: flex;
+    flex: 1;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+}
+
+.upload-clear-btn {
+    padding: 3px 8px !important;
+    margin-top: 0 !important;
+    font-size: 0.75rem !important;
+    background: rgba(239, 68, 68, 0.18) !important;
+    color: #ef4444 !important;
+    border: 1px solid rgba(239, 68, 68, 0.4) !important;
+    border-radius: 4px;
+}
+
+/* ========================================================
+   10. PER-THREAD POSTER IDS, VANITY FLAIRS & STAMP REACTIONS
+   ======================================================== */
+.poster-id-pill {
+    display: inline-block;
+    font-family: monospace;
+    font-size: 0.76rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin: 0 4px;
+    cursor: pointer;
+    user-select: none;
+    background: hsl(var(--pid-hue, 200), 65%, 28%);
+    color: hsl(var(--pid-hue, 200), 90%, 92%);
+    border: 1px solid hsl(var(--pid-hue, 200), 70%, 42%);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.poster-id-pill:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.12);
+}
+
+.poster-id-pill.poster-id-active {
+    box-shadow: 0 0 0 2px #facc15;
+    transform: scale(1.05);
+}
+
+.poster-id-card-highlight {
+    outline: 2px solid #facc15 !important;
+    box-shadow: 0 0 14px rgba(250, 204, 21, 0.28) !important;
+}
+
+.vanity-rank-pill,
+.vanity-streak-pill,
+.vanity-oshi-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.74rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.vanity-rank-pill {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(139, 92, 246, 0.22));
+    color: var(--main-accent);
+    border: 1px solid rgba(59, 130, 246, 0.45);
+}
+
+.vanity-streak-pill {
+    background: rgba(249, 115, 22, 0.16);
+    color: #f97316;
+    border: 1px solid rgba(249, 115, 22, 0.45);
+}
+
+.vanity-oshi-pill {
+    background: rgba(236, 72, 153, 0.15);
+    color: #ec4899;
+    border: 1px solid rgba(236, 72, 153, 0.45);
+}
+
+.stamp-reactions-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 8px;
+    padding-top: 4px;
+}
+
+.stamp-reaction-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px !important;
+    margin-top: 0 !important;
+    font-size: 0.74rem !important;
+    font-weight: 700 !important;
+    border-radius: 999px !important;
+    background: rgba(128, 128, 128, 0.08) !important;
+    color: var(--text-color) !important;
+    border: 1px solid rgba(128, 128, 128, 0.22) !important;
+    opacity: 0.68;
+    cursor: pointer;
+    transition: all 0.14s ease;
+}
+
+.stamp-reaction-btn:hover {
+    opacity: 1;
+    transform: translateY(-1px);
+    border-color: var(--main-accent) !important;
+    background: rgba(0, 132, 255, 0.12) !important;
+}
+
+.stamp-reaction-btn.stamp-btn-has-count {
+    opacity: 0.92;
+    background: rgba(0, 132, 255, 0.1) !important;
+    border-color: rgba(0, 132, 255, 0.35) !important;
+}
+
+.stamp-reaction-btn.stamp-btn-active {
+    opacity: 1;
+    background: rgba(0, 132, 255, 0.22) !important;
+    border-color: var(--main-accent) !important;
+    color: var(--main-accent) !important;
+    box-shadow: 0 2px 6px rgba(0, 132, 255, 0.2);
+}
+
+.stamp-emoji {
+    font-size: 0.85rem;
+    line-height: 1;
+}
+
+.stamp-label {
+    font-size: 0.7rem;
+}
+
+.stamp-count {
+    font-weight: 800;
+    font-size: 0.74rem;
+}
