@@ -391,15 +391,16 @@ export async function onRequest(context) {
     const user = await getUser(request, db);
 
     try {
-        // Offloaded Image & Media Upload Proxy (Catbox.moe primary + ImgBB fallback)
+        // Offloaded Image & Media Upload Proxy (Catbox.moe permanent primary with userhash + ImgBB fallback)
         if (route === 'upload' && method === 'POST') {
             const body = await request.json();
-            const { image_base64, filename, mime_type } = body || {};
-            if (!image_base64) {
+            const { image_base64, file_base64, filename, mime_type } = body || {};
+            const rawBase64 = image_base64 || file_base64;
+            if (!rawBase64) {
                 return json({ error: 'Missing image_base64 payload' }, 400);
             }
 
-            const cleanBase64 = String(image_base64).replace(/^data:[^;]+;base64,/, '');
+            const cleanBase64 = String(rawBase64).replace(/^data:[^;]+;base64,/, '');
             const binaryStr = atob(cleanBase64);
             const len = binaryStr.length;
             if (len > 15 * 1024 * 1024) {
@@ -412,11 +413,13 @@ export async function onRequest(context) {
             const safeMime = mime_type || 'image/webp';
             const ext = (safeMime.split('/')[1] || 'webp').replace(/[^a-z0-9]/gi, '');
             const safeName = (filename || `oshimy_${Date.now()}.${ext}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+            const catboxUserhash = env?.CATBOX_USERHASH || '1e5680e58e931a1d509c280dc';
 
-            // 1. Primary: Catbox.moe anonymous upload API
+            // 1. Primary: Catbox.moe permanent upload API with userhash
             try {
                 const form = new FormData();
                 form.append('reqtype', 'fileupload');
+                form.append('userhash', catboxUserhash);
                 const blob = new Blob([bytes], { type: safeMime });
                 form.append('fileToUpload', blob, safeName);
 
@@ -442,31 +445,7 @@ export async function onRequest(context) {
                 }
             } catch (_) {}
 
-            // 2. Fallback: Litterbox (72h Catbox mirror) or ImgBB if Catbox is unreachable
-            try {
-                const form = new FormData();
-                form.append('reqtype', 'fileupload');
-                form.append('time', '72h');
-                const blob = new Blob([bytes], { type: safeMime });
-                form.append('fileToUpload', blob, safeName);
-
-                const litResp = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
-                    method: 'POST',
-                    body: form,
-                    headers: { 'User-Agent': 'OshiMY-Imageboard/1.0' }
-                });
-                if (litResp.ok) {
-                    const litUrl = (await litResp.text()).trim();
-                    if (litUrl.startsWith('https://')) {
-                        return json({
-                            success: true,
-                            url: litUrl,
-                            provider: 'catbox-litterbox'
-                        });
-                    }
-                }
-            } catch (_) {}
-
+            // 2. Permanent Fallback: ImgBB if Catbox is unreachable
             const imgbbKey = env?.IMGBB_API_KEY || 'ba7dd29db4fb9b62ebfb8fae4c6c7922';
             const imgbbForm = new URLSearchParams();
             imgbbForm.append('image', cleanBase64);
@@ -483,7 +462,7 @@ export async function onRequest(context) {
                 });
             }
 
-            return json({ error: 'All upstream image hosts failed' }, 502);
+            return json({ error: 'All permanent image hosts failed' }, 502);
         }
         // Pixiv Image Reverse Proxy for Cloudflare Pages (bypasses hotlink blocks)
         if (route === 'proxy' && path[1] === 'pixiv' && method === 'GET') {

@@ -826,15 +826,16 @@ app.get('/api/reddit/post', async (req, res) => {
     }
 });
 
-// Stateless Media Upload Proxy (Catbox.moe Primary -> Litterbox -> ImgBB Failover, Zero DB storage)
+// Stateless Media Upload Proxy (Catbox.moe Primary with userhash -> ImgBB Failover, Zero DB storage)
 app.post('/api/upload', async (req, res) => {
-    const { file_base64, filename, mime_type } = req.body || {};
-    if (!file_base64 || typeof file_base64 !== 'string') {
-        return res.status(400).json({ error: 'Missing file_base64 payload' });
+    const { image_base64, file_base64, filename, mime_type } = req.body || {};
+    const rawBase64 = image_base64 || file_base64;
+    if (!rawBase64 || typeof rawBase64 !== 'string') {
+        return res.status(400).json({ error: 'Missing image_base64 payload' });
     }
 
     try {
-        const base64Clean = file_base64.replace(/^data:[^;]+;base64,/, '');
+        const base64Clean = rawBase64.replace(/^data:[^;]+;base64,/, '');
         const buffer = Buffer.from(base64Clean, 'base64');
         if (buffer.length > 32 * 1024 * 1024) {
             return res.status(413).json({ error: 'File exceeds 32MB limit' });
@@ -843,20 +844,22 @@ app.post('/api/upload', async (req, res) => {
         const safeName = (filename || 'upload.webp').replace(/[^a-zA-Z0-9._-]/g, '_');
         const safeMime = mime_type || 'image/webp';
         const blob = new Blob([buffer], { type: safeMime });
+        const catboxUserhash = process.env.CATBOX_USERHASH || '1e5680e58e931a1d509c280dc';
 
-        // 1. Primary: Catbox.moe anonymous upload
+        // 1. Primary: Catbox.moe permanent upload with userhash
         try {
             const catboxForm = new FormData();
             catboxForm.append('reqtype', 'fileupload');
+            catboxForm.append('userhash', catboxUserhash);
             catboxForm.append('fileToUpload', blob, safeName);
 
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 12000);
+            const timeout = setTimeout(() => controller.abort(), 15000);
             const catboxResp = await fetch('https://catbox.moe/user/api.php', {
                 method: 'POST',
                 body: catboxForm,
                 signal: controller.signal,
-                headers: { 'User-Agent': 'OshiMY-Board/1.0' }
+                headers: { 'User-Agent': 'OshiMY-Board/1.0 (+https://oshimy.moe)' }
             });
             clearTimeout(timeout);
 
@@ -867,35 +870,10 @@ app.post('/api/upload', async (req, res) => {
                 }
             }
         } catch (catErr) {
-            console.warn('[Upload] Catbox primary warning, trying fallback:', catErr.message);
+            console.warn('[Upload] Catbox primary warning, trying permanent ImgBB fallback:', catErr.message);
         }
 
-        // 2. Secondary: Litterbox (Catbox 72h host)
-        try {
-            const litterForm = new FormData();
-            litterForm.append('reqtype', 'fileupload');
-            litterForm.append('time', '72h');
-            litterForm.append('fileToUpload', blob, safeName);
-
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 10000);
-            const litterResp = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
-                method: 'POST',
-                body: litterForm,
-                signal: controller.signal,
-                headers: { 'User-Agent': 'OshiMY-Board/1.0' }
-            });
-            clearTimeout(timeout);
-
-            if (litterResp.ok) {
-                const text = (await litterResp.text()).trim();
-                if (text.startsWith('https://litter.catbox.moe/')) {
-                    return res.json({ success: true, url: text, provider: 'litterbox.catbox.moe' });
-                }
-            }
-        } catch (_) {}
-
-        // 3. Tertiary: ImgBB Failover
+        // 2. Secondary Permanent Failover: ImgBB
         const imgbbKey = process.env.IMGBB_API_KEY || '6d885f930c72cd28e6520e6c7494704f';
         const imgbbForm = new FormData();
         imgbbForm.append('image', base64Clean);
@@ -908,7 +886,7 @@ app.post('/api/upload', async (req, res) => {
             return res.json({ success: true, url: imgbbData.data.url, provider: 'imgbb' });
         }
 
-        return res.status(502).json({ error: 'All external image hosts failed to accept the upload' });
+        return res.status(502).json({ error: 'All permanent image hosts failed to accept the upload' });
     } catch (err) {
         console.error('[Upload] Error:', err);
         return res.status(500).json({ error: 'Upload processing failed' });
