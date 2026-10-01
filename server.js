@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'url';
 import { db, hashPassword, verifyPassword, hashIp, generateId, generatePosterId } from './server/db.js';
@@ -20,6 +21,21 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
+
+app.set('trust proxy', true);
+
+// Cache directory for extracted video first-frame thumbnails
+const VIDEO_THUMBS_DIR = path.join(__dirname, 'cache', 'video_thumbs');
+if (!fs.existsSync(VIDEO_THUMBS_DIR)) {
+    try { fs.mkdirSync(VIDEO_THUMBS_DIR, { recursive: true }); } catch (_) {}
+}
+
+// Consistent HTTPS-aware origin resolver
+function getOrigin(req) {
+    const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+    const host = req.headers['x-forwarded-host'] || req.get('host') || '127.0.0.1:3000';
+    return `${proto}://${host}`;
+}
 
 app.use('/api/upload', express.raw({ type: 'application/octet-stream', limit: '25mb' }));
 app.use(express.json({ limit: '30mb' }));
@@ -512,6 +528,68 @@ app.get('/api/pixiv/artwork', async (req, res) => {
     } catch (err) {
         console.error('Pixiv artwork lookup error:', err);
         res.status(500).json({ error: 'Failed to fetch Pixiv artwork data' });
+    }
+});
+
+// Dynamic Video Thumbnail Extraction & Caching Endpoint
+app.get('/api/video/thumbnail', async (req, res) => {
+    const videoUrl = req.query.url;
+    const fallbackPath = path.join(__dirname, 'asset', 'img', 'video_black_thumb.png');
+    if (!videoUrl || typeof videoUrl !== 'string') {
+        res.setHeader('Content-Type', 'image/png');
+        return res.sendFile(fallbackPath);
+    }
+
+    try {
+        const cleanVidUrl = decodeURIComponent(videoUrl).trim();
+        // SSRF protection: only permit http/https schemes, reject loopback / internal private targets
+        if (!/^https?:\/\//i.test(cleanVidUrl) || cleanVidUrl.includes('localhost') || cleanVidUrl.includes('127.0.0.1')) {
+            res.setHeader('Content-Type', 'image/png');
+            return res.sendFile(fallbackPath);
+        }
+
+        const urlHash = crypto.createHash('sha256').update(cleanVidUrl).digest('hex').substring(0, 32);
+        const thumbFile = path.join(VIDEO_THUMBS_DIR, `${urlHash}.jpg`);
+
+        if (fs.existsSync(thumbFile) && fs.statSync(thumbFile).size > 100) {
+            res.setHeader('Content-Type', 'image/jpeg');
+            res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+            return fs.createReadStream(thumbFile).pipe(res);
+        }
+
+        // Generate first frame using ffmpeg
+        const child = spawn('/usr/bin/ffmpeg', [
+            '-y',
+            '-ss', '00:00:00.100',
+            '-i', cleanVidUrl,
+            '-vframes', '1',
+            '-an',
+            '-vf', "scale='min(1280,iw)':-2",
+            '-q:v', '3',
+            '-f', 'image2',
+            thumbFile
+        ], { timeout: 6000 });
+
+        let answered = false;
+        const answer = (success) => {
+            if (answered) return;
+            answered = true;
+            if (success && fs.existsSync(thumbFile) && fs.statSync(thumbFile).size > 100) {
+                res.setHeader('Content-Type', 'image/jpeg');
+                res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+                return fs.createReadStream(thumbFile).pipe(res);
+            }
+            res.setHeader('Content-Type', 'image/png');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            return res.sendFile(fallbackPath);
+        };
+
+        child.on('close', (code) => answer(code === 0));
+        child.on('error', () => answer(false));
+    } catch (_) {
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.sendFile(fallbackPath);
     }
 });
 
@@ -1927,7 +2005,7 @@ function escapeJson(str) {
 }
 
 // Helper: Resolve any image, video, Pixiv, Twitter/X, Reddit, YouTube URL for rich Discord & messenger embeds
-function resolveSocialMedia(rawUrl, origin, cacheContext = null) {
+async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redditCacheContext = null) {
     if (!rawUrl || typeof rawUrl !== 'string') {
         return { type: 'none', imageUrl: null, videoUrl: null, videoType: null, source: null };
     }
@@ -1935,6 +2013,7 @@ function resolveSocialMedia(rawUrl, origin, cacheContext = null) {
     if (!cleanUrl) {
         return { type: 'none', imageUrl: null, videoUrl: null, videoType: null, source: null };
     }
+    const blackThumbUrl = `${origin}/asset/img/video_black_thumb.png`;
 
     // 1. Pixiv Artworks (illust_id or artworks/ID)
     const pixivMatch = cleanUrl.match(/(?:pixiv\.net\/(?:en\/)?artworks\/|illust_id=)(\d+)/i) || cleanUrl.match(/pixiv\.re\/(\d+)/i);
@@ -1962,14 +2041,189 @@ function resolveSocialMedia(rawUrl, origin, cacheContext = null) {
         };
     }
 
-    // 3. Twitter / X (x.com or twitter.com status)
-    const xMatch = cleanUrl.match(/(?:twitter\.com|x\.com|vxtwitter\.com|fxtwitter\.com|fixupx\.com)\/([a-zA-Z0-9_]+)\/status\/(\d+)/i);
+    // 3. Twitter / X (handles x.com, twitter.com, vxtwitter, fxtwitter, fixupx, /status/ and /i/status/)
+    const xMatch = cleanUrl.match(/(?:twitter\.com|x\.com|vxtwitter\.com|fxtwitter\.com|fixupx\.com)\/(?:#!\/)?(?:([a-zA-Z0-9_]+)\/status\/|status\/|i\/status\/)(\d+)/i);
     if (xMatch) {
-        const handle = xMatch[1];
+        const handle = xMatch[1] || 'i';
         const statusId = xMatch[2];
+
+        // 3a. Check in-memory tweet cache first
+        if (tweetCacheContext && typeof tweetCacheContext.get === 'function' && tweetCacheContext.has(statusId)) {
+            const cached = tweetCacheContext.get(statusId);
+            if (cached.mediaType === 'video' && cached.videoUrl) {
+                return {
+                    type: 'video',
+                    imageUrl: cached.videoThumbnail || blackThumbUrl,
+                    videoUrl: cached.videoUrl,
+                    videoType: 'video/mp4',
+                    source: 'Twitter / X Video'
+                };
+            }
+            if (cached.imageUrl) {
+                return {
+                    type: 'image',
+                    imageUrl: cached.imageUrl,
+                    videoUrl: null,
+                    videoType: null,
+                    source: 'Twitter / X'
+                };
+            }
+        }
+
+        // 3b. Query api.vxtwitter.com JSON API
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3500);
+            const vxResp = await fetch(`https://api.vxtwitter.com/${handle}/status/${statusId}`, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'curl/7.88.1' }
+            });
+            clearTimeout(timeout);
+            if (vxResp.ok) {
+                const vxJson = await vxResp.json();
+                const mediaList = vxJson.media_extended || [];
+                const videoItem = mediaList.find(m => m.type === 'video' || m.type === 'gif');
+                const imageItem = mediaList.find(m => m.type === 'image');
+
+                if (videoItem) {
+                    const videoRes = {
+                        type: 'video',
+                        imageUrl: videoItem.thumbnail_url || blackThumbUrl,
+                        videoUrl: videoItem.url,
+                        videoType: 'video/mp4',
+                        source: 'Twitter / X Video'
+                    };
+                    if (tweetCacheContext && typeof tweetCacheContext.set === 'function') {
+                        tweetCacheContext.set(statusId, {
+                            id: statusId,
+                            mediaType: 'video',
+                            videoUrl: videoItem.url,
+                            videoThumbnail: videoItem.thumbnail_url || blackThumbUrl,
+                            imageUrl: null
+                        });
+                    }
+                    return videoRes;
+                }
+
+                if (imageItem) {
+                    const imageRes = {
+                        type: 'image',
+                        imageUrl: imageItem.url,
+                        videoUrl: null,
+                        videoType: null,
+                        source: 'Twitter / X'
+                    };
+                    if (tweetCacheContext && typeof tweetCacheContext.set === 'function') {
+                        tweetCacheContext.set(statusId, {
+                            id: statusId,
+                            mediaType: 'image',
+                            videoUrl: null,
+                            videoThumbnail: null,
+                            imageUrl: imageItem.url
+                        });
+                    }
+                    return imageRes;
+                }
+            }
+        } catch (_) {}
+
+        // 3c. Query api.fxtwitter.com JSON API
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3500);
+            const fxResp = await fetch(`https://api.fxtwitter.com/${handle}/status/${statusId}`, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'curl/7.88.1' }
+            });
+            clearTimeout(timeout);
+            if (fxResp.ok) {
+                const fxJson = await fxResp.json();
+                const t = fxJson && fxJson.tweet;
+                if (t && t.media) {
+                    const videoItem = (t.media.videos && t.media.videos[0]) || (t.media.all && t.media.all.find(m => m.type === 'video' || m.type === 'gif'));
+                    if (videoItem) {
+                        const videoRes = {
+                            type: 'video',
+                            imageUrl: videoItem.thumbnail_url || blackThumbUrl,
+                            videoUrl: videoItem.url,
+                            videoType: 'video/mp4',
+                            source: 'Twitter / X Video'
+                        };
+                        if (tweetCacheContext && typeof tweetCacheContext.set === 'function') {
+                            tweetCacheContext.set(statusId, {
+                                id: statusId,
+                                mediaType: 'video',
+                                videoUrl: videoItem.url,
+                                videoThumbnail: videoItem.thumbnail_url || blackThumbUrl,
+                                imageUrl: null
+                            });
+                        }
+                        return videoRes;
+                    }
+                    const photoItem = (t.media.photos && t.media.photos[0]) || (t.media.all && t.media.all.find(m => m.type === 'photo' || m.type === 'image'));
+                    if (photoItem) {
+                        const imageRes = {
+                            type: 'image',
+                            imageUrl: photoItem.url,
+                            videoUrl: null,
+                            videoType: null,
+                            source: 'Twitter / X'
+                        };
+                        if (tweetCacheContext && typeof tweetCacheContext.set === 'function') {
+                            tweetCacheContext.set(statusId, {
+                                id: statusId,
+                                mediaType: 'image',
+                                videoUrl: null,
+                                videoThumbnail: null,
+                                imageUrl: photoItem.url
+                            });
+                        }
+                        return imageRes;
+                    }
+                }
+            }
+        } catch (_) {}
+
+        // 3d. Fallback: probe vxTwitter HTML tags for direct stream/image tags
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3000);
+            const vxHtmlResp = await fetch(`https://vxtwitter.com/${handle}/status/${statusId}`, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' }
+            });
+            clearTimeout(timeout);
+            if (vxHtmlResp.ok) {
+                const vxHtml = await vxHtmlResp.text();
+                const vidMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:video(?::secure_url)?|twitter:player:stream)["']\s+content=["']([^"']+)["']/i) ||
+                                 vxHtml.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:video(?::secure_url)?|twitter:player:stream)["']/i);
+                const imgMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["']([^"']+)["']/i) ||
+                                 vxHtml.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+                if (vidMatch && vidMatch[1]) {
+                    return {
+                        type: 'video',
+                        imageUrl: (imgMatch && imgMatch[1]) || blackThumbUrl,
+                        videoUrl: vidMatch[1],
+                        videoType: 'video/mp4',
+                        source: 'Twitter / X Video'
+                    };
+                }
+                if (imgMatch && imgMatch[1]) {
+                    return {
+                        type: 'image',
+                        imageUrl: imgMatch[1],
+                        videoUrl: null,
+                        videoType: null,
+                        source: 'Twitter / X'
+                    };
+                }
+            }
+        } catch (_) {}
+
+        // 3e. Clean fallback thumbnail (never a fake .jpg that returns an HTML page)
         return {
             type: 'image',
-            imageUrl: `https://d.fxtwitter.com/${handle}/status/${statusId}.jpg`,
+            imageUrl: blackThumbUrl,
             videoUrl: null,
             videoType: null,
             source: 'Twitter / X'
@@ -1983,7 +2237,7 @@ function resolveSocialMedia(rawUrl, origin, cacheContext = null) {
         const vidId = redditVidMatch[1];
         return {
             type: 'video',
-            imageUrl: null,
+            imageUrl: blackThumbUrl,
             videoUrl: `https://v.redd.it/${vidId}/DASH_720.mp4`,
             videoType: 'video/mp4',
             source: 'Reddit Video'
@@ -1995,14 +2249,14 @@ function resolveSocialMedia(rawUrl, origin, cacheContext = null) {
         const sub = redditPostMatch[1];
         const postId = redditPostMatch[2];
         let cached = null;
-        if (cacheContext && typeof cacheContext.get === 'function') {
-            cached = cacheContext.get(cleanUrl);
+        if (redditCacheContext && typeof redditCacheContext.get === 'function') {
+            cached = redditCacheContext.get(cleanUrl);
         }
         if (cached) {
             if (cached.mediaType === 'video' && cached.videoUrl) {
                 return {
                     type: 'video',
-                    imageUrl: cached.thumbnailUrl || cached.imageUrl || null,
+                    imageUrl: cached.thumbnailUrl || cached.imageUrl || blackThumbUrl,
                     videoUrl: cached.videoUrl,
                     videoType: 'video/mp4',
                     source: `Reddit r/${sub}`
@@ -2033,9 +2287,10 @@ function resolveSocialMedia(rawUrl, origin, cacheContext = null) {
         if (cleanUrl.startsWith('/') && origin) {
             absVideoUrl = `${origin}${cleanUrl}`;
         }
+        const thumbUrl = origin ? `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}` : blackThumbUrl;
         return {
             type: 'video',
-            imageUrl: null,
+            imageUrl: thumbUrl,
             videoUrl: absVideoUrl,
             videoType: cleanUrl.includes('.webm') ? 'video/webm' : 'video/mp4',
             source: 'Video'
@@ -2080,7 +2335,7 @@ const SFW_BOARDS = {
 
 // --- SEARCH ENGINE OPTIMIZATION (SEO) ENDPOINTS ---
 app.get('/robots.txt', (req, res) => {
-    const origin = `${req.protocol}://${req.get('host')}`;
+    const origin = getOrigin(req);
     const robots = `User-agent: *
 Allow: /
 Disallow: /api/admin/
@@ -2095,7 +2350,7 @@ Sitemap: ${origin}/sitemap.xml
 });
 
 app.get('/sitemap.xml', (req, res) => {
-    const origin = `${req.protocol}://${req.get('host')}`;
+    const origin = getOrigin(req);
     const boardKeys = Object.keys(SFW_BOARDS);
 
     let threadUrlsXml = '';
@@ -2137,7 +2392,7 @@ ${threadUrlsXml ? '\n' + threadUrlsXml : ''}
 // Disable default index.html serving in express.static so root requests hit our dynamic SSR handler
 app.use(express.static(__dirname, { index: false }));
 
-app.get('*', (req, res) => {
+app.get('*', async (req, res) => {
     // If request path is an API route, return 404 JSON
     if (req.path.startsWith('/api/')) {
         return res.status(404).json({ error: 'API route not found' });
@@ -2146,7 +2401,7 @@ app.get('*', (req, res) => {
     try {
         const indexPath = path.join(__dirname, 'index.html');
         let html = fs.readFileSync(indexPath, 'utf8');
-        const origin = `${req.protocol}://${req.get('host')}`;
+        const origin = getOrigin(req);
 
         // Get default or custom site banner
         let currentBanner = 'https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=300&q=80';
@@ -2177,8 +2432,11 @@ app.get('*', (req, res) => {
                     }
 
                     const rawMedia = (reply && reply.media_url) ? reply.media_url : (thread.media_url || null);
-                    const resolvedMedia = resolveSocialMedia(rawMedia, origin, redditPostCache);
-                    const displayImage = resolvedMedia.imageUrl || currentBanner;
+                    const resolvedMedia = await resolveSocialMedia(rawMedia, origin, tweetCache, redditPostCache);
+                    const blackThumbUrl = `${origin}/asset/img/video_black_thumb.png`;
+                    const displayImage = resolvedMedia.type === 'video'
+                        ? (resolvedMedia.imageUrl || blackThumbUrl)
+                        : (resolvedMedia.imageUrl || currentBanner);
 
                     let pageTitle, pageDesc, canonicalUrl;
                     const siteName = `OshiMY - /${thread.board}/`;

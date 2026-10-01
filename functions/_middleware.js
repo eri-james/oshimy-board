@@ -19,7 +19,7 @@ function escapeAttr(str) {
 }
 
 // Helper: Resolve any image, video, Pixiv, Twitter/X, Reddit, YouTube URL for rich Discord & messenger embeds
-function resolveSocialMedia(rawUrl, origin) {
+async function resolveSocialMedia(rawUrl, origin) {
     if (!rawUrl || typeof rawUrl !== 'string') {
         return { type: 'none', imageUrl: null, videoUrl: null, videoType: null, source: null };
     }
@@ -27,6 +27,7 @@ function resolveSocialMedia(rawUrl, origin) {
     if (!cleanUrl) {
         return { type: 'none', imageUrl: null, videoUrl: null, videoType: null, source: null };
     }
+    const blackThumbUrl = `${origin}/asset/img/video_black_thumb.png`;
 
     // 1. Pixiv Artworks (illust_id or artworks/ID)
     const pixivMatch = cleanUrl.match(/(?:pixiv\.net\/(?:en\/)?artworks\/|illust_id=)(\d+)/i) || cleanUrl.match(/pixiv\.re\/(\d+)/i);
@@ -54,14 +55,125 @@ function resolveSocialMedia(rawUrl, origin) {
         };
     }
 
-    // 3. Twitter / X (x.com or twitter.com status)
-    const xMatch = cleanUrl.match(/(?:twitter\.com|x\.com|vxtwitter\.com|fxtwitter\.com|fixupx\.com)\/([a-zA-Z0-9_]+)\/status\/(\d+)/i);
+    // 3. Twitter / X (handles x.com, twitter.com, vxtwitter, fxtwitter, fixupx, /status/ and /i/status/)
+    const xMatch = cleanUrl.match(/(?:twitter\.com|x\.com|vxtwitter\.com|fxtwitter\.com|fixupx\.com)\/(?:#!\/)?(?:([a-zA-Z0-9_]+)\/status\/|status\/|i\/status\/)(\d+)/i);
     if (xMatch) {
-        const handle = xMatch[1];
+        const handle = xMatch[1] || 'i';
         const statusId = xMatch[2];
+
+        // 3a. Query api.vxtwitter.com JSON API
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3500);
+            const vxResp = await fetch(`https://api.vxtwitter.com/${handle}/status/${statusId}`, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'curl/7.88.1' }
+            });
+            clearTimeout(timeout);
+            if (vxResp.ok) {
+                const vxJson = await vxResp.json();
+                const mediaList = vxJson.media_extended || [];
+                const videoItem = mediaList.find(m => m.type === 'video' || m.type === 'gif');
+                const imageItem = mediaList.find(m => m.type === 'image');
+
+                if (videoItem) {
+                    return {
+                        type: 'video',
+                        imageUrl: videoItem.thumbnail_url || blackThumbUrl,
+                        videoUrl: videoItem.url,
+                        videoType: 'video/mp4',
+                        source: 'Twitter / X Video'
+                    };
+                }
+
+                if (imageItem) {
+                    return {
+                        type: 'image',
+                        imageUrl: imageItem.url,
+                        videoUrl: null,
+                        videoType: null,
+                        source: 'Twitter / X'
+                    };
+                }
+            }
+        } catch (_) {}
+
+        // 3b. Query api.fxtwitter.com JSON API
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3500);
+            const fxResp = await fetch(`https://api.fxtwitter.com/${handle}/status/${statusId}`, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'curl/7.88.1' }
+            });
+            clearTimeout(timeout);
+            if (fxResp.ok) {
+                const fxJson = await fxResp.json();
+                const t = fxJson && fxJson.tweet;
+                if (t && t.media) {
+                    const videoItem = (t.media.videos && t.media.videos[0]) || (t.media.all && t.media.all.find(m => m.type === 'video' || m.type === 'gif'));
+                    if (videoItem) {
+                        return {
+                            type: 'video',
+                            imageUrl: videoItem.thumbnail_url || blackThumbUrl,
+                            videoUrl: videoItem.url,
+                            videoType: 'video/mp4',
+                            source: 'Twitter / X Video'
+                        };
+                    }
+                    const photoItem = (t.media.photos && t.media.photos[0]) || (t.media.all && t.media.all.find(m => m.type === 'photo' || m.type === 'image'));
+                    if (photoItem) {
+                        return {
+                            type: 'image',
+                            imageUrl: photoItem.url,
+                            videoUrl: null,
+                            videoType: null,
+                            source: 'Twitter / X'
+                        };
+                    }
+                }
+            }
+        } catch (_) {}
+
+        // 3c. Fallback: probe vxTwitter HTML tags
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3000);
+            const vxHtmlResp = await fetch(`https://vxtwitter.com/${handle}/status/${statusId}`, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' }
+            });
+            clearTimeout(timeout);
+            if (vxHtmlResp.ok) {
+                const vxHtml = await vxHtmlResp.text();
+                const vidMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:video(?::secure_url)?|twitter:player:stream)["']\s+content=["']([^"']+)["']/i) ||
+                                 vxHtml.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:video(?::secure_url)?|twitter:player:stream)["']/i);
+                const imgMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["']([^"']+)["']/i) ||
+                                 vxHtml.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+                if (vidMatch && vidMatch[1]) {
+                    return {
+                        type: 'video',
+                        imageUrl: (imgMatch && imgMatch[1]) || blackThumbUrl,
+                        videoUrl: vidMatch[1],
+                        videoType: 'video/mp4',
+                        source: 'Twitter / X Video'
+                    };
+                }
+                if (imgMatch && imgMatch[1]) {
+                    return {
+                        type: 'image',
+                        imageUrl: imgMatch[1],
+                        videoUrl: null,
+                        videoType: null,
+                        source: 'Twitter / X'
+                    };
+                }
+            }
+        } catch (_) {}
+
         return {
             type: 'image',
-            imageUrl: `https://d.fxtwitter.com/${handle}/status/${statusId}.jpg`,
+            imageUrl: blackThumbUrl,
             videoUrl: null,
             videoType: null,
             source: 'Twitter / X'
@@ -75,7 +187,7 @@ function resolveSocialMedia(rawUrl, origin) {
         const vidId = redditVidMatch[1];
         return {
             type: 'video',
-            imageUrl: null,
+            imageUrl: blackThumbUrl,
             videoUrl: `https://v.redd.it/${vidId}/DASH_720.mp4`,
             videoType: 'video/mp4',
             source: 'Reddit Video'
@@ -101,9 +213,10 @@ function resolveSocialMedia(rawUrl, origin) {
         if (cleanUrl.startsWith('/') && origin) {
             absVideoUrl = `${origin}${cleanUrl}`;
         }
+        const thumbUrl = origin ? `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}` : blackThumbUrl;
         return {
             type: 'video',
-            imageUrl: null,
+            imageUrl: thumbUrl,
             videoUrl: absVideoUrl,
             videoType: cleanUrl.includes('.webm') ? 'video/webm' : 'video/mp4',
             source: 'Video'
@@ -178,8 +291,11 @@ export async function onRequest(context) {
                 }
 
                 const rawMedia = (reply && reply.media_url) ? reply.media_url : (thread.media_url || null);
-                const resolvedMedia = resolveSocialMedia(rawMedia, origin);
-                const displayImage = resolvedMedia.imageUrl || currentBanner;
+                const resolvedMedia = await resolveSocialMedia(rawMedia, origin);
+                const blackThumbUrl = `${origin}/asset/img/video_black_thumb.png`;
+                const displayImage = resolvedMedia.type === 'video'
+                    ? (resolvedMedia.imageUrl || blackThumbUrl)
+                    : (resolvedMedia.imageUrl || currentBanner);
 
                 let pageTitle, pageDesc, canonicalUrl;
                 const siteName = `OshiMY - /${thread.board}/`;
