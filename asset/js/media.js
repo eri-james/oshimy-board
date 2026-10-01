@@ -5,6 +5,18 @@
 
 const IMGBB_API_KEY = "6d885f930c72cd28e6520e6c7494704f";
 
+function getVxRedditUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    const cleanUrl = url.trim();
+    const vMatch = cleanUrl.match(/v\.redd\.it\/([a-zA-Z0-9_-]+)/i);
+    if (vMatch) return `https://vxreddit.com/comments/${vMatch[1]}`;
+    const rMatch = cleanUrl.match(/(?:https?:\/\/)?redd\.it\/([a-zA-Z0-9_-]+)/i);
+    if (rMatch) return `https://vxreddit.com/comments/${rMatch[1]}`;
+    if (/https?:\/\/(?:www\.)?vxreddit\.com/i.test(cleanUrl)) return cleanUrl;
+    if (/https?:\/\/(?:www\.)?rxddit\.com/i.test(cleanUrl)) return cleanUrl.replace(/rxddit\.com/i, 'vxreddit.com');
+    return cleanUrl.replace(/https?:\/\/(?:www\.|old\.|new\.|m\.|sh\.)?reddit\.com/i, 'https://vxreddit.com');
+}
+
 // --- CENTRALIZED MEDIA TYPE DETECTION ---
 function getMediaType(url) {
     if (!url || typeof url !== 'string') return null;
@@ -66,21 +78,25 @@ function getMediaType(url) {
         return { type: 'image', url: cleanUrl };
     }
 
-    // 6. Reddit Direct Video (v.redd.it)
+    // 6. Reddit Direct Video (v.redd.it - mapped to vxreddit merged audio+video helper)
     const redditVideoRegex = /(?:https?:\/\/)?v\.redd\.it\/([a-zA-Z0-9_-]+)/i;
     const redditVideoMatch = cleanUrl.match(redditVideoRegex);
     if (redditVideoMatch) {
-        return { type: 'reddit_video', id: redditVideoMatch[1], url: cleanUrl };
+        const vid = redditVideoMatch[1];
+        const vxUrl = `https://vxreddit.com/comments/${vid}`;
+        const videoUrl = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent('https://v.redd.it/' + vid + '/HLS_720.m3u8')}&audio_url=${encodeURIComponent('https://v.redd.it/' + vid + '/HLS_AUDIO_64.m3u8')}`;
+        return { type: 'reddit_video', id: vid, url: cleanUrl, vxUrl, videoUrl };
     }
 
-    // 7. Reddit Post & Share Link Detection (handles /r/sub/comments/id, /r/sub/s/shareId, /comments/id, redd.it/id)
-    const redditPostRegex = /(?:https?:\/\/)?(?:(?:www\.|old\.|new\.|m\.|sh\.)?reddit\.com\/(?:r\/([a-zA-Z0-9_]+)\/(?:comments\/([a-z0-9]+)|s\/([a-zA-Z0-9_-]+))|(?:comments\/([a-z0-9]+)|s\/([a-zA-Z0-9_-]+)))|(?<![a-zA-Z0-9])redd\.it\/([a-z0-9]+))/i;
+    // 7. Reddit Post & Share Link Detection (handles reddit.com, vxreddit.com, rxddit.com, redd.it)
+    const redditPostRegex = /(?:https?:\/\/)?(?:(?:www\.|old\.|new\.|m\.|sh\.)?(?:reddit\.com|vxreddit\.com|rxddit\.com)\/(?:r\/([a-zA-Z0-9_]+)\/(?:comments\/([a-z0-9]+)|s\/([a-zA-Z0-9_-]+))|(?:comments\/([a-z0-9]+)|s\/([a-zA-Z0-9_-]+)))|(?<![a-zA-Z0-9])redd\.it\/([a-z0-9]+))/i;
     const redditPostMatch = cleanUrl.match(redditPostRegex);
     if (redditPostMatch) {
         const subreddit = redditPostMatch[1] || 'reddit';
         const id = redditPostMatch[2] || redditPostMatch[3] || redditPostMatch[4] || redditPostMatch[5] || redditPostMatch[6];
         const isShare = !!(redditPostMatch[3] || redditPostMatch[5]);
-        return { type: 'reddit', subreddit, id, isShare, url: cleanUrl };
+        const vxUrl = getVxRedditUrl(cleanUrl);
+        return { type: 'reddit', subreddit, id, isShare, url: cleanUrl, vxUrl };
     }
 
     // 8. Direct HTML5 Video Detection
@@ -157,11 +173,11 @@ function renderMedia(url) {
         `;
     }
 
-    // 5. Reddit Post Card
+    // 5. Reddit Post Card (with vxreddit proxy helper integration)
     if (media.type === 'reddit') {
         const isShareParam = media.isShare ? 'true' : 'false';
         return `
-            <div class="media-container file-placeholder reddit-placeholder" data-reddit-url="${escapeHtml(media.url)}" onclick="openLightbox('reddit', '${escapeHtml(media.url)}', '${escapeHtml(media.subreddit)}', '${escapeHtml(media.id)}', ${isShareParam})" title="Click to view Reddit post on r/${escapeHtml(media.subreddit)}">
+            <div class="media-container file-placeholder reddit-placeholder" data-reddit-url="${escapeHtml(media.url)}" data-vx-url="${escapeHtml(media.vxUrl || '')}" onclick="openLightbox('reddit', '${escapeHtml(media.url)}', '${escapeHtml(media.subreddit)}', '${escapeHtml(media.id)}', ${isShareParam})" title="Click to view Reddit post on r/${escapeHtml(media.subreddit)}">
                 <div class="reddit-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
                     <div style="display:flex; align-items:center; justify-content:center; width:44px; height:44px; border-radius:50%; background:rgba(255, 69, 0, 0.15); margin-bottom:8px;">
                         <svg width="26" height="26" viewBox="0 0 24 24" fill="#FF4500">
@@ -175,13 +191,15 @@ function renderMedia(url) {
         `;
     }
 
-    // 6. Reddit Video Card (v.redd.it)
+    // 6. Reddit Video Card (v.redd.it with vxreddit streaming helper)
     if (media.type === 'reddit_video') {
         return `
-            <div class="media-container file-placeholder reddit-placeholder" onclick="openLightbox('reddit_video', '${media.id}')" title="Click to view Reddit Video">
-                <div class="file-ext" style="color:#FF4500;">🎥</div>
-                <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px;">Reddit Video</div>
-                <div class="play-overlay">▶</div>
+            <div class="media-container file-placeholder reddit-placeholder" data-reddit-url="${escapeHtml(media.url)}" data-vx-url="${escapeHtml(media.vxUrl || '')}" onclick="openLightbox('reddit_video', '${media.id}')" title="Click to play Reddit Video with Audio">
+                <div class="reddit-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                    <div class="file-ext" style="color:#FF4500; font-size:28px;">🎥</div>
+                    <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px;">Reddit Video</div>
+                    <div class="play-overlay">▶</div>
+                </div>
             </div>
         `;
     }
@@ -342,30 +360,36 @@ async function hydrateRedditEmbeds() {
                         const multiBadge = (p.pageCount && p.pageCount > 1) 
                             ? `<div class="pixiv-pages-badge" style="background:#FF4500;">📚 ${p.pageCount}P</div>` 
                             : '';
+                        const scoreBadge = p.score 
+                            ? `<div style="position:absolute; top:6px; right:6px; background:rgba(0,0,0,0.75); color:#ff6a33; font-size:10px; font-weight:bold; padding:2px 6px; border-radius:4px; backdrop-filter:blur(2px); z-index:2;">⬆️ ${escapeHtml(p.score)}</div>` 
+                            : '';
 
                         slot.innerHTML = `
                             <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
                                 <img src="${escapeHtml(thumb)}" referrerpolicy="no-referrer" class="thread-image" loading="lazy" decoding="async" alt="Reddit media" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
                                 ${playOverlay}
                                 ${multiBadge}
+                                ${scoreBadge}
                                 <div class="pixiv-badge" style="background:#FF4500;">r/${escapeHtml(p.subreddit)}</div>
                             </div>
                         `;
                         placeholder.classList.add('reddit-thumb-loaded');
                     } else if (p.title) {
+                        const scoreSnippet = p.score ? `<span style="font-size:10px; color:#ff6a33; font-weight:bold;">⬆️ ${escapeHtml(p.score)}</span>` : '';
                         slot.innerHTML = `
                             <div style="padding:8px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; width:100%;">
-                                <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; width:100%;">
+                                <div style="display:flex; align-items:center; justify-content:space-between; width:100%; margin-bottom:4px;">
                                     <span style="color:#FF4500; font-weight:bold; font-size:11px;">r/${escapeHtml(p.subreddit)}</span>
-                                    <span style="font-size:10px; color:#9ca3af; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">by ${escapeHtml(p.author)}</span>
+                                    ${scoreSnippet}
                                 </div>
+                                <div style="font-size:10px; color:#9ca3af; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; width:100%; margin-bottom:4px;">by ${escapeHtml(p.author)}</div>
                                 <div style="font-size:11px; font-weight:bold; color:#fff; line-height:1.3; max-height:60px; overflow:hidden; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;">
                                     ${escapeHtml(p.title)}
                                 </div>
                             </div>
                         `;
                     }
-                    placeholder.title = `r/${p.subreddit}: "${p.title}"${p.pageCount > 1 ? ` (${p.pageCount} images)` : ''} - Click to open`;
+                    placeholder.title = `r/${p.subreddit}: "${p.title}"${p.pageCount > 1 ? ` (${p.pageCount} images)` : ''}${p.score ? ` (⬆️ ${p.score})` : ''} - Click to open`;
                 }
             }
         } catch (_) {}
@@ -886,12 +910,13 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         const subreddit = extra1 || 'reddit';
         const postId = extra2 || '';
         const isShare = typeof extra3 !== 'undefined' && Boolean(extra3);
+        const vxUrl = getVxRedditUrl(postUrl);
 
         if (custom) {
             custom.innerHTML = `
                 <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px 20px; text-align:center; min-width:280px; max-width:600px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
                     <div style="font-size:1.1em; color:#FF4500; font-weight:bold; margin-bottom:8px;">Reddit Loading Post...</div>
-                    <div style="font-size:0.85em; opacity:0.7;">Fetching post details and media...</div>
+                    <div style="font-size:0.85em; opacity:0.75;">Fetching post details and media via vxreddit...</div>
                 </div>
             `;
             custom.style.display = 'block';
@@ -902,18 +927,39 @@ function openLightbox(type, content, extra1, extra2, extra3) {
             .then(data => {
                 if (data.success && data.post) {
                     const p = data.post;
+                    const displaySub = p.subreddit || subreddit;
+                    const targetVxUrl = p.vxUrl || vxUrl;
 
                     // 1. Direct Video Post: Stream immediately through proxy in HTML5 native player with controls & audio
                     if (p.mediaType === 'video' && p.videoUrl) {
-                        if (custom) custom.style.display = 'none';
-                        if (vid) {
-                            const streamUrl = `/api/proxy/video?url=${encodeURIComponent(p.videoUrl)}`;
-                            vid.referrerPolicy = "no-referrer";
-                            vid.style.display = 'block';
-                            vid.controls = true;
-                            vid.src = streamUrl;
-                            vid.load();
-                            vid.play().catch(() => {});
+                        const streamUrl = `/api/proxy/video?url=${encodeURIComponent(p.videoUrl)}`;
+                        if (custom) {
+                            custom.innerHTML = `
+                                <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:18px 20px; text-align:left; max-width:min(92vw, 760px); border:2px solid #FF4500; box-shadow:0 8px 36px rgba(0,0,0,0.95);">
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px; gap:10px; flex-wrap:wrap;">
+                                        <div>
+                                            <div style="font-weight:bold; font-size:15px; color:#FF4500;">r/${escapeHtml(displaySub)}</div>
+                                            <div style="font-size:12px; color:#9ca3af;">Posted by ${escapeHtml(p.author)}${p.score ? ` • ⬆️ ${escapeHtml(p.score)}` : ''}${p.comments ? ` • 💬 ${escapeHtml(p.comments)}` : ''}</div>
+                                        </div>
+                                        <div style="display:flex; gap:8px;">
+                                            <a href="${escapeHtml(targetVxUrl)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,69,0,0.2); border:1px solid #FF4500; color:#FF4500; font-size:12px; font-weight:bold; padding:5px 10px; border-radius:6px; text-decoration:none; white-space:nowrap;" title="Open with vxReddit proxy helper">vxReddit ↗</a>
+                                            <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="background:#FF4500; color:#fff; font-size:12px; font-weight:bold; padding:5px 12px; border-radius:6px; text-decoration:none; white-space:nowrap;">View on Reddit ↗</a>
+                                        </div>
+                                    </div>
+                                    <div style="font-size:15px; font-weight:bold; line-height:1.4; color:#f3f4f6; margin-bottom:12px;">
+                                        ${escapeHtml(p.title)}
+                                    </div>
+                                    <div style="position:relative; width:100%; border-radius:8px; overflow:hidden; background:#000; margin-bottom:12px;">
+                                        <video src="${escapeHtml(streamUrl)}" controls autoplay playsinline style="width:100%; max-height:min(70vh, 520px); display:block; object-fit:contain; border-radius:8px; outline:none;"></video>
+                                    </div>
+                                    ${p.description ? `
+                                        <div style="font-size:13px; line-height:1.45; color:#d1d5db; margin-bottom:12px; white-space:pre-wrap; max-height:120px; overflow-y:auto; padding:8px 12px; background:rgba(255,255,255,0.04); border-radius:6px;">
+                                            ${escapeHtml(p.description)}
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            `;
+                            custom.style.display = 'block';
                         }
                         return;
                     }
@@ -937,44 +983,37 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                         return;
                     }
 
-                    // 3. Single Image: Open directly in lightbox or show clean rich card with expandable image
-                    if (p.imageUrl && !p.description) {
-                        if (custom) custom.style.display = 'none';
-                        if (img) {
-                            img.src = p.imageUrl;
-                            img.style.display = 'block';
-                        }
-                        return;
-                    }
-
-                    // 4. Rich Card (Image or Text Discussion)
+                    // 3. Rich Card with Image or Text Discussion
                     if (custom) {
                         custom.innerHTML = `
-                            <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:20px 24px; text-align:left; max-width:min(90vw, 600px); border:2px solid #FF4500; box-shadow:0 8px 36px rgba(0,0,0,0.9);">
-                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px; gap:10px;">
+                            <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:20px 24px; text-align:left; max-width:min(92vw, 680px); border:2px solid #FF4500; box-shadow:0 8px 36px rgba(0,0,0,0.95);">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px; gap:10px; flex-wrap:wrap;">
                                     <div>
-                                        <div style="font-weight:bold; font-size:15px; color:#FF4500;">r/${escapeHtml(p.subreddit)}</div>
-                                        <div style="font-size:12px; color:#9ca3af;">Posted by ${escapeHtml(p.author)}</div>
+                                        <div style="font-weight:bold; font-size:15px; color:#FF4500;">r/${escapeHtml(displaySub)}</div>
+                                        <div style="font-size:12px; color:#9ca3af;">Posted by ${escapeHtml(p.author)}${p.score ? ` • ⬆️ ${escapeHtml(p.score)}` : ''}${p.comments ? ` • 💬 ${escapeHtml(p.comments)}` : ''}</div>
                                     </div>
-                                    <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="background:#FF4500; color:#fff; font-size:12px; font-weight:bold; padding:5px 12px; border-radius:6px; text-decoration:none; white-space:nowrap;">View on Reddit ↗</a>
+                                    <div style="display:flex; gap:8px;">
+                                        <a href="${escapeHtml(targetVxUrl)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,69,0,0.2); border:1px solid #FF4500; color:#FF4500; font-size:12px; font-weight:bold; padding:5px 10px; border-radius:6px; text-decoration:none; white-space:nowrap;" title="Open with vxReddit proxy helper">vxReddit ↗</a>
+                                        <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="background:#FF4500; color:#fff; font-size:12px; font-weight:bold; padding:5px 12px; border-radius:6px; text-decoration:none; white-space:nowrap;">View on Reddit ↗</a>
+                                    </div>
                                 </div>
                                 <div style="font-size:16px; font-weight:bold; line-height:1.4; color:#f3f4f6; margin-bottom:14px;">
                                     ${escapeHtml(p.title)}
                                 </div>
                                 ${p.imageUrl ? `
                                     <div style="text-align:center; margin-bottom:14px;">
-                                        <img src="${escapeHtml(p.imageUrl)}" referrerpolicy="no-referrer" onclick="openLightbox('image', '${escapeHtml(p.imageUrl)}')" style="max-width:100%; max-height:450px; border-radius:8px; object-fit:contain; cursor:pointer; box-shadow:0 4px 16px rgba(0,0,0,0.5);" title="Click to view full image">
+                                        <img src="${escapeHtml(p.imageUrl)}" referrerpolicy="no-referrer" onclick="openLightbox('image', '${escapeHtml(p.imageUrl)}')" style="max-width:100%; max-height:500px; border-radius:8px; object-fit:contain; cursor:pointer; box-shadow:0 4px 16px rgba(0,0,0,0.5);" title="Click to view full image">
                                         <div style="font-size:11px; color:#ff8c5a; margin-top:4px;">🔍 Click image to expand</div>
                                     </div>
                                 ` : ''}
                                 ${p.description ? `
-                                    <div style="font-size:13px; line-height:1.45; color:#d1d5db; margin-bottom:14px; white-space:pre-wrap; max-height:140px; overflow-y:auto; padding:8px 12px; background:rgba(255,255,255,0.04); border-radius:6px;">
+                                    <div style="font-size:13px; line-height:1.45; color:#d1d5db; margin-bottom:14px; white-space:pre-wrap; max-height:160px; overflow-y:auto; padding:8px 12px; background:rgba(255,255,255,0.04); border-radius:6px;">
                                         ${escapeHtml(p.description)}
                                     </div>
                                 ` : ''}
-                                <div style="text-align:center;">
-                                    <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:rgba(255,69,0,0.15); border:1px solid #FF4500; color:#FF4500; font-weight:bold; font-size:13px; padding:8px 18px; border-radius:6px; text-decoration:none;">
-                                        Open Full Post &amp; Comments ↗
+                                <div style="text-align:center; margin-top:8px;">
+                                    <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:rgba(255,69,0,0.15); border:1px solid #FF4500; color:#FF4500; font-weight:bold; font-size:13px; padding:8px 20px; border-radius:6px; text-decoration:none;">
+                                        Open Full Post &amp; Comments on Reddit ↗
                                     </a>
                                 </div>
                             </div>
@@ -984,57 +1023,58 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                     }
                 }
 
-                // Fallback to official embed or share modal
-                if (isShare && custom) {
+                // Fallback card with direct Reddit and vxReddit links
+                if (custom) {
                     custom.innerHTML = `
-                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:28px 24px; text-align:center; max-width:440px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.8);">
-                            <div style="font-size:1.15em; font-weight:bold; color:#fff; margin-bottom:6px;">Reddit Video &amp; Post</div>
-                            <div style="font-size:0.9em; color:#bbb; margin-bottom:18px;">From <b>r/${escapeHtml(subreddit)}</b></div>
-                            <a href="${escapeHtml(postUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:#FF4500; color:#fff; font-weight:bold; font-size:1em; padding:10px 22px; border-radius:8px; text-decoration:none;">
-                                Watch / View on Reddit ↗
-                            </a>
+                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:28px 24px; text-align:center; max-width:440px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
+                            <div style="font-size:1.8rem; margin-bottom:8px;">Reddit</div>
+                            <div style="font-size:1.1em; font-weight:bold; color:#fff; margin-bottom:6px;">r/${escapeHtml(subreddit)}</div>
+                            <div style="font-size:0.9em; color:#bbb; margin-bottom:18px;">Click below to open the post directly or via vxReddit helper:</div>
+                            <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
+                                <a href="${escapeHtml(vxUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:rgba(255,69,0,0.2); border:1px solid #FF4500; color:#FF4500; font-weight:bold; font-size:0.95em; padding:9px 18px; border-radius:8px; text-decoration:none;">
+                                    Open via vxReddit ↗
+                                </a>
+                                <a href="${escapeHtml(postUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:#FF4500; color:#fff; font-weight:bold; font-size:0.95em; padding:9px 18px; border-radius:8px; text-decoration:none;">
+                                    View on Reddit ↗
+                                </a>
+                            </div>
                         </div>
                     `;
                     custom.style.display = 'block';
-                } else if (frame) {
-                    if (custom) custom.style.display = 'none';
-                    const embedUrl = `https://embed.reddit.com/r/${encodeURIComponent(subreddit)}/comments/${encodeURIComponent(postId)}/?embed=true&theme=${theme}`;
-                    frame.src = embedUrl;
-                    frame.style.display = 'block';
-                    frame.style.width = "650px";
-                    frame.style.height = "540px";
                 }
             })
             .catch(() => {
-                if (isShare && custom) {
+                if (custom) {
                     custom.innerHTML = `
-                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:28px 24px; text-align:center; max-width:440px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.8);">
-                            <div style="font-size:1.15em; font-weight:bold; color:#fff; margin-bottom:6px;">Reddit Video &amp; Post</div>
-                            <div style="font-size:0.9em; color:#bbb; margin-bottom:18px;">From <b>r/${escapeHtml(subreddit)}</b></div>
-                            <a href="${escapeHtml(postUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:#FF4500; color:#fff; font-weight:bold; font-size:1em; padding:10px 22px; border-radius:8px; text-decoration:none;">
-                                Watch / View on Reddit ↗
-                            </a>
+                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:28px 24px; text-align:center; max-width:440px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
+                            <div style="font-size:1.8rem; margin-bottom:8px;">Reddit</div>
+                            <div style="font-size:1.1em; font-weight:bold; color:#fff; margin-bottom:6px;">r/${escapeHtml(subreddit)}</div>
+                            <div style="font-size:0.9em; color:#bbb; margin-bottom:18px;">Could not load preview. Open directly:</div>
+                            <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
+                                <a href="${escapeHtml(vxUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:rgba(255,69,0,0.2); border:1px solid #FF4500; color:#FF4500; font-weight:bold; font-size:0.95em; padding:9px 18px; border-radius:8px; text-decoration:none;">
+                                    Open via vxReddit ↗
+                                </a>
+                                <a href="${escapeHtml(postUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:#FF4500; color:#fff; font-weight:bold; font-size:0.95em; padding:9px 18px; border-radius:8px; text-decoration:none;">
+                                    View on Reddit ↗
+                                </a>
+                            </div>
                         </div>
                     `;
                     custom.style.display = 'block';
-                } else if (frame) {
-                    if (custom) custom.style.display = 'none';
-                    const embedUrl = `https://embed.reddit.com/r/${encodeURIComponent(subreddit)}/comments/${encodeURIComponent(postId)}/?embed=true&theme=${theme}`;
-                    frame.src = embedUrl;
-                    frame.style.display = 'block';
-                    frame.style.width = "650px";
-                    frame.style.height = "540px";
                 }
             });
     }
     else if (type === 'reddit_video') {
         const videoId = content;
         const targetUrl = `https://v.redd.it/${videoId}`;
+        const vxUrl = `https://vxreddit.com/comments/${videoId}`;
+        const directMergedVid = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent('https://v.redd.it/' + videoId + '/HLS_720.m3u8')}&audio_url=${encodeURIComponent('https://v.redd.it/' + videoId + '/HLS_AUDIO_64.m3u8')}`;
+
         if (custom) {
             custom.innerHTML = `
                 <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:24px 20px; text-align:center; min-width:280px; max-width:600px; border:2px solid #FF4500; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
-                    <div style="font-size:1.1em; color:#FF4500; font-weight:bold; margin-bottom:8px;">Reddit Loading Video...</div>
-                    <div style="font-size:0.85em; opacity:0.7;">Fetching video stream...</div>
+                    <div style="font-size:1.1em; color:#FF4500; font-weight:bold; margin-bottom:8px;">Reddit Loading Video via vxreddit...</div>
+                    <div style="font-size:0.85em; opacity:0.75;">Fetching combined audio+video stream...</div>
                 </div>
             `;
             custom.style.display = 'block';
@@ -1043,41 +1083,53 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         fetch(`/api/reddit/post?url=${encodeURIComponent(targetUrl)}`)
             .then(r => r.json())
             .then(data => {
-                if (data.success && data.post && data.post.videoUrl) {
-                    if (custom) custom.style.display = 'none';
-                    if (vid) {
-                        const streamUrl = `/api/proxy/video?url=${encodeURIComponent(data.post.videoUrl)}`;
-                        vid.referrerPolicy = "no-referrer";
-                        vid.style.display = 'block';
-                        vid.controls = true;
-                        vid.src = streamUrl;
-                        vid.load();
-                        vid.play().catch(() => {});
-                    }
-                } else {
-                    // Try direct v.redd.it proxy
-                    if (custom) custom.style.display = 'none';
-                    if (vid) {
-                        const streamUrl = `/api/proxy/video?url=${encodeURIComponent(`https://v.redd.it/${videoId}/DASH_720.mp4`)}`;
-                        vid.referrerPolicy = "no-referrer";
-                        vid.style.display = 'block';
-                        vid.controls = true;
-                        vid.src = streamUrl;
-                        vid.load();
-                        vid.play().catch(() => {});
-                    }
+                const vidUrl = (data.success && data.post && data.post.videoUrl) ? data.post.videoUrl : directMergedVid;
+                const streamUrl = `/api/proxy/video?url=${encodeURIComponent(vidUrl)}`;
+                const p = (data.success && data.post) ? data.post : null;
+                const title = p?.title || 'Reddit Video';
+                const author = p?.author ? `Posted by ${p.author}` : '';
+                const sub = p?.subreddit ? `r/${p.subreddit}` : 'Reddit Video';
+
+                if (custom) {
+                    custom.innerHTML = `
+                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:18px 20px; text-align:left; max-width:min(92vw, 760px); border:2px solid #FF4500; box-shadow:0 8px 36px rgba(0,0,0,0.95);">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px; gap:10px; flex-wrap:wrap;">
+                                <div>
+                                    <div style="font-weight:bold; font-size:15px; color:#FF4500;">${escapeHtml(sub)}</div>
+                                    ${author ? `<div style="font-size:12px; color:#9ca3af;">${escapeHtml(author)}</div>` : ''}
+                                </div>
+                                <div style="display:flex; gap:8px;">
+                                    <a href="${escapeHtml(vxUrl)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,69,0,0.2); border:1px solid #FF4500; color:#FF4500; font-size:12px; font-weight:bold; padding:5px 10px; border-radius:6px; text-decoration:none; white-space:nowrap;">vxReddit ↗</a>
+                                    <a href="${escapeHtml(targetUrl)}" target="_blank" rel="noopener noreferrer" style="background:#FF4500; color:#fff; font-size:12px; font-weight:bold; padding:5px 12px; border-radius:6px; text-decoration:none; white-space:nowrap;">View on Reddit ↗</a>
+                                </div>
+                            </div>
+                            ${title !== 'Reddit Video' ? `<div style="font-size:15px; font-weight:bold; line-height:1.4; color:#f3f4f6; margin-bottom:12px;">${escapeHtml(title)}</div>` : ''}
+                            <div style="position:relative; width:100%; border-radius:8px; overflow:hidden; background:#000;">
+                                <video src="${escapeHtml(streamUrl)}" controls autoplay playsinline style="width:100%; max-height:min(70vh, 520px); display:block; object-fit:contain; border-radius:8px; outline:none;"></video>
+                            </div>
+                        </div>
+                    `;
+                    custom.style.display = 'block';
                 }
             })
             .catch(() => {
-                if (custom) custom.style.display = 'none';
-                if (vid) {
-                    const streamUrl = `/api/proxy/video?url=${encodeURIComponent(`https://v.redd.it/${videoId}/DASH_720.mp4`)}`;
-                    vid.referrerPolicy = "no-referrer";
-                    vid.style.display = 'block';
-                    vid.controls = true;
-                    vid.src = streamUrl;
-                    vid.load();
-                    vid.play().catch(() => {});
+                const streamUrl = `/api/proxy/video?url=${encodeURIComponent(directMergedVid)}`;
+                if (custom) {
+                    custom.innerHTML = `
+                        <div style="background:#1a1a1b; color:#fff; border-radius:12px; padding:18px 20px; text-align:left; max-width:min(92vw, 760px); border:2px solid #FF4500; box-shadow:0 8px 36px rgba(0,0,0,0.95);">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.1); padding-bottom:8px; gap:10px;">
+                                <div style="font-weight:bold; font-size:15px; color:#FF4500;">Reddit Video</div>
+                                <div style="display:flex; gap:8px;">
+                                    <a href="${escapeHtml(vxUrl)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,69,0,0.2); border:1px solid #FF4500; color:#FF4500; font-size:12px; font-weight:bold; padding:5px 10px; border-radius:6px; text-decoration:none;">vxReddit ↗</a>
+                                    <a href="${escapeHtml(targetUrl)}" target="_blank" rel="noopener noreferrer" style="background:#FF4500; color:#fff; font-size:12px; font-weight:bold; padding:5px 12px; border-radius:6px; text-decoration:none;">View on Reddit ↗</a>
+                                </div>
+                            </div>
+                            <div style="position:relative; width:100%; border-radius:8px; overflow:hidden; background:#000;">
+                                <video src="${escapeHtml(streamUrl)}" controls autoplay playsinline style="width:100%; max-height:min(70vh, 520px); display:block; object-fit:contain; border-radius:8px; outline:none;"></video>
+                            </div>
+                        </div>
+                    `;
+                    custom.style.display = 'block';
                 }
             });
     }
@@ -1141,77 +1193,80 @@ if (typeof window !== 'undefined') {
 
 // --- LIVE MEDIA INPUT DETECTOR ---
 function initMediaInputDetector() {
-    const imageInput = document.getElementById('imageInput');
-    const badge = document.getElementById('mediaDetectedBadge');
-    if (!imageInput || !badge) return;
+    const bindDetector = (inputEl, badgeEl) => {
+        if (!inputEl) return;
+        const updateBadge = () => {
+            const val = inputEl.value.trim();
+            if (!badgeEl) return;
+            if (!val) {
+                badgeEl.style.display = 'none';
+                badgeEl.innerHTML = '';
+                return;
+            }
 
-    const updateBadge = () => {
-        const val = imageInput.value.trim();
-        if (!val) {
-            badge.style.display = 'none';
-            badge.innerHTML = '';
-            return;
-        }
+            const media = getMediaType(val);
+            if (!media) {
+                badgeEl.style.display = 'none';
+                return;
+            }
 
-        const media = getMediaType(val);
-        if (!media) {
-            badge.style.display = 'none';
-            return;
-        }
+            badgeEl.style.display = 'block';
+            if (media.type === 'reddit') {
+                badgeEl.style.background = 'rgba(255, 69, 0, 0.15)';
+                badgeEl.style.color = '#ff6a33';
+                badgeEl.style.border = '1px solid #FF4500';
+                const label = media.isShare ? 'Mobile Share Link' : 'Post / Media Link';
+                badgeEl.innerHTML = `✓ Reddit ${label} Detected: <b>r/${escapeHtml(media.subreddit)}</b> (vxReddit Helper Attached)`;
+            } else if (media.type === 'reddit_video') {
+                badgeEl.style.background = 'rgba(255, 69, 0, 0.15)';
+                badgeEl.style.color = '#ff6a33';
+                badgeEl.style.border = '1px solid #FF4500';
+                badgeEl.innerHTML = `✓ Reddit Video Detected (vxReddit stream with audio attached)`;
+            } else if (media.type === 'x') {
+                badgeEl.style.background = 'rgba(29, 161, 242, 0.15)';
+                badgeEl.style.color = '#1DA1F2';
+                badgeEl.style.border = '1px solid #1DA1F2';
+                badgeEl.innerHTML = `✓ 𝕏 / Twitter Post Detected: <b>${media.handle ? '@' + escapeHtml(media.handle) : 'Post'}</b> (Interactive Embed)`;
+            } else if (media.type === 'youtube') {
+                badgeEl.style.background = 'rgba(255, 0, 0, 0.15)';
+                badgeEl.style.color = '#ff4d4d';
+                badgeEl.style.border = '1px solid #ff4d4d';
+                badgeEl.innerHTML = `✓ YouTube Video Detected (Thumbnail &amp; Player)`;
+            } else if (media.type === 'pixiv') {
+                badgeEl.style.background = 'rgba(0, 150, 250, 0.15)';
+                badgeEl.style.color = '#0096fa';
+                badgeEl.style.border = '1px solid #0096fa';
+                badgeEl.innerHTML = `✓ Pixiv Artwork Detected: <b>#${media.id}</b> (Interactive Card &amp; Viewer)`;
+            } else if (media.type === 'pixiv_image') {
+                badgeEl.style.background = 'rgba(0, 150, 250, 0.15)';
+                badgeEl.style.color = '#0096fa';
+                badgeEl.style.border = '1px solid #0096fa';
+                badgeEl.innerHTML = `✓ Pixiv Direct Image Detected (Hotlink Protection Bypassed)`;
+            } else if (media.type === 'video') {
+                badgeEl.style.background = 'rgba(0, 229, 255, 0.15)';
+                badgeEl.style.color = '#00e5ff';
+                badgeEl.style.border = '1px solid #00e5ff';
+                badgeEl.innerHTML = `✓ HTML5 Video Detected`;
+            } else if (media.type === 'audio') {
+                badgeEl.style.background = 'rgba(46, 204, 113, 0.15)';
+                badgeEl.style.color = '#2ecc71';
+                badgeEl.style.border = '1px solid #2ecc71';
+                badgeEl.innerHTML = `✓ Audio Track Detected`;
+            } else {
+                badgeEl.style.background = 'rgba(255, 255, 255, 0.08)';
+                badgeEl.style.color = 'var(--text-color)';
+                badgeEl.style.border = '1px solid var(--border-color)';
+                badgeEl.innerHTML = `✓ Image URL Detected`;
+            }
+        };
 
-        badge.style.display = 'block';
-        if (media.type === 'reddit') {
-            badge.style.background = 'rgba(255, 69, 0, 0.15)';
-            badge.style.color = '#ff6a33';
-            badge.style.border = '1px solid #FF4500';
-            const label = media.isShare ? 'Mobile Share Link' : 'Post / Video Link';
-            badge.innerHTML = `✓ Reddit ${label} Detected: <b>r/${escapeHtml(media.subreddit)}</b> (Media Card Attached)`;
-        } else if (media.type === 'reddit_video') {
-            badge.style.background = 'rgba(255, 69, 0, 0.15)';
-            badge.style.color = '#ff6a33';
-            badge.style.border = '1px solid #FF4500';
-            badge.innerHTML = `✓ Reddit Video Detected (Player will be attached)`;
-        } else if (media.type === 'x') {
-            badge.style.background = 'rgba(29, 161, 242, 0.15)';
-            badge.style.color = '#1DA1F2';
-            badge.style.border = '1px solid #1DA1F2';
-            badge.innerHTML = `✓ 𝕏 / Twitter Post Detected: <b>${media.handle ? '@' + escapeHtml(media.handle) : 'Post'}</b> (Interactive Embed)`;
-        } else if (media.type === 'youtube') {
-            badge.style.background = 'rgba(255, 0, 0, 0.15)';
-            badge.style.color = '#ff4d4d';
-            badge.style.border = '1px solid #ff4d4d';
-            badge.innerHTML = `✓ YouTube Video Detected (Thumbnail &amp; Player)`;
-        } else if (media.type === 'pixiv') {
-            badge.style.background = 'rgba(0, 150, 250, 0.15)';
-            badge.style.color = '#0096fa';
-            badge.style.border = '1px solid #0096fa';
-            badge.innerHTML = `✓ Pixiv Artwork Detected: <b>#${media.id}</b> (Interactive Card &amp; Viewer)`;
-        } else if (media.type === 'pixiv_image') {
-            badge.style.background = 'rgba(0, 150, 250, 0.15)';
-            badge.style.color = '#0096fa';
-            badge.style.border = '1px solid #0096fa';
-            badge.innerHTML = `✓ Pixiv Direct Image Detected (Hotlink Protection Bypassed)`;
-        } else if (media.type === 'video') {
-            badge.style.background = 'rgba(0, 229, 255, 0.15)';
-            badge.style.color = '#00e5ff';
-            badge.style.border = '1px solid #00e5ff';
-            badge.innerHTML = `✓ HTML5 Video Detected`;
-        } else if (media.type === 'audio') {
-            badge.style.background = 'rgba(46, 204, 113, 0.15)';
-            badge.style.color = '#2ecc71';
-            badge.style.border = '1px solid #2ecc71';
-            badge.innerHTML = `✓ Audio Track Detected`;
-        } else {
-            badge.style.background = 'rgba(255, 255, 255, 0.08)';
-            badge.style.color = 'var(--text-color)';
-            badge.style.border = '1px solid var(--border-color)';
-            badge.innerHTML = `✓ Image URL Detected`;
-        }
+        inputEl.addEventListener('input', updateBadge);
+        inputEl.addEventListener('change', updateBadge);
+        inputEl.addEventListener('paste', () => setTimeout(updateBadge, 50));
     };
 
-    imageInput.addEventListener('input', updateBadge);
-    imageInput.addEventListener('change', updateBadge);
-    imageInput.addEventListener('paste', () => setTimeout(updateBadge, 50));
+    bindDetector(document.getElementById('imageInput'), document.getElementById('mediaDetectedBadge'));
+    bindDetector(document.getElementById('qrImage'), document.getElementById('qrMediaBadge'));
 }
 
 // --- IMGBB UPLOAD CONTROLLER ---

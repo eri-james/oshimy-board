@@ -288,7 +288,7 @@ export async function onRequest(context) {
                 const allowedHosts = [
                     'video.twimg.com', 'pbs.twimg.com', 'twimg.com',
                     'v.redd.it', 'packaged-media.redd.it', 'preview.redd.it', 'i.redd.it', 'reddit.com', 'redditmedia.com',
-                    'embedez.com', 'redditez.com', 'akamaized.net', 'cloudfront.net'
+                    'vxreddit.com', 'rxddit.com', 'embedez.com', 'redditez.com', 'akamaized.net', 'cloudfront.net'
                 ];
                 const isAllowed = allowedHosts.some(h => target.hostname === h || target.hostname.endsWith('.' + h));
                 if (!isAllowed) {
@@ -297,7 +297,7 @@ export async function onRequest(context) {
 
                 const headers = new Headers();
                 headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-                headers.set('Referer', target.hostname.includes('twimg.com') ? 'https://x.com/' : 'https://www.reddit.com/');
+                headers.set('Referer', target.hostname.includes('twimg.com') ? 'https://x.com/' : (target.hostname.includes('vxreddit.com') ? 'https://vxreddit.com/' : 'https://www.reddit.com/'));
 
                 const clientRange = request.headers.get('Range');
                 if (clientRange) {
@@ -568,7 +568,7 @@ export async function onRequest(context) {
             }
         }
 
-        // Reddit Post Details Resolver with rich media extraction (multi-image galleries, videos) and oEmbed fallback
+        // Reddit Post Details Resolver using vxreddit proxy helper with rich media extraction & oEmbed fallback
         if (route === 'reddit' && path[1] === 'post' && method === 'GET') {
             const postUrl = url.searchParams.get('url');
             if (!postUrl) {
@@ -577,8 +577,9 @@ export async function onRequest(context) {
 
             const cleanUrl = String(postUrl).trim();
             try {
-                const subMatch = cleanUrl.match(/reddit\.com\/r\/([a-zA-Z0-9_]+)/i);
-                let subreddit = subMatch ? subMatch[1] : 'reddit';
+                let subreddit = 'reddit';
+                const subMatch = cleanUrl.match(/(?:reddit\.com|vxreddit\.com|rxddit\.com)\/r\/([a-zA-Z0-9_]+)/i);
+                if (subMatch) subreddit = subMatch[1];
                 
                 // Extract post ID or video ID from various Reddit formats
                 const idMatch = cleanUrl.match(/(?:\/comments\/|\/s\/|redd\.it\/|v\.redd\.it\/|\/video\/)([a-zA-Z0-9_-]+)/i);
@@ -587,6 +588,8 @@ export async function onRequest(context) {
 
                 let title = '';
                 let author = '';
+                let score = '';
+                let comments = '';
                 let imageUrl = null;
                 let videoUrl = null;
                 let videoThumbnail = null;
@@ -594,128 +597,160 @@ export async function onRequest(context) {
                 let html = '';
                 let rawImages = [];
 
-                // 1. Query redditez / embedez helper with Discordbot User-Agent
-                const redditezPath = postId ? `/comments/${postId}` : (new URL(cleanUrl).pathname);
-                const redditezUrl = `https://redditez.com${redditezPath}`;
+                const decodeEntities = (s) => {
+                    if (!s || typeof s !== 'string') return '';
+                    return s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x2F;/gi, '/');
+                };
 
-                try {
-                    const controller = new AbortController();
-                    const timeout = setTimeout(() => controller.abort(), 4500);
-                    const ezResp = await fetch(redditezUrl, {
-                        signal: controller.signal,
-                        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' }
-                    });
-                    clearTimeout(timeout);
-
-                    if (ezResp.ok) {
-                        const ezHtml = await ezResp.text();
-
-                        // Check for ActivityPub JSON endpoint (provides clean structured metadata & complete attachments)
-                        const actMatch = ezHtml.match(/<link[^>]+type=["']application\/activity\+json["'][^>]+href=["']([^"']+)["']/i) ||
-                                         ezHtml.match(/href=["'](https?:\/\/embedez\.com\/users\/[^\s"']+)["']/i);
-                        if (actMatch) {
-                            try {
-                                const actUrl = actMatch[1].replace(/&amp;/g, '&');
-                                const actController = new AbortController();
-                                const actTimeout = setTimeout(() => actController.abort(), 3500);
-                                const actRes = await fetch(actUrl, {
-                                    signal: actController.signal,
-                                    headers: { 'Accept': 'application/activity+json' }
-                                });
-                                clearTimeout(actTimeout);
-
-                                if (actRes.ok) {
-                                    const actJson = await actRes.json();
-                                    if (actJson.account?.display_name) author = actJson.account.display_name;
-
-                                    if (actJson.content) {
-                                        const cleanContent = actJson.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-                                        if (cleanContent) {
-                                            const titleCandidate = cleanContent.replace(/^[💬🔁💜👀\d\s&ensp;]+Posted in r\/[^\s]+\s*/i, '').trim();
-                                            if (titleCandidate) title = titleCandidate;
-                                        }
-                                    }
-
-                                    if (Array.isArray(actJson.media_attachments)) {
-                                        for (const m of actJson.media_attachments) {
-                                            if ((m.type === 'video' || m.type === 'gif') && m.url) {
-                                                if (!videoUrl) videoUrl = m.url;
-                                                if (!videoThumbnail && m.preview_url) videoThumbnail = m.preview_url;
-                                            } else if (m.type === 'image' && m.url) {
-                                                rawImages.push(m.url);
-                                            }
-                                        }
-                                    }
-                                }
-                            } catch (_) {}
-                        }
-
-                        // If no title yet, check meta tags
-                        if (!title) {
-                            const ogTitle = ezHtml.match(/<meta\s+(?:property|name)=["'](?:og:title|twitter:title)["']\s+content=["']([^"']+)["']/i) ||
-                                            ezHtml.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:title|twitter:title)["']/i);
-                            if (ogTitle && ogTitle[1]) title = ogTitle[1].trim();
-                        }
-
-                        if (!description) {
-                            const ogDesc = ezHtml.match(/<meta\s+(?:property|name)=["'](?:og:description|twitter:description)["']\s+content=["']([^"']+)["']/i) ||
-                                           ezHtml.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:description|twitter:description)["']/i);
-                            if (ogDesc && ogDesc[1]) description = ogDesc[1].trim();
-                        }
-
-                        // Strict video URL extraction (must begin with http:// or https://)
-                        if (!videoUrl) {
-                            const ogVid = ezHtml.match(/<meta\s+(?:property|name)=["'](?:og:video|og:video:url|og:video:secure_url|twitter:player:stream)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
-                                          ezHtml.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:video|og:video:url|og:video:secure_url|twitter:player:stream)["']/i) ||
-                                          ezHtml.match(/<video[^>]+src=["'](https?:\/\/[^"']+)["']/i) ||
-                                          ezHtml.match(/<source[^>]+src=["'](https?:\/\/[^"']+)["']/i);
-                            if (ogVid && ogVid[1]) videoUrl = ogVid[1].trim();
-                        }
-
-                        // Multi-image extraction fallback from ezHtml redirect source links
-                        if (rawImages.length === 0) {
-                            const redirectMatches = ezHtml.match(/https?:\/\/[^\s"'<>\\]+path=content\.media\.\d+\.source/g) || [];
-                            if (redirectMatches.length > 0) {
-                                rawImages = [...new Set(redirectMatches)];
-                            }
-                        }
-
-                        // Single og:image fallback
-                        if (rawImages.length === 0) {
-                            const ogImg = ezHtml.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
-                                          ezHtml.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
-                            if (ogImg && ogImg[1]) {
-                                rawImages.push(ogImg[1].trim());
-                            }
-                        }
-                    }
-                } catch (_) {}
-
-                // Direct v.redd.it video fallback
-                if (isDirectVideo && !videoUrl && postId) {
-                    videoUrl = `https://v.redd.it/${postId}/DASH_720.mp4`;
+                // 1. Primary Query: vxreddit proxy helper with Discordbot User-Agent
+                let vxredditUrl = cleanUrl;
+                const vMatch = cleanUrl.match(/v\.redd\.it\/([a-zA-Z0-9_-]+)/i);
+                const rMatch = cleanUrl.match(/(?:https?:\/\/)?redd\.it\/([a-zA-Z0-9_-]+)/i);
+                if (vMatch) {
+                    vxredditUrl = `https://vxreddit.com/comments/${vMatch[1]}`;
+                } else if (rMatch) {
+                    vxredditUrl = `https://vxreddit.com/comments/${rMatch[1]}`;
+                } else if (/https?:\/\/(?:www\.)?vxreddit\.com/i.test(cleanUrl)) {
+                    vxredditUrl = cleanUrl;
+                } else if (/https?:\/\/(?:www\.)?rxddit\.com/i.test(cleanUrl)) {
+                    vxredditUrl = cleanUrl.replace(/rxddit\.com/i, 'vxreddit.com');
+                } else {
+                    vxredditUrl = cleanUrl.replace(/https?:\/\/(?:www\.|old\.|new\.|m\.|sh\.)?reddit\.com/i, 'https://vxreddit.com');
                 }
 
-                // 2. Official Reddit oEmbed query for fallback metadata
                 try {
-                    const oembedUrl = `https://www.reddit.com/oembed?url=${encodeURIComponent(cleanUrl)}`;
                     const controller = new AbortController();
-                    const timeout = setTimeout(() => controller.abort(), 3500);
-                    const oResp = await fetch(oembedUrl, {
+                    const timeout = setTimeout(() => controller.abort(), 5000);
+                    const vxResp = await fetch(vxredditUrl, {
                         signal: controller.signal,
-                        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+                        redirect: 'follow'
                     });
                     clearTimeout(timeout);
 
-                    if (oResp.ok) {
-                        const oData = await oResp.json();
-                        if (oData.title && (!title || title.startsWith('['))) title = oData.title;
-                        if (oData.author_name) author = oData.author_name;
-                        if (oData.html) html = oData.html;
-                        if (!videoThumbnail && oData.thumbnail_url) videoThumbnail = oData.thumbnail_url;
-                        if (rawImages.length === 0 && oData.thumbnail_url) rawImages.push(oData.thumbnail_url);
+                    if (vxResp.ok) {
+                        const vxHtml = await vxResp.text();
+
+                        const siteMatch = vxHtml.match(/<meta\s+(?:property|name)=["']og:site_name["']\s+content=["']([^"']+)["']/i) ||
+                                          vxHtml.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["']og:site_name["']/i);
+                        if (siteMatch && siteMatch[1]) {
+                            const rawSite = decodeEntities(siteMatch[1].trim());
+                            const parsedSite = rawSite.match(/u\/([^\s]+)\s+on\s+r\/([^\s]+)(?:\s*-\s*⬆️\s*([\d,]+)\s*\|\s*💬\s*([\d,]+))?/i);
+                            if (parsedSite) {
+                                if (parsedSite[1] && parsedSite[1] !== '[deleted]') author = parsedSite[1];
+                                if (parsedSite[2]) subreddit = parsedSite[2];
+                                if (parsedSite[3]) score = parsedSite[3];
+                                if (parsedSite[4]) comments = parsedSite[4];
+                            }
+                        }
+
+                        const titleMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:title|twitter:title)["']\s+content=["']([^"']+)["']/i) ||
+                                           vxHtml.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:title|twitter:title)["']/i);
+                        if (titleMatch && titleMatch[1]) {
+                            const rawTitle = decodeEntities(titleMatch[1].trim());
+                            if (rawTitle && rawTitle !== 'vxReddit' && !rawTitle.startsWith('[')) {
+                                title = rawTitle;
+                            }
+                        }
+
+                        const descMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:description|twitter:description)["']\s+content=["']([^"']+)["']/i) ||
+                                          vxHtml.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:description|twitter:description)["']/i);
+                        if (descMatch && descMatch[1]) {
+                            const rawDesc = decodeEntities(descMatch[1].trim());
+                            if (rawDesc && rawDesc !== '[deleted]' && rawDesc !== '[removed]' && rawDesc !== 'Invalid post path' && !rawDesc.toLowerCase().includes('failed to get data')) {
+                                description = rawDesc;
+                            }
+                        }
+
+                        const vidMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:video|og:video:url|og:video:secure_url|twitter:player:stream)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                         vxHtml.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:video|og:video:url|og:video:secure_url|twitter:player:stream)["']/i);
+                        if (vidMatch && vidMatch[1]) {
+                            videoUrl = decodeEntities(vidMatch[1].trim());
+                        }
+
+                        const imgMatches = [...vxHtml.matchAll(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/gi)];
+                        for (const m of imgMatches) {
+                            if (m[1]) {
+                                const decodedImg = decodeEntities(m[1].trim());
+                                if (!rawImages.includes(decodedImg)) {
+                                    rawImages.push(decodedImg);
+                                }
+                            }
+                        }
                     }
                 } catch (_) {}
+
+                // Direct v.redd.it fallback with vxreddit audio+video helper
+                if (isDirectVideo && !videoUrl && postId) {
+                    videoUrl = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent('https://v.redd.it/' + postId + '/HLS_720.m3u8')}&audio_url=${encodeURIComponent('https://v.redd.it/' + postId + '/HLS_AUDIO_64.m3u8')}`;
+                }
+
+                // 2. Secondary Query: redditez / embedez fallback
+                if (!title || (!videoUrl && rawImages.length === 0)) {
+                    try {
+                        const redditezPath = postId ? `/comments/${postId}` : (new URL(cleanUrl).pathname);
+                        const redditezUrl = `https://redditez.com${redditezPath}`;
+                        const ezController = new AbortController();
+                        const ezTimeout = setTimeout(() => ezController.abort(), 3500);
+                        const ezResp = await fetch(redditezUrl, {
+                            signal: ezController.signal,
+                            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' }
+                        });
+                        clearTimeout(ezTimeout);
+
+                        if (ezResp.ok) {
+                            const ezHtml = await ezResp.text();
+
+                            if (!title) {
+                                const ogTitle = ezHtml.match(/<meta\s+(?:property|name)=["'](?:og:title|twitter:title)["']\s+content=["']([^"']+)["']/i);
+                                if (ogTitle && ogTitle[1]) title = decodeEntities(ogTitle[1].trim());
+                            }
+
+                            if (!description) {
+                                const ogDesc = ezHtml.match(/<meta\s+(?:property|name)=["'](?:og:description|twitter:description)["']\s+content=["']([^"']+)["']/i);
+                                if (ogDesc && ogDesc[1]) description = decodeEntities(ogDesc[1].trim());
+                            }
+
+                            if (!videoUrl) {
+                                const ogVid = ezHtml.match(/<meta\s+(?:property|name)=["'](?:og:video|og:video:url|og:video:secure_url|twitter:player:stream)["']\s+content=["'](https?:\/\/[^"']+)["']/i);
+                                if (ogVid && ogVid[1]) videoUrl = decodeEntities(ogVid[1].trim());
+                            }
+
+                            const redirectMatches = ezHtml.match(/https?:\/\/[^\s"'<>\\]+path=content\.media\.\d+\.source/g) || [];
+                            for (const rm of redirectMatches) {
+                                if (!rawImages.includes(rm)) rawImages.push(rm);
+                            }
+
+                            if (rawImages.length === 0) {
+                                const ogImg = ezHtml.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/i);
+                                if (ogImg && ogImg[1]) rawImages.push(decodeEntities(ogImg[1].trim()));
+                            }
+                        }
+                    } catch (_) {}
+                }
+
+                // 3. Official Reddit oEmbed query for fallback metadata
+                if (!title || (!videoUrl && rawImages.length === 0)) {
+                    try {
+                        const oembedUrl = `https://www.reddit.com/oembed?url=${encodeURIComponent(cleanUrl)}`;
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 3000);
+                        const oResp = await fetch(oembedUrl, {
+                            signal: controller.signal,
+                            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                        });
+                        clearTimeout(timeout);
+
+                        if (oResp.ok) {
+                            const oData = await oResp.json();
+                            if (oData.title && (!title || title.startsWith('['))) title = oData.title;
+                            if (oData.author_name && !author) author = oData.author_name;
+                            if (oData.html) html = oData.html;
+                            if (!videoThumbnail && oData.thumbnail_url) videoThumbnail = oData.thumbnail_url;
+                            if (rawImages.length === 0 && oData.thumbnail_url) rawImages.push(oData.thumbnail_url);
+                        }
+                    } catch (_) {}
+                }
 
                 // Resolve EmbedEZ redirect URLs in parallel (up to 12 images) to direct i.redd.it links
                 const resolvedImages = await Promise.all(rawImages.slice(0, 12).map(async (rawImg) => {
@@ -749,14 +784,17 @@ export async function onRequest(context) {
                 if (!author) author = 'Reddit User';
 
                 imageUrl = pages.length > 0 ? pages[0].displayUrl : null;
-                const mediaType = videoUrl ? 'video' : (pages.length > 0 ? 'image' : 'none');
+                const mediaType = videoUrl ? 'video' : (pages.length > 0 ? 'image' : 'text');
 
                 const post = {
                     url: cleanUrl,
+                    vxUrl: vxredditUrl,
                     title,
                     author,
                     subreddit,
                     postId,
+                    score,
+                    comments,
                     description,
                     mediaType,
                     videoUrl,
