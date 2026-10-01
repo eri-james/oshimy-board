@@ -1221,7 +1221,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         const videoId = content;
         const targetUrl = `https://v.redd.it/${videoId}`;
         const vxUrl = `https://vxreddit.com/comments/${videoId}`;
-        const directMergedVid = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent('https://v.redd.it/' + videoId + '/HLS_720.m3u8')}&audio_url=${encodeURIComponent('https://v.redd.it/' + videoId + '/HLS_AUDIO_64.m3u8')}`;
+        const directMergedVid = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent('https://v.redd.it/' + videoId + '/CMAF_720.m3u8')}&audio_url=${encodeURIComponent('https://v.redd.it/' + videoId + '/CMAF_AUDIO_128.m3u8')}`;
 
         if (custom) {
             custom.innerHTML = `

@@ -1037,9 +1037,29 @@ export async function onRequest(context) {
                     }
                 } catch (_) {}
 
-                // Direct v.redd.it fallback with vxreddit audio+video helper
+                // Direct v.redd.it fallback & vxreddit muxer resolution to direct renders.vxreddit.com / CMAF .mp4 stream
                 if (isDirectVideo && !videoUrl && postId) {
-                    videoUrl = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent('https://v.redd.it/' + postId + '/HLS_720.m3u8')}&audio_url=${encodeURIComponent('https://v.redd.it/' + postId + '/HLS_AUDIO_64.m3u8')}`;
+                    videoUrl = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent('https://v.redd.it/' + postId + '/CMAF_720.m3u8')}&audio_url=${encodeURIComponent('https://v.redd.it/' + postId + '/CMAF_AUDIO_128.m3u8')}`;
+                }
+
+                if (videoUrl && videoUrl.includes('vxreddit.com/redditvideo.mp4')) {
+                    try {
+                        const muxController = new AbortController();
+                        const muxTimeout = setTimeout(() => muxController.abort(), 3800);
+                        const muxResp = await fetch(videoUrl, {
+                            method: 'GET',
+                            headers: {
+                                'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)',
+                                'Range': 'bytes=0-0'
+                            },
+                            redirect: 'follow',
+                            signal: muxController.signal
+                        });
+                        clearTimeout(muxTimeout);
+                        if ((muxResp.ok || muxResp.status === 206) && muxResp.url && !muxResp.url.includes('redditvideo.mp4')) {
+                            videoUrl = muxResp.url;
+                        }
+                    } catch (_) {}
                 }
 
                 // 2. Secondary Query: redditez / embedez fallback

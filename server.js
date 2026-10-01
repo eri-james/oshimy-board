@@ -741,6 +741,109 @@ function toVxRedditUrl(cleanUrl) {
     return cleanUrl.replace(/https?:\/\/(?:www\.|old\.|new\.|m\.|sh\.)?reddit\.com/i, 'https://vxreddit.com');
 }
 
+// Resolves vxreddit muxer URLs or v.redd.it video IDs to a direct playable .mp4 URL (renders.vxreddit.com or v.redd.it CMAF/DASH .mp4)
+async function resolveDirectRedditVideoUrl(rawVideoUrl, fallbackVidId = null) {
+    let extractedVidId = fallbackVidId;
+
+    if (rawVideoUrl && typeof rawVideoUrl === 'string') {
+        const vIdMatch = decodeURIComponent(rawVideoUrl).match(/v\.redd\.it\/([a-zA-Z0-9_-]+)/i);
+        if (vIdMatch && vIdMatch[1]) {
+            extractedVidId = vIdMatch[1];
+        }
+
+        // 1. Follow vxreddit.com/redditvideo.mp4 redirect to renders.vxreddit.com/{id}.mp4 (muxed audio+video MP4)
+        if (rawVideoUrl.includes('vxreddit.com/redditvideo.mp4')) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 3800);
+                const r = await fetch(rawVideoUrl, {
+                    method: 'GET',
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)',
+                        'Range': 'bytes=0-0'
+                    },
+                    redirect: 'follow',
+                    signal: controller.signal
+                });
+                clearTimeout(timeout);
+                if ((r.ok || r.status === 206) && r.url && !r.url.includes('redditvideo.mp4')) {
+                    return r.url;
+                }
+            } catch (_) {}
+
+            // Fallback: convert inner video_url .m3u8 parameter directly to .mp4 on v.redd.it CDN
+            try {
+                const u = new URL(rawVideoUrl);
+                const innerVideo = u.searchParams.get('video_url');
+                if (innerVideo) {
+                    const mp4Candidate = innerVideo.replace(/\.m3u8$/i, '.mp4');
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 2000);
+                    const r = await fetch(mp4Candidate, {
+                        method: 'GET',
+                        headers: { 'Range': 'bytes=0-0' },
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeout);
+                    if (r.ok || r.status === 206) {
+                        return mp4Candidate;
+                    }
+                }
+            } catch (_) {}
+        } else if (/^https?:\/\/renders\.vxreddit\.com\/.+\.mp4/i.test(rawVideoUrl)) {
+            return rawVideoUrl;
+        }
+    }
+
+    // 2. If we have a v.redd.it video ID, probe vxreddit muxer, renders.vxreddit.com, and v.redd.it CMAF/DASH .mp4 streams
+    if (extractedVidId) {
+        try {
+            const muxUrl = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent(`https://v.redd.it/${extractedVidId}/CMAF_720.m3u8`)}&audio_url=${encodeURIComponent(`https://v.redd.it/${extractedVidId}/CMAF_AUDIO_128.m3u8`)}`;
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3500);
+            const r = await fetch(muxUrl, {
+                method: 'GET',
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)',
+                    'Range': 'bytes=0-0'
+                },
+                redirect: 'follow',
+                signal: controller.signal
+            });
+            clearTimeout(timeout);
+            if ((r.ok || r.status === 206) && r.url && !r.url.includes('redditvideo.mp4')) {
+                return r.url;
+            }
+        } catch (_) {}
+
+        const candidates = [
+            `https://renders.vxreddit.com/${extractedVidId}.mp4`,
+            `https://v.redd.it/${extractedVidId}/CMAF_720.mp4`,
+            `https://v.redd.it/${extractedVidId}/CMAF_480.mp4`,
+            `https://v.redd.it/${extractedVidId}/CMAF_360.mp4`,
+            `https://v.redd.it/${extractedVidId}/DASH_720.mp4`,
+            `https://v.redd.it/${extractedVidId}/DASH_480.mp4`
+        ];
+        for (const cand of candidates) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 1500);
+                const r = await fetch(cand, {
+                    method: 'GET',
+                    headers: { 'Range': 'bytes=0-0' },
+                    signal: controller.signal
+                });
+                clearTimeout(timeout);
+                if (r.ok || r.status === 206) {
+                    return cand;
+                }
+            } catch (_) {}
+        }
+    }
+
+    return rawVideoUrl;
+}
+
 // Reddit Post Details Resolver using vxreddit proxy helper with rich media extraction & oEmbed fallback
 app.get('/api/reddit/post', async (req, res) => {
     const postUrl = req.query.url;
@@ -846,7 +949,9 @@ app.get('/api/reddit/post', async (req, res) => {
 
         // Fallback for direct v.redd.it videos using vxreddit's merged audio+video helper
         if (isDirectVideo && !videoUrl && postId) {
-            videoUrl = `https://vxreddit.com/redditvideo.mp4?video_url=${encodeURIComponent('https://v.redd.it/' + postId + '/HLS_720.m3u8')}&audio_url=${encodeURIComponent('https://v.redd.it/' + postId + '/HLS_AUDIO_64.m3u8')}`;
+            videoUrl = await resolveDirectRedditVideoUrl(null, postId);
+        } else if (videoUrl) {
+            videoUrl = (await resolveDirectRedditVideoUrl(videoUrl, postId)) || videoUrl;
         }
 
         // 2. Secondary Query: redditez / embedez fallback if title or media was not found
@@ -2202,8 +2307,8 @@ async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redd
                 if (vidMatch && vidMatch[1]) {
                     return {
                         type: 'video',
-                        imageUrl: (imgMatch && imgMatch[1]) || blackThumbUrl,
-                        videoUrl: vidMatch[1],
+                        imageUrl: (imgMatch && imgMatch[1] ? decodeHtmlEntities(imgMatch[1].trim()) : null) || blackThumbUrl,
+                        videoUrl: decodeHtmlEntities(vidMatch[1].trim()),
                         videoType: 'video/mp4',
                         source: 'Twitter / X Video'
                     };
@@ -2211,7 +2316,7 @@ async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redd
                 if (imgMatch && imgMatch[1]) {
                     return {
                         type: 'image',
-                        imageUrl: imgMatch[1],
+                        imageUrl: decodeHtmlEntities(imgMatch[1].trim()),
                         videoUrl: null,
                         videoType: null,
                         source: 'Twitter / X'
@@ -2230,55 +2335,149 @@ async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redd
         };
     }
 
-    // 4. Reddit
-    // 4a. Direct Reddit video (v.redd.it or reddit.com/video/)
-    const redditVidMatch = cleanUrl.match(/(?:v\.redd\.it|reddit\.com\/video\/)([a-zA-Z0-9_-]+)/i);
-    if (redditVidMatch) {
-        const vidId = redditVidMatch[1];
-        return {
-            type: 'video',
-            imageUrl: blackThumbUrl,
-            videoUrl: `https://v.redd.it/${vidId}/DASH_720.mp4`,
-            videoType: 'video/mp4',
-            source: 'Reddit Video'
-        };
-    }
-    // 4b. Reddit post with comments
-    const redditPostMatch = cleanUrl.match(/(?:reddit\.com|vxreddit\.com|rxddit\.com)\/r\/([a-zA-Z0-9_]+)(?:\/comments\/([a-zA-Z0-9]+))?/i);
-    if (redditPostMatch) {
-        const sub = redditPostMatch[1];
-        const postId = redditPostMatch[2];
-        let cached = null;
-        if (redditCacheContext && typeof redditCacheContext.get === 'function') {
-            cached = redditCacheContext.get(cleanUrl);
+    // 4. Reddit (handles reddit.com/r/..., reddit.com/comments/..., /s/ share links, redd.it, v.redd.it, vxreddit, rxddit)
+    // Exclude direct image hosts i.redd.it / preview.redd.it so they resolve as direct images in step 7
+    const isDirectRedditImage = /^https?:\/\/(?:i|preview|external-preview)\.redd\.it\//i.test(cleanUrl);
+    if (!isDirectRedditImage) {
+        // 4a. Direct Reddit video (v.redd.it or reddit.com/video/)
+        const redditVidMatch = cleanUrl.match(/(?:v\.redd\.it\/|reddit\.com\/video\/)([a-zA-Z0-9_-]+)/i);
+        if (redditVidMatch) {
+            const vidId = redditVidMatch[1];
+            const directVidUrl = await resolveDirectRedditVideoUrl(null, vidId);
+            return {
+                type: 'video',
+                imageUrl: blackThumbUrl,
+                videoUrl: directVidUrl || `https://v.redd.it/${vidId}/CMAF_720.mp4`,
+                videoType: 'video/mp4',
+                width: 1280,
+                height: 720,
+                source: 'Reddit Video'
+            };
         }
-        if (cached) {
-            if (cached.mediaType === 'video' && cached.videoUrl) {
-                return {
-                    type: 'video',
-                    imageUrl: cached.thumbnailUrl || cached.imageUrl || blackThumbUrl,
-                    videoUrl: cached.videoUrl,
-                    videoType: 'video/mp4',
-                    source: `Reddit r/${sub}`
-                };
+
+        // 4b. Reddit Post URLs (/r/sub/comments/..., /r/sub/s/..., /comments/..., redd.it/...)
+        const isRedditPost = /(?:reddit\.com|vxreddit\.com|rxddit\.com)\/(?:r\/[a-zA-Z0-9_]+|comments\/|u\/|user\/)|https?:\/\/redd\.it\/[a-zA-Z0-9_-]+/i.test(cleanUrl);
+        if (isRedditPost) {
+            const subMatch = cleanUrl.match(/(?:reddit\.com|vxreddit\.com|rxddit\.com)\/r\/([a-zA-Z0-9_]+)/i);
+            const sub = subMatch ? subMatch[1] : 'reddit';
+            let cached = null;
+            if (redditCacheContext && typeof redditCacheContext.get === 'function') {
+                cached = redditCacheContext.get(cleanUrl);
             }
-            if (cached.imageUrl) {
-                return {
-                    type: 'image',
-                    imageUrl: cached.imageUrl,
-                    videoUrl: null,
-                    videoType: null,
-                    source: `Reddit r/${sub}`
-                };
+            if (cached) {
+                if (cached.mediaType === 'video' && cached.videoUrl) {
+                    const directVidUrl = await resolveDirectRedditVideoUrl(cached.videoUrl, cached.postId);
+                    return {
+                        type: 'video',
+                        imageUrl: cached.videoThumbnail || cached.thumbnailUrl || cached.imageUrl || blackThumbUrl,
+                        videoUrl: directVidUrl || cached.videoUrl,
+                        videoType: 'video/mp4',
+                        width: cached.width || 1280,
+                        height: cached.height || 720,
+                        source: `Reddit r/${cached.subreddit || sub}`
+                    };
+                }
+                if (cached.imageUrl) {
+                    return {
+                        type: 'image',
+                        imageUrl: cached.imageUrl,
+                        videoUrl: null,
+                        videoType: null,
+                        source: `Reddit r/${cached.subreddit || sub}`
+                    };
+                }
             }
+
+            // Actively probe vxreddit.com with Discordbot User-Agent (mirrors Twitter vxtwitter resolution)
+            const vxredditUrl = toVxRedditUrl(cleanUrl);
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 4000);
+                const vxResp = await fetch(vxredditUrl, {
+                    signal: controller.signal,
+                    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+                    redirect: 'follow'
+                });
+                clearTimeout(timeout);
+
+                if (vxResp.ok) {
+                    const vxHtml = await vxResp.text();
+                    const vidMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                     vxHtml.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']/i);
+                    const imgMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                     vxHtml.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+                    const widthMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:video:width|twitter:player:width)["']\s+content=["'](\d+)["']/i) ||
+                                       vxHtml.match(/<meta\s+content=["'](\d+)["']\s+(?:property|name)=["'](?:og:video:width|twitter:player:width)["']/i);
+                    const heightMatch = vxHtml.match(/<meta\s+(?:property|name)=["'](?:og:video:height|twitter:player:height)["']\s+content=["'](\d+)["']/i) ||
+                                        vxHtml.match(/<meta\s+content=["'](\d+)["']\s+(?:property|name)=["'](?:og:video:height|twitter:player:height)["']/i);
+
+                    const decodedImg = imgMatch && imgMatch[1] ? decodeHtmlEntities(imgMatch[1].trim()) : null;
+                    const vidWidth = widthMatch && widthMatch[1] ? parseInt(widthMatch[1], 10) : 1280;
+                    const vidHeight = heightMatch && heightMatch[1] ? parseInt(heightMatch[1], 10) : 720;
+
+                    if (vidMatch && vidMatch[1]) {
+                        const rawVidUrl = decodeHtmlEntities(vidMatch[1].trim());
+                        const directVidUrl = await resolveDirectRedditVideoUrl(rawVidUrl);
+                        return {
+                            type: 'video',
+                            imageUrl: decodedImg || blackThumbUrl,
+                            videoUrl: directVidUrl || rawVidUrl,
+                            videoType: 'video/mp4',
+                            width: vidWidth,
+                            height: vidHeight,
+                            source: `Reddit r/${sub}`
+                        };
+                    }
+
+                    if (decodedImg) {
+                        return {
+                            type: 'image',
+                            imageUrl: decodedImg,
+                            videoUrl: null,
+                            videoType: null,
+                            source: `Reddit r/${sub}`
+                        };
+                    }
+                }
+            } catch (_) {}
+
+            // Secondary fallback: probe rxddit.com HTML meta tags
+            try {
+                const rxdditUrl = vxredditUrl.replace(/vxreddit\.com/i, 'rxddit.com');
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 3500);
+                const rxResp = await fetch(rxdditUrl, {
+                    signal: controller.signal,
+                    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+                    redirect: 'follow'
+                });
+                clearTimeout(timeout);
+
+                if (rxResp.ok) {
+                    const rxHtml = await rxResp.text();
+                    const imgMatch = rxHtml.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                     rxHtml.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+                    const decodedImg = imgMatch && imgMatch[1] ? decodeHtmlEntities(imgMatch[1].trim()) : null;
+                    if (decodedImg) {
+                        return {
+                            type: 'image',
+                            imageUrl: decodedImg,
+                            videoUrl: null,
+                            videoType: null,
+                            source: `Reddit r/${sub}`
+                        };
+                    }
+                }
+            } catch (_) {}
+
+            return {
+                type: 'image',
+                imageUrl: blackThumbUrl,
+                videoUrl: null,
+                videoType: null,
+                source: `Reddit r/${sub}`
+            };
         }
-        return {
-            type: 'image',
-            imageUrl: postId ? `https://redditez.com/r/${sub}/comments/${postId}.jpg` : null,
-            videoUrl: null,
-            videoType: null,
-            source: `Reddit r/${sub}`
-        };
     }
 
     // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream)
@@ -2500,18 +2699,23 @@ app.get('*', async (req, res) => {
                     // Video tags injection for Discord player
                     let extraMeta = '';
                     if (resolvedMedia.type === 'video' && resolvedMedia.videoUrl) {
+                        const vidWidth = resolvedMedia.width || 1280;
+                        const vidHeight = resolvedMedia.height || 720;
+                        const vidType = resolvedMedia.videoType || 'video/mp4';
                         html = html
                             .replace(/<meta property="og:type" content=".*?">/, `<meta property="og:type" content="video.other">`)
                             .replace(/<meta name="twitter:card" content=".*?">/, `<meta name="twitter:card" content="player">`);
                         extraMeta += `
     <meta property="og:video" content="${escapeAttr(resolvedMedia.videoUrl)}">
     <meta property="og:video:secure_url" content="${escapeAttr(resolvedMedia.videoUrl)}">
-    <meta property="og:video:type" content="${escapeAttr(resolvedMedia.videoType || 'video/mp4')}">
-    <meta property="og:video:width" content="1280">
-    <meta property="og:video:height" content="720">
+    <meta property="og:video:type" content="${escapeAttr(vidType)}">
+    <meta property="og:video:width" content="${vidWidth}">
+    <meta property="og:video:height" content="${vidHeight}">
+    <meta name="twitter:player:stream" content="${escapeAttr(resolvedMedia.videoUrl)}">
+    <meta name="twitter:player:stream:content_type" content="${escapeAttr(vidType)}">
     <meta name="twitter:player" content="${escapeAttr(resolvedMedia.videoUrl)}">
-    <meta name="twitter:player:width" content="1280">
-    <meta name="twitter:player:height" content="720">`;
+    <meta name="twitter:player:width" content="${vidWidth}">
+    <meta name="twitter:player:height" content="${vidHeight}">`;
                     } else {
                         html = html
                             .replace(/<meta property="og:type" content=".*?">/, `<meta property="og:type" content="article">`)
