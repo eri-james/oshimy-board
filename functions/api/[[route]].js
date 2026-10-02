@@ -18,7 +18,20 @@ const BOARDS = {
     'hg':    { title: '/hg/ - H Games',                 type: 'nsfw' }
 };
 
-const ARCHIVE_TIME_MS = 3 * 24 * 60 * 60 * 1000;
+const AUTO_LOCK_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+const ARCHIVE_STATIC_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
+
+async function runD1AutoLock(db) {
+    if (!db) return;
+    try {
+        const autoLockCutoff = Date.now() - AUTO_LOCK_DAYS_MS;
+        await db.prepare(`
+            UPDATE threads 
+            SET is_locked = 1, is_archived = 1, locked_at = ?
+            WHERE bumped_at < ? AND (is_locked = 0 OR is_locked IS NULL)
+        `).bind(Date.now(), autoLockCutoff).run();
+    } catch (_) {}
+}
 
 function json(data, status = 200, extraHeaders = {}) {
     return new Response(JSON.stringify(data), {
@@ -240,6 +253,18 @@ async function ensureD1Schema(db, force = false) {
         }
         if (threadCols.length > 0 && !threadCols.includes('reactions')) {
             await db.prepare("ALTER TABLE threads ADD COLUMN reactions TEXT DEFAULT '{}'").run().catch(() => {});
+        }
+        if (threadCols.length > 0 && !threadCols.includes('is_archived')) {
+            await db.prepare("ALTER TABLE threads ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0").run().catch(() => {});
+        }
+        if (threadCols.length > 0 && !threadCols.includes('locked_at')) {
+            await db.prepare("ALTER TABLE threads ADD COLUMN locked_at INTEGER DEFAULT NULL").run().catch(() => {});
+        }
+        if (threadCols.length > 0 && !threadCols.includes('is_static')) {
+            await db.prepare("ALTER TABLE threads ADD COLUMN is_static INTEGER NOT NULL DEFAULT 0").run().catch(() => {});
+        }
+        if (threadCols.length > 0 && !threadCols.includes('static_path')) {
+            await db.prepare("ALTER TABLE threads ADD COLUMN static_path TEXT DEFAULT NULL").run().catch(() => {});
         }
 
         // 1b. Ensure replies.vanity_flair and replies.reactions exist
@@ -1222,12 +1247,14 @@ export async function onRequest(context) {
             const isArchive = url.searchParams.get('view') === 'archive';
             if (!board || !BOARDS[board]) return json({ error: 'Invalid board' }, 400);
 
-            const cutoff = Date.now() - ARCHIVE_TIME_MS;
+            await runD1AutoLock(db);
 
             // HTTP Caching & 304 Not Modified check via fast index lookup
             let metaSql = 'SELECT MAX(bumped_at) as max_bump, COUNT(*) as count FROM threads WHERE board = ?';
             if (isArchive) {
-                metaSql += ` AND bumped_at < ${cutoff}`;
+                metaSql += ` AND (is_locked = 1 OR is_archived = 1)`;
+            } else {
+                metaSql += ` AND (is_locked = 0 AND (is_archived IS NULL OR is_archived = 0))`;
             }
             const isCatalog = url.searchParams.get('mode') === 'catalog';
             const meta = await db.prepare(metaSql).bind(board).first();
@@ -1249,9 +1276,9 @@ export async function onRequest(context) {
 
             let sql = `SELECT t.*, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count FROM threads t WHERE t.board = ?`;
             if (isArchive) {
-                sql += ` AND t.bumped_at < ${cutoff} ORDER BY t.bumped_at DESC LIMIT 100`;
+                sql += ` AND (t.is_locked = 1 OR t.is_archived = 1) ORDER BY COALESCE(t.locked_at, t.bumped_at) DESC LIMIT 100`;
             } else {
-                sql += ` ORDER BY t.is_pinned DESC, t.bumped_at DESC LIMIT 50`;
+                sql += ` AND (t.is_locked = 0 AND (t.is_archived IS NULL OR t.is_archived = 0)) ORDER BY t.is_pinned DESC, t.bumped_at DESC LIMIT 50`;
             }
 
             const list = await db.prepare(sql).bind(board).all();
@@ -1467,7 +1494,9 @@ export async function onRequest(context) {
 
             const thread = await db.prepare('SELECT * FROM threads WHERE id = ?').bind(thread_id).first();
             if (!thread) return json({ error: 'Thread not found' }, 404);
-            if (thread.is_locked) return json({ error: 'Thread is locked' }, 403);
+            if (thread.is_locked || thread.is_archived) {
+                return json({ error: 'This thread is archived and locked. New replies are disabled.' }, 403);
+            }
 
             const id = '-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
             const now = Date.now();
@@ -1589,8 +1618,21 @@ export async function onRequest(context) {
                 return json({ error: 'Invalid reaction parameters' }, 400);
             }
             const table = post_type === 'thread' ? 'threads' : 'replies';
-            const target = await db.prepare(`SELECT id, user_id, reactions FROM ${table} WHERE id = ?`).bind(post_id).first();
+            const target = await db.prepare(`SELECT * FROM ${table} WHERE id = ?`).bind(post_id).first();
             if (!target) return json({ error: 'Post not found' }, 404);
+
+            let isArchivedOrLocked = false;
+            if (post_type === 'thread') {
+                isArchivedOrLocked = Boolean(target.is_locked || target.is_archived);
+            } else {
+                const parent = await db.prepare('SELECT is_locked, is_archived FROM threads WHERE id = ?').bind(target.thread_id).first();
+                if (parent && (parent.is_locked || parent.is_archived)) {
+                    isArchivedOrLocked = true;
+                }
+            }
+            if (isArchivedOrLocked) {
+                return json({ error: 'This thread is archived. Reactions are closed.' }, 403);
+            }
 
             const ipHash = request.headers.get('cf-connecting-ip') || 'anon';
             let reactionsObj = {};
@@ -1896,10 +1938,14 @@ export async function onRequest(context) {
                 return json({ success: true, is_pinned: newPinned });
             }
             if (sub === 'lock') {
-                const th = await db.prepare('SELECT is_locked FROM threads WHERE id = ?').bind(body.thread_id).first();
+                const th = await db.prepare('SELECT is_locked, is_archived, is_static FROM threads WHERE id = ?').bind(body.thread_id).first();
+                if (th?.is_static) {
+                    return json({ error: 'This thread is permanently baked into static HTML and cannot be unlocked.' }, 400);
+                }
                 const newLocked = th?.is_locked ? 0 : 1;
-                await db.prepare('UPDATE threads SET is_locked = ? WHERE id = ?').bind(newLocked, body.thread_id).run();
-                return json({ success: true, is_locked: newLocked });
+                const lockedAt = newLocked ? Date.now() : null;
+                await db.prepare('UPDATE threads SET is_locked = ?, is_archived = ?, locked_at = ? WHERE id = ?').bind(newLocked, newLocked, lockedAt, body.thread_id).run();
+                return json({ success: true, is_locked: newLocked, is_archived: newLocked, locked_at: lockedAt });
             }
             if (sub === 'settings' && user?.role === 'admin') {
                 const { key, value } = body;
