@@ -218,10 +218,10 @@ export function generateStaticThreadHtml({ thread, replies, origin = '' }) {
         <div class="archive-banner">
             <div style="font-weight:bold; font-size:1.05em; display:flex; align-items:center; gap:6px; margin-bottom:4px; color:#dc2626;">
                 <span>🔒</span>
-                <span>Permanent Static Archive</span>
+                <span>Archived Thread — Read-Only</span>
             </div>
             <div style="font-size:0.9em; opacity:0.9; line-height:1.4;">
-                This thread was locked and archived on <strong>${lockedDateStr}</strong>. It has been baked into a hardcoded static HTML archive to minimize database resource consumption. Interactive stamps and new replies are permanently disabled.
+                This thread is closed. New replies and stamp reactions are disabled, but you can freely view the discussion, download media, and quote or link to posts.
             </div>
         </div>
 

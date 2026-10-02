@@ -1341,7 +1341,6 @@ async function loadThreadView(threadId, isSilent = false) {
             const opVanityFlairHtml = renderVanityFlairBadges(th.vanity_flair);
             const opStampsBarHtml = renderStampReactionsBar(th.id, 'thread', th.reactions, isArchived);
 
-            const daysLeft = th.locked_at ? Math.max(0, Math.ceil((th.locked_at + 14 * 86400000 - Date.now()) / 86400000)) : 14;
             const archiveBannerHtml = isArchived ? `
                 <div class="archive-banner" style="background: rgba(220, 38, 38, 0.08); border: 1px solid #ef4444; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; color: var(--text-color);">
                     <div style="font-weight: bold; font-size: 1.05em; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: #dc2626;">
@@ -1349,7 +1348,7 @@ async function loadThreadView(threadId, isSilent = false) {
                         <span>Archived Thread — Read-Only</span>
                     </div>
                     <div style="font-size: 0.9em; opacity: 0.9; line-height: 1.4;">
-                        This thread is locked and archived. New replies and stamp reactions are closed. It will be permanently baked into static HTML in <strong>${daysLeft} days</strong> to save server database resources.
+                        This thread is closed. New replies and stamp reactions are disabled, but you can freely view the discussion, download media, and quote or link to posts.
                     </div>
                 </div>
             ` : '';
