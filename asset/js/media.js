@@ -454,8 +454,22 @@ async function fetchTweetWithFixTweetFallback(id, handle) {
             const fxJson = await fxResp.json();
             if (fxJson && fxJson.tweet) {
                 const t = fxJson.tweet;
-                const photos = t.media?.photos || [];
-                const vids = t.media?.videos || [];
+                const allMedia = t.media?.all || [];
+                const photos = (t.media?.photos || []).filter(p => p.type !== 'gif' && !p.url?.includes('.mp4') && !p.url?.includes('tweet_video'));
+                const vids = [
+                    ...(t.media?.videos || []),
+                    ...(t.media?.photos || []).filter(p => p.type === 'gif' || p.url?.includes('.mp4') || p.url?.includes('tweet_video')),
+                    ...allMedia.filter(m => (m.type === 'video' || m.type === 'gif' || m.url?.includes('.mp4') || m.url?.includes('tweet_video')) && !(t.media?.videos || []).some(v => v.url === m.url))
+                ];
+                const videoItem = vids[0] || null;
+                const isGif = videoItem ? (videoItem.type === 'gif' || (videoItem.url && videoItem.url.includes('tweet_video'))) : false;
+                let videoThumb = videoItem ? (videoItem.thumbnail_url || null) : null;
+                if ((!videoThumb || videoThumb.includes('.mp4')) && videoItem && videoItem.url) {
+                    const vidMatch = videoItem.url.match(/tweet_video\/([a-zA-Z0-9_-]+)\.mp4/i);
+                    if (vidMatch) {
+                        videoThumb = `https://pbs.twimg.com/tweet_video_thumb/${vidMatch[1]}.jpg`;
+                    }
+                }
                 const pages = photos.map((p, idx) => ({
                     pageIndex: idx,
                     displayUrl: p.url,
@@ -472,9 +486,10 @@ async function fetchTweetWithFixTweetFallback(id, handle) {
                     likes: t.likes || 0,
                     retweets: t.retweets || 0,
                     hasMedia: photos.length > 0 || vids.length > 0,
-                    mediaType: vids.length > 0 ? 'video' : (photos.length > 0 ? 'image' : 'none'),
-                    videoUrl: vids[0]?.url || null,
-                    videoThumbnail: vids[0]?.thumbnail_url || photos[0]?.url || null,
+                    mediaType: videoItem ? 'video' : (photos.length > 0 ? 'image' : 'none'),
+                    isGif: Boolean(isGif),
+                    videoUrl: videoItem ? videoItem.url : null,
+                    videoThumbnail: videoThumb,
                     imageUrl: photos[0]?.url || null,
                     pages,
                     pageCount: pages.length
@@ -498,23 +513,44 @@ async function hydrateSingleTwitterSlot(placeholder) {
 
     const slot = placeholder.querySelector('.tweet-thumb-slot');
     if (slot) {
-        const rawThumb = t.videoThumbnail || t.imageUrl;
+        const isVideo = t.mediaType === 'video' || Boolean(t.videoUrl);
+        const isGif = Boolean(t.isGif || (t.videoUrl && t.videoUrl.includes('tweet_video')));
+        let rawThumb = t.videoThumbnail;
+        if ((!rawThumb || rawThumb.includes('.mp4')) && t.videoUrl) {
+            const m = t.videoUrl.match(/tweet_video\/([a-zA-Z0-9_-]+)\.mp4/i);
+            if (m) rawThumb = `https://pbs.twimg.com/tweet_video_thumb/${m[1]}.jpg`;
+        }
+        if (!rawThumb && t.imageUrl && !t.imageUrl.includes('.mp4')) {
+            rawThumb = t.imageUrl;
+        }
+
+        const streamUrl = t.videoUrl ? `/api/proxy/video?url=${encodeURIComponent(t.videoUrl)}` : null;
+
         if (rawThumb) {
             const thumb = getOptimizedThumbUrl(rawThumb, 360);
-            const isVideo = t.mediaType === 'video';
             const multiBadge = (t.pageCount && t.pageCount > 1) 
                 ? `<div class="pixiv-pages-badge" style="background:rgba(29,161,242,0.95);">📚 ${t.pageCount}P</div>` 
                 : '';
+            const badgeBg = isGif ? '#059669' : '#1DA1F2';
+            const badgeLabel = isGif ? 'GIF' : (isVideo ? 'VIDEO' : `𝕏 @${escapeHtml(t.authorHandle)}`);
             const playOverlay = isVideo 
-                ? `<div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>` 
+                ? `<div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:${isGif ? '11px' : '18px'}; font-weight:bold;">${isGif ? 'GIF' : '▶'}</div>` 
                 : '';
 
             slot.innerHTML = `
                 <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
-                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" class="thread-image" loading="lazy" decoding="async" alt="Tweet media" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}'){this.src='${escapeHtml(rawThumb)}';}else if('${streamUrl}' && '${isGif}'){this.outerHTML='<video src=\\'${escapeHtml(streamUrl)}\\' autoplay loop muted playsinline style=\\'max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block; pointer-events:none;\\'></video>';}" class="thread-image" loading="lazy" decoding="async" alt="Tweet media" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
                     ${playOverlay}
                     ${multiBadge}
-                    <div class="pixiv-badge" style="background:#1DA1F2;">𝕏 @${escapeHtml(t.authorHandle)}</div>
+                    <div class="pixiv-badge" style="background:${badgeBg};">${badgeLabel}</div>
+                </div>
+            `;
+            placeholder.classList.add('x-thumb-loaded');
+        } else if (streamUrl && isGif) {
+            slot.innerHTML = `
+                <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+                    <video src="${escapeHtml(streamUrl)}" autoplay loop muted playsinline class="thread-image" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block; pointer-events:none;"></video>
+                    <div class="pixiv-badge" style="background:#059669;">GIF</div>
                 </div>
             `;
             placeholder.classList.add('x-thumb-loaded');
@@ -949,23 +985,40 @@ function openLightbox(type, content, extra1, extra2, extra3) {
             .then(t => {
                 if (t) {
 
-                    // 1. If it has a video: play native HTML5 video with controls and audio!
-                    if (t.mediaType === 'video' && t.videoUrl) {
-                        if (custom) custom.style.display = 'none';
-                        if (vid) {
-                            const streamUrl = `/api/proxy/video?url=${encodeURIComponent(t.videoUrl)}`;
-                            vid.referrerPolicy = "no-referrer";
-                            vid.style.display = 'block';
-                            vid.controls = true;
-                            vid.src = streamUrl;
-                            vid.load();
-                            vid.play().catch(() => {});
+                    // 1. If it has a video or animated GIF:
+                    if ((t.mediaType === 'video' || t.videoUrl) && t.videoUrl) {
+                        const isGif = Boolean(t.isGif || t.videoUrl.includes('tweet_video'));
+                        const streamUrl = `/api/proxy/video?url=${encodeURIComponent(t.videoUrl)}`;
+                        const targetUrl = t.url || `https://x.com/${t.authorHandle || handle}/status/${tweetId}`;
+                        if (custom) {
+                            custom.innerHTML = `
+                                <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(94vw, 850px); max-height:90vh; display:flex; flex-direction:column; align-items:center; border:2px solid #1DA1F2; box-shadow:0 8px 36px rgba(0,0,0,0.95); overflow:hidden; position:relative;">
+                                    <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:10px; border-bottom:1px solid rgba(255,255,255,0.12); padding-bottom:8px; gap:12px;">
+                                        <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1;">
+                                            <div style="font-weight:bold; font-size:1.05em; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                                                ${isGif ? '<span style="background:#059669; color:#fff; font-size:0.75em; padding:2px 7px; border-radius:4px; font-weight:bold; margin-right:6px;">GIF</span>' : '<span style="background:#1DA1F2; color:#fff; font-size:0.75em; padding:2px 7px; border-radius:4px; font-weight:bold; margin-right:6px;">VIDEO</span>'}
+                                                ${escapeHtml(t.text ? t.text.slice(0, 90) : `Post by @${t.authorHandle}`)}
+                                            </div>
+                                            <div style="font-size:0.85em; color:#9ca3af; margin-top:2px;">
+                                                By <b>${escapeHtml(t.authorName)}</b> (@${escapeHtml(t.authorHandle)})
+                                            </div>
+                                        </div>
+                                        <a href="${escapeHtml(targetUrl)}" target="_blank" rel="noopener noreferrer" style="background:#1DA1F2; color:#fff; font-weight:bold; font-size:0.85em; padding:6px 14px; border-radius:6px; text-decoration:none; white-space:nowrap; transition:opacity 0.15s ease;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                                            View on 𝕏 ↗
+                                        </a>
+                                    </div>
+                                    <div style="position:relative; width:100%; max-height:calc(85vh - 120px); min-height:200px; display:flex; justify-content:center; align-items:center; overflow:hidden;">
+                                        <video src="${streamUrl}" controls autoplay ${isGif ? 'loop muted' : ''} playsinline style="max-width:100%; max-height:calc(85vh - 130px); object-fit:contain; border-radius:6px; box-shadow:0 4px 20px rgba(0,0,0,0.6); outline:none; background:#000;"></video>
+                                    </div>
+                                </div>
+                            `;
+                            custom.style.display = 'block';
                         }
                         return;
                     }
 
                     // 2. If it has images (single or multi-page): open in interactive gallery with post caption & link!
-                    const tweetPages = (t.pages && t.pages.length > 0) 
+                    const rawPages = (t.pages && t.pages.length > 0) 
                         ? t.pages 
                         : (t.imageUrl ? [{
                             pageIndex: 0,
@@ -973,6 +1026,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                             helperUrl: `https://wsrv.nl/?url=${encodeURIComponent(t.imageUrl)}&output=webp&we`,
                             originalUrl: t.imageUrl
                         }] : []);
+                    const tweetPages = rawPages.filter(p => !p.displayUrl?.includes('.mp4') && !p.originalUrl?.includes('.mp4'));
 
                     if (tweetPages.length > 0) {
                         currentGallery = {
@@ -1434,6 +1488,14 @@ function closeLightbox(e) {
 
         const custom = document.getElementById('lbCustom');
         if (custom) {
+            const vids = custom.querySelectorAll('video');
+            vids.forEach(v => {
+                try {
+                    v.pause();
+                    v.removeAttribute('src');
+                    v.load();
+                } catch (_) {}
+            });
             custom.style.display = 'none';
             custom.innerHTML = "";
         }

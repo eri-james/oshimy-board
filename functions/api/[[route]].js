@@ -904,50 +904,94 @@ export async function onRequest(context) {
                                     user_profile_image_url: t.author?.avatar_url,
                                     likes: t.likes || 0,
                                     retweets: t.retweets || 0,
-                                    media_extended: (t.media?.all || []).map(m => ({
-                                        type: m.type === 'video' ? 'video' : 'image',
-                                        url: m.url,
-                                        thumbnail_url: m.thumbnail_url || m.url,
-                                        size: { width: m.width, height: m.height }
-                                    }))
-                                };
+                        const allMedia = [
+                            ...(t.media?.all || []),
+                            ...(t.media?.videos || []),
+                            ...(t.media?.photos || [])
+                        ];
+                        const seenUrls = new Set();
+                        const uniqueMedia = [];
+                        for (const m of allMedia) {
+                            if (m && m.url && !seenUrls.has(m.url)) {
+                                seenUrls.add(m.url);
+                                uniqueMedia.push(m);
                             }
                         }
-                    } catch (_) {}
+
+                        tweetData = {
+                            tweetID: t.id,
+                            tweetURL: t.url,
+                            text: t.text,
+                            user_name: t.author?.name || handle,
+                            user_screen_name: t.author?.screen_name || handle,
+                            user_profile_image_url: t.author?.avatar_url,
+                            likes: t.likes || 0,
+                            retweets: t.retweets || 0,
+                            media_extended: uniqueMedia.map(m => {
+                                const isVid = m.type === 'video' || m.type === 'gif' || (m.url && m.url.includes('.mp4')) || (m.url && m.url.includes('tweet_video'));
+                                let thumb = m.thumbnail_url || null;
+                                if (!thumb || thumb.includes('.mp4')) {
+                                    const vidMatch = (m.url || '').match(/tweet_video\/([a-zA-Z0-9_-]+)\.mp4/i);
+                                    if (vidMatch) {
+                                        thumb = `https://pbs.twimg.com/tweet_video_thumb/${vidMatch[1]}.jpg`;
+                                    }
+                                }
+                                return {
+                                    type: isVid ? (m.type === 'gif' || (m.url && m.url.includes('tweet_video')) ? 'gif' : 'video') : 'image',
+                                    url: m.url,
+                                    thumbnail_url: thumb || (isVid ? null : m.url),
+                                    size: { width: m.width, height: m.height }
+                                };
+                            })
+                        };
+                    }
                 }
+            } catch (_) {}
+        }
 
-                if (!tweetData) {
-                    return json({ error: 'Tweet not found or could not be retrieved' }, 404);
-                }
+        if (!tweetData) {
+            return json({ error: 'Tweet not found or could not be retrieved' }, 404);
+        }
 
-                const mediaList = tweetData.media_extended || [];
-                const videoItem = mediaList.find(m => m.type === 'video' || m.type === 'gif');
-                const imageItems = mediaList.filter(m => m.type === 'image');
+        // Process media items (videos, gifs, multi-images)
+        const mediaList = tweetData.media_extended || [];
+        const videoItem = mediaList.find(m => m.type === 'video' || m.type === 'gif' || (m.url && (m.url.includes('.mp4') || m.url.includes('tweet_video'))));
+        const imageItems = mediaList.filter(m => m.type === 'image' && !m.url?.includes('.mp4') && !m.url?.includes('tweet_video'));
+        const isGif = videoItem ? (videoItem.type === 'gif' || (videoItem.url && videoItem.url.includes('tweet_video'))) : false;
 
-                const pages = imageItems.map((img, idx) => ({
-                    pageIndex: idx,
-                    displayUrl: img.url,
-                    helperUrl: `https://wsrv.nl/?url=${encodeURIComponent(img.url)}&output=webp&we`,
-                    originalUrl: img.url
-                }));
+        let videoThumb = videoItem ? (videoItem.thumbnail_url || null) : null;
+        if ((!videoThumb || videoThumb.includes('.mp4')) && videoItem && videoItem.url) {
+            const vidMatch = videoItem.url.match(/tweet_video\/([a-zA-Z0-9_-]+)\.mp4/i);
+            if (vidMatch) {
+                videoThumb = `https://pbs.twimg.com/tweet_video_thumb/${vidMatch[1]}.jpg`;
+            }
+        }
 
-                const tweet = {
-                    id: cleanId,
-                    url: tweetData.tweetURL || `https://x.com/${tweetData.user_screen_name || handle}/status/${cleanId}`,
-                    text: tweetData.text || '',
-                    authorName: tweetData.user_name || handle,
-                    authorHandle: tweetData.user_screen_name || handle,
-                    avatar: tweetData.user_profile_image_url || '',
-                    likes: tweetData.likes || 0,
-                    retweets: tweetData.retweets || 0,
-                    hasMedia: mediaList.length > 0,
-                    mediaType: videoItem ? 'video' : (imageItems.length > 0 ? 'image' : 'none'),
-                    videoUrl: videoItem ? videoItem.url : null,
-                    videoThumbnail: videoItem ? (videoItem.thumbnail_url || videoItem.url) : null,
-                    imageUrl: imageItems.length > 0 ? imageItems[0].url : null,
-                    pages,
-                    pageCount: pages.length
-                };
+        const pages = imageItems.map((img, idx) => ({
+            pageIndex: idx,
+            displayUrl: img.url,
+            helperUrl: `https://wsrv.nl/?url=${encodeURIComponent(img.url)}&output=webp&we`,
+            originalUrl: img.url
+        }));
+
+        const tweet = {
+            id: cleanId,
+            url: tweetData.tweetURL || `https://x.com/${tweetData.user_screen_name || handle}/status/${cleanId}`,
+            text: tweetData.text || '',
+            authorName: tweetData.user_name || handle,
+            authorHandle: tweetData.user_screen_name || handle,
+            avatar: tweetData.user_profile_image_url || '',
+            likes: tweetData.likes || 0,
+            retweets: tweetData.retweets || 0,
+            hasMedia: mediaList.length > 0,
+            mediaType: videoItem ? 'video' : (imageItems.length > 0 ? 'image' : 'none'),
+            isGif: Boolean(isGif),
+            videoUrl: videoItem ? videoItem.url : null,
+            videoThumbnail: videoThumb,
+            imageUrl: imageItems.length > 0 ? imageItems[0].url : null,
+            pages,
+            pageCount: pages.length
+        };
 
                 return json({ success: true, tweet });
             } catch (err) {
