@@ -2142,7 +2142,7 @@ async function uploadMediaFile(file, targetInputEl = null) {
             // Only halt if it is an explicit duration or resolution limit violation
             if (vErr && vErr.isLimitViolation) {
                 if (uploadBtn) {
-                    uploadBtn.innerText = "📤 Upload (Catbox)";
+                    uploadBtn.innerText = "📤 Upload";
                     uploadBtn.disabled = false;
                 }
                 showToast(vErr.message, 4500, "error");
@@ -2275,7 +2275,7 @@ async function uploadMediaFile(file, targetInputEl = null) {
         showToast("Upload Error: " + (err.message || "Network error"), 4000, "error");
     } finally {
         if (uploadBtn) {
-            uploadBtn.innerText = "📤 Upload (Catbox)";
+            uploadBtn.innerText = "📤 Upload";
             uploadBtn.disabled = false;
         }
     }

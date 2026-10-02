@@ -136,8 +136,8 @@
             
             <div id="uploadDropzone" class="upload-dropzone">
                 <div style="display: flex; gap: 8px; width: 100%; align-items: center;">
-                    <input type="url" id="imageInput" placeholder="Media URL (Pixiv/Reddit/X/YT/Catbox/Direct Image or Video) or Drop / Ctrl+V Media" style="flex-grow: 1; margin-bottom: 0;">
-                    <button type="button" id="uploadBtn" title="Upload Image (WebP/GIF) or Video (MP4/WebM) to Catbox.moe">📤 Upload (Catbox)</button>
+                    <input type="url" id="imageInput" placeholder="Media URL (Pixiv/Reddit/X/YT/Direct Image or Video) or Drop / Ctrl+V Media" style="flex-grow: 1; margin-bottom: 0;">
+                    <button type="button" id="uploadBtn" title="Upload Image (WebP/GIF) or Video (MP4/WebM)">📤 Upload</button>
                 </div>
                 <div class="dropzone-hint">📎 Drag &amp; drop or <kbd>Ctrl+V</kbd> paste — Images up to 5MB (auto-WebP), GIFs up to 8MB, MP4/WebM videos up to 20MB (≤90s, ≤1080p)</div>
                 <div id="uploadPreviewBox" class="upload-preview-box" style="display:none;">
@@ -167,18 +167,23 @@
                 <summary><span>ℹ️ Supported Media &amp; Upload Formats</span></summary>
                 <div class="media-help-content">
                     <ul>
-                        <li><b>Catbox.moe Upload (Drag &amp; Drop / Paste):</b>
+                        <li><b>Direct Media Upload (Button / Drag &amp; Drop / Ctrl+V Paste):</b>
                             <ul>
-                                <li><b>Images (<code>JPG</code>, <code>PNG</code>, <code>WebP</code>):</b> Auto-compressed to WebP (max 5MB).</li>
-                                <li><b>Animated GIFs (<code>GIF</code>):</b> Preserved untouched (max 8MB).</li>
-                                <li><b>Videos (<code>MP4</code>, <code>WebM</code> only):</b> Max 20MB, max 90 seconds duration, max 1080p resolution.</li>
+                                <li><b>Static Images (<code>JPG</code>, <code>PNG</code>, <code>WebP</code>):</b> Up to 15MB raw input (auto-compressed to lightweight WebP, max 5MB final).</li>
+                                <li><b>Animated GIFs (<code>GIF</code>):</b> Up to 8MB, preserved untouched with native animation.</li>
+                                <li><b>Videos (<code>MP4</code>, <code>WebM</code>):</b> Up to 20MB, up to 90 seconds duration, up to 1080p resolution. Automatic first-frame thumbnail generation.</li>
+                                <li><b>Storage &amp; CDN:</b> Zero D1 database storage overhead. Uploads use redundant permanent image/video hosting with automatic failover and wsrv.nl Cloudflare CDN delivery.</li>
                             </ul>
                         </li>
-                        <li><b>Pixiv:</b> Artwork URLs (<code>pixiv.net/artworks/...</code>) and direct images (<code>i.pximg.net/...</code>).</li>
-                        <li><b>Reddit:</b> Post links (<code>reddit.com/r/.../comments/...</code>, <code>redd.it/...</code>), videos (<code>v.redd.it</code>), images (<code>i.redd.it</code>), or <code>vxreddit.com</code> proxy links with integrated audio and video player.</li>
-                        <li><b>X (Twitter):</b> Direct post URLs (<code>https://x.com/.../status/...</code>) rendered via FixTweet proxy with native video &amp; multi-image support.</li>
-                        <li><b>YouTube:</b> <code>youtube.com/watch?v=...</code>, <code>youtu.be/...</code>, Shorts, or Music (instant Lite facade player).</li>
-                        <li><b>Direct Images &amp; Video:</b> <code>.jpg</code>, <code>.png</code>, <code>.gif</code>, <code>.webp</code>, <code>.mp4</code>, <code>.webm</code>, <code>.mp3</code>.</li>
+                        <li><b>External Media &amp; Embed URLs:</b>
+                            <ul>
+                                <li><b>Pixiv:</b> Artwork URLs (<code>pixiv.net/artworks/...</code>) and direct images (<code>i.pximg.net/...</code>) with multi-image gallery support.</li>
+                                <li><b>Reddit:</b> Post links (<code>reddit.com/r/.../comments/...</code>, <code>redd.it/...</code>), videos (<code>v.redd.it</code>), or <code>vxreddit.com</code> proxy with synchronized audio.</li>
+                                <li><b>X (Twitter):</b> Direct post URLs (<code>https://x.com/.../status/...</code>) with interactive card embeds and video support.</li>
+                                <li><b>YouTube:</b> <code>youtube.com/watch?v=...</code>, <code>youtu.be/...</code>, Shorts, or Music (instant Lite facade player).</li>
+                                <li><b>Direct Media Links:</b> <code>.jpg</code>, <code>.png</code>, <code>.gif</code>, <code>.webp</code>, <code>.mp4</code>, <code>.webm</code>, <code>.mp3</code>, <code>.wav</code>, <code>.ogg</code>.</li>
+                            </ul>
+                        </li>
                     </ul>
                 </div>
             </details>

@@ -419,7 +419,7 @@ function renderCurrentBoardData(threads) {
         container.style.display = 'none';
         if (catalogToolbar) catalogToolbar.style.display = 'flex';
         if (catalogGrid) catalogGrid.style.display = 'grid';
-        if (formWrapper) formWrapper.style.display = 'none';
+        if (formWrapper) formWrapper.style.display = 'block';
         renderCatalogGrid(threads);
     } else {
         container.style.display = 'block';
@@ -916,7 +916,7 @@ async function loadBoardView(isArchive = false, isSilent = false) {
         container.style.display = 'none';
         if (catalogToolbar) catalogToolbar.style.display = 'flex';
         if (catalogGrid) catalogGrid.style.display = 'grid';
-        if (formWrapper) formWrapper.style.display = 'none';
+        if (formWrapper) formWrapper.style.display = isArchive ? 'none' : 'block';
     } else {
         container.style.display = 'block';
         if (catalogToolbar) catalogToolbar.style.display = 'none';
@@ -944,9 +944,9 @@ async function loadBoardView(isArchive = false, isSilent = false) {
     const formTitle = document.getElementById('formTitle');
     const subjectInput = document.getElementById('subjectInput');
     const submitBtn = document.getElementById('submitBtn');
-    if (!isSilent && !isCatalog) {
+    if (!isSilent) {
         if (formTitle) formTitle.innerText = isArchive ? "Board Archive" : "Create New Thread";
-        if (subjectInput) subjectInput.style.display = "block";
+        if (subjectInput) subjectInput.style.display = isArchive ? "none" : "block";
         if (submitBtn) submitBtn.innerText = "Submit New Thread";
     }
 
