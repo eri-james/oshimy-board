@@ -214,6 +214,19 @@ async function resolveSocialMedia(rawUrl, origin) {
                 const imageItem = mediaList.find(m => m.type === 'image');
 
                 if (videoItem) {
+                    const isGif = videoItem.type === 'gif' || (videoItem.url && videoItem.url.includes('tweet_video'));
+                    if (isGif) {
+                        return {
+                            type: 'image',
+                            isGif: true,
+                            imageUrl: `https://gifconvert.vxtwitter.com/convert.avif?url=${videoItem.url}`,
+                            videoUrl: null,
+                            videoType: null,
+                            width: videoItem.size?.width || 1000,
+                            height: videoItem.size?.height || 1000,
+                            source: 'Twitter / X GIF'
+                        };
+                    }
                     return {
                         type: 'video',
                         imageUrl: videoItem.thumbnail_url || blackThumbUrl,
@@ -252,6 +265,19 @@ async function resolveSocialMedia(rawUrl, origin) {
                 if (t && t.media) {
                     const videoItem = (t.media.videos && t.media.videos[0]) || (t.media.all && t.media.all.find(m => m.type === 'video' || m.type === 'gif'));
                     if (videoItem) {
+                        const isGif = videoItem.type === 'gif' || (videoItem.url && videoItem.url.includes('tweet_video'));
+                        if (isGif) {
+                            return {
+                                type: 'image',
+                                isGif: true,
+                                imageUrl: `https://gifconvert.vxtwitter.com/convert.avif?url=${videoItem.url}`,
+                                videoUrl: null,
+                                videoType: null,
+                                width: videoItem.width || 1000,
+                                height: videoItem.height || 1000,
+                                source: 'Twitter / X GIF'
+                            };
+                        }
                         return {
                             type: 'video',
                             imageUrl: videoItem.thumbnail_url || blackThumbUrl,

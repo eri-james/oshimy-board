@@ -2330,6 +2330,29 @@ async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redd
                 const imageItem = mediaList.find(m => m.type === 'image');
 
                 if (videoItem) {
+                    const isGif = videoItem.type === 'gif' || (videoItem.url && videoItem.url.includes('tweet_video'));
+                    if (isGif) {
+                        const gifUrl = `https://gifconvert.vxtwitter.com/convert.avif?url=${videoItem.url}`;
+                        const gifRes = {
+                            type: 'image',
+                            isGif: true,
+                            imageUrl: gifUrl,
+                            videoUrl: null,
+                            videoType: null,
+                            source: 'Twitter / X GIF'
+                        };
+                        if (tweetCacheContext && typeof tweetCacheContext.set === 'function') {
+                            tweetCacheContext.set(statusId, {
+                                id: statusId,
+                                mediaType: 'image',
+                                isGif: true,
+                                videoUrl: null,
+                                videoThumbnail: null,
+                                imageUrl: gifUrl
+                            });
+                        }
+                        return gifRes;
+                    }
                     const videoRes = {
                         type: 'video',
                         imageUrl: videoItem.thumbnail_url || blackThumbUrl,
@@ -2386,6 +2409,29 @@ async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redd
                 if (t && t.media) {
                     const videoItem = (t.media.videos && t.media.videos[0]) || (t.media.all && t.media.all.find(m => m.type === 'video' || m.type === 'gif'));
                     if (videoItem) {
+                        const isGif = videoItem.type === 'gif' || (videoItem.url && videoItem.url.includes('tweet_video'));
+                        if (isGif) {
+                            const gifUrl = `https://gifconvert.vxtwitter.com/convert.avif?url=${videoItem.url}`;
+                            const gifRes = {
+                                type: 'image',
+                                isGif: true,
+                                imageUrl: gifUrl,
+                                videoUrl: null,
+                                videoType: null,
+                                source: 'Twitter / X GIF'
+                            };
+                            if (tweetCacheContext && typeof tweetCacheContext.set === 'function') {
+                                tweetCacheContext.set(statusId, {
+                                    id: statusId,
+                                    mediaType: 'image',
+                                    isGif: true,
+                                    videoUrl: null,
+                                    videoThumbnail: null,
+                                    imageUrl: gifUrl
+                                });
+                            }
+                            return gifRes;
+                        }
                         const videoRes = {
                             type: 'video',
                             imageUrl: videoItem.thumbnail_url || blackThumbUrl,
