@@ -556,30 +556,37 @@ export async function onRequest(context) {
             const safeName = `${baseName}.${rule.ext}`;
             const catboxUserhash = env?.CATBOX_USERHASH || '1e5680e58e931a1d509c280dc';
 
-            // 3. Primary: Catbox.moe permanent upload API using raw binary multipart body
-            // (Avoids Cloudflare Workers legacy FormData/Blob stringification corruption)
-            try {
-                const boundary = '----OshiMYCatboxBoundary' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+            // Helper: Build multipart/form-data binary body
+            const buildMultipartPayload = (fields, fileField, fileBytes, fileName, fileMime) => {
+                const boundary = '----OshiMYBoundary' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
                 const enc = new TextEncoder();
-                const headerBytes = enc.encode(
-                    `--${boundary}\r\n` +
-                    `Content-Disposition: form-data; name="reqtype"\r\n\r\n` +
-                    `fileupload\r\n` +
-                    `--${boundary}\r\n` +
-                    `Content-Disposition: form-data; name="userhash"\r\n\r\n` +
-                    `${catboxUserhash}\r\n` +
-                    `--${boundary}\r\n` +
-                    `Content-Disposition: form-data; name="fileToUpload"; filename="${safeName}"\r\n` +
-                    `Content-Type: ${detectedMime}\r\n\r\n`
-                );
+                let headerStr = '';
+                for (const [k, v] of Object.entries(fields)) {
+                    headerStr += `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`;
+                }
+                headerStr += `--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; filename="${fileName}"\r\nContent-Type: ${fileMime}\r\n\r\n`;
+                const headerBytes = enc.encode(headerStr);
                 const footerBytes = enc.encode(`\r\n--${boundary}--\r\n`);
-                const multipartBody = new Uint8Array(headerBytes.length + bytes.byteLength + footerBytes.length);
+                const multipartBody = new Uint8Array(headerBytes.length + fileBytes.byteLength + footerBytes.length);
                 multipartBody.set(headerBytes, 0);
-                multipartBody.set(bytes, headerBytes.length);
-                multipartBody.set(footerBytes, headerBytes.length + bytes.byteLength);
+                multipartBody.set(fileBytes, headerBytes.length);
+                multipartBody.set(footerBytes, headerBytes.length + fileBytes.byteLength);
+                return { multipartBody, boundary };
+            };
+
+            // 3. Primary: Catbox.moe permanent upload API using raw binary multipart body
+            // Includes HEAD verification to guard against Catbox 0-byte ghost files on retry
+            try {
+                const { multipartBody, boundary } = buildMultipartPayload(
+                    { reqtype: 'fileupload', userhash: catboxUserhash },
+                    'fileToUpload',
+                    bytes,
+                    safeName,
+                    detectedMime
+                );
 
                 const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 25000);
+                const timeout = setTimeout(() => controller.abort(), 18000);
                 const catResp = await fetch('https://catbox.moe/user/api.php', {
                     method: 'POST',
                     body: multipartBody,
@@ -594,50 +601,143 @@ export async function onRequest(context) {
                 if (catResp.ok) {
                     const textUrl = (await catResp.text()).trim();
                     if (textUrl.startsWith('https://files.catbox.moe/')) {
+                        // Verify Catbox actually wrote non-zero bytes (prevents 0-byte ghost file URL on retry)
+                        let catboxVerified = false;
+                        try {
+                            const vCtrl = new AbortController();
+                            const vTimer = setTimeout(() => vCtrl.abort(), 4500);
+                            const vResp = await fetch(textUrl, {
+                                method: 'HEAD',
+                                signal: vCtrl.signal,
+                                headers: { 'User-Agent': 'OshiMY-Imageboard/1.0 (+https://oshimy.moe)' }
+                            });
+                            clearTimeout(vTimer);
+                            const contentLen = parseInt(vResp.headers.get('content-length') || '0', 10);
+                            if (vResp.ok && contentLen > 32) {
+                                catboxVerified = true;
+                            }
+                        } catch (_) {}
+
+                        if (catboxVerified) {
+                            return json({
+                                success: true,
+                                url: textUrl,
+                                provider: 'catbox.moe',
+                                media_kind: isVideo ? 'video' : 'image'
+                            });
+                        }
+                    }
+                }
+            } catch (_) {}
+
+            // 4. Secondary Permanent Failovers for Images: Freeimage.host (Cloudflare CDN) & ImgBB
+            if (!isVideo) {
+                if (!cleanBase64) {
+                    let bin = '';
+                    const chunk = 0x8000;
+                    for (let i = 0; i < bytes.length; i += chunk) {
+                        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+                    }
+                    cleanBase64 = btoa(bin);
+                }
+
+                // 4a. Freeimage.host (Permanent Cloudflare-backed direct image CDN: iili.io)
+                try {
+                    const freeImgKey = env?.FREEIMAGE_API_KEY || '6d207e02198a847aa98d0a2a901485a5';
+                    const freeForm = new URLSearchParams();
+                    freeForm.append('key', freeImgKey);
+                    freeForm.append('action', 'upload');
+                    freeForm.append('source', cleanBase64);
+                    freeForm.append('format', 'json');
+                    const fCtrl = new AbortController();
+                    const fTimer = setTimeout(() => fCtrl.abort(), 15000);
+                    const freeResp = await fetch('https://freeimage.host/api/1/upload', {
+                        method: 'POST',
+                        body: freeForm,
+                        signal: fCtrl.signal
+                    });
+                    clearTimeout(fTimer);
+                    if (freeResp.ok) {
+                        const freeData = await freeResp.json();
+                        if (freeData?.status_code === 200 && freeData?.image?.url) {
+                            return json({
+                                success: true,
+                                url: freeData.image.url,
+                                provider: 'freeimage.host',
+                                media_kind: 'image'
+                            });
+                        }
+                    }
+                } catch (_) {}
+
+                // 4b. ImgBB (Permanent direct image host: i.ibb.co)
+                const candidateKeys = [
+                    env?.IMGBB_API_KEY,
+                    '6d885f930c72cd28e6520e6c7494704f'
+                ].filter((k, idx, arr) => k && k !== 'ba7dd29db4fb9b62ebfb8fae4c6c7922' && arr.indexOf(k) === idx);
+
+                for (const imgbbKey of candidateKeys) {
+                    try {
+                        const imgbbForm = new URLSearchParams();
+                        imgbbForm.append('image', cleanBase64);
+                        const ibbCtrl = new AbortController();
+                        const ibbTimer = setTimeout(() => ibbCtrl.abort(), 15000);
+                        const ibbResp = await fetch(`https://api.imgbb.com/1/upload?key=${imgbbKey}`, {
+                            method: 'POST',
+                            body: imgbbForm,
+                            signal: ibbCtrl.signal
+                        });
+                        clearTimeout(ibbTimer);
+                        const ibbData = await ibbResp.json();
+                        if (ibbData?.success && ibbData?.data?.url) {
+                            return json({
+                                success: true,
+                                url: ibbData.data.url,
+                                provider: 'imgbb',
+                                media_kind: 'image'
+                            });
+                        }
+                    } catch (_) {}
+                }
+            }
+
+            // 5. Tertiary Permanent Failover for both Videos & Images: kappa.lol (supports MP4, WebM, GIF, WebP, JPG, PNG)
+            try {
+                const { multipartBody, boundary } = buildMultipartPayload(
+                    {},
+                    'file',
+                    bytes,
+                    safeName,
+                    detectedMime
+                );
+                const kCtrl = new AbortController();
+                const kTimer = setTimeout(() => kCtrl.abort(), 22000);
+                const kResp = await fetch('https://kappa.lol/api/upload', {
+                    method: 'POST',
+                    body: multipartBody,
+                    signal: kCtrl.signal,
+                    headers: {
+                        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                        'User-Agent': 'OshiMY-Imageboard/1.0 (+https://oshimy.moe)'
+                    }
+                });
+                clearTimeout(kTimer);
+                if (kResp.ok) {
+                    const kData = await kResp.json();
+                    if (kData?.link) {
+                        const extSuffix = kData.ext || `.${rule.ext}`;
+                        const finalUrl = kData.link.endsWith(extSuffix) ? kData.link : `${kData.link}${extSuffix}`;
                         return json({
                             success: true,
-                            url: textUrl,
-                            provider: 'catbox.moe',
+                            url: finalUrl,
+                            provider: 'kappa.lol',
                             media_kind: isVideo ? 'video' : 'image'
                         });
                     }
                 }
             } catch (_) {}
 
-            // 4. If Video: do not fallback to ImgBB (ImgBB only supports images)
-            if (isVideo) {
-                return json({
-                    error: 'Catbox.moe video upload timed out or is temporarily unreachable. Please try again shortly.'
-                }, 502);
-            }
-
-            // 5. Permanent Fallback for Images only: ImgBB
-            if (!cleanBase64) {
-                let bin = '';
-                const chunk = 0x8000;
-                for (let i = 0; i < bytes.length; i += chunk) {
-                    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-                }
-                cleanBase64 = btoa(bin);
-            }
-            const imgbbKey = env?.IMGBB_API_KEY || 'ba7dd29db4fb9b62ebfb8fae4c6c7922';
-            const imgbbForm = new URLSearchParams();
-            imgbbForm.append('image', cleanBase64);
-            const ibbResp = await fetch(`https://api.imgbb.com/1/upload?key=${imgbbKey}`, {
-                method: 'POST',
-                body: imgbbForm
-            });
-            const ibbData = await ibbResp.json();
-            if (ibbData?.success && ibbData?.data?.url) {
-                return json({
-                    success: true,
-                    url: ibbData.data.url,
-                    provider: 'imgbb',
-                    media_kind: 'image'
-                });
-            }
-
-            return json({ error: 'All permanent image hosts failed' }, 502);
+            return json({ error: 'All permanent media hosts failed to accept the upload. Please try again.' }, 502);
         }
         // Pixiv Image Reverse Proxy for Cloudflare Pages (bypasses hotlink blocks)
         if (route === 'proxy' && path[1] === 'pixiv' && method === 'GET') {

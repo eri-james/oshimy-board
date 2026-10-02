@@ -218,6 +218,28 @@ function setCachedEmbedMeta(key, val) {
     } catch (_) {}
 }
 
+// Automatic multi-stage image error recovery:
+// 1. If optimized thumb failed, try direct original URL
+// 2. If direct URL failed (e.g., ISP DNS block on files.catbox.moe), try wsrv.nl Cloudflare CDN proxy
+// 3. Only hide if all stages fail
+function handleImageFallback(imgEl, fullUrl) {
+    if (!imgEl) return;
+    const rawUrl = fullUrl || imgEl.getAttribute('data-full-src') || '';
+    if (rawUrl && imgEl.dataset.triedDirect !== 'true' && imgEl.src !== rawUrl) {
+        imgEl.dataset.triedDirect = 'true';
+        imgEl.src = rawUrl;
+        return;
+    }
+    if (rawUrl && imgEl.dataset.triedWsrv !== 'true' && !rawUrl.startsWith('/') && !rawUrl.startsWith('data:') && !rawUrl.includes('wsrv.nl')) {
+        imgEl.dataset.triedWsrv = 'true';
+        const isGif = /\.gif(?:\?|$)/i.test(rawUrl);
+        imgEl.src = `https://wsrv.nl/?url=${encodeURIComponent(rawUrl)}${isGif ? '&n=-1' : '&output=webp&q=85'}`;
+        return;
+    }
+    imgEl.onerror = null;
+    imgEl.style.display = 'none';
+}
+
 // Offload external image thumbnails via wsrv.nl global CDN (converts to lightweight WebP)
 function getOptimizedThumbUrl(rawUrl, width = 360) {
     if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
@@ -362,18 +384,18 @@ function renderMedia(url) {
         `;
     }
 
-    // 9. Standard Image (including Catbox, i.redd.it, pbs.twimg.com) with wsrv.nl WebP thumbnail proxy
+    // 9. Standard Image (including Catbox, Freeimage, ImgBB, i.redd.it, pbs.twimg.com) with automatic wsrv.nl fallback
     const optimizedThumb = getOptimizedThumbUrl(media.url, 360);
     if (media.isSpoiler) {
         return `
             <div class="media-container spoiler-media" onclick="openLightbox('image', '${escapeHtml(media.url)}')" title="Click to expand full-resolution image (Spoiler)">
-                <img src="${escapeHtml(optimizedThumb)}" data-full-src="${escapeHtml(media.url)}" class="thread-image" loading="lazy" decoding="async" alt="Post attachment" onerror="if(this.src !== this.dataset.fullSrc){ this.src = this.dataset.fullSrc; } else { this.onerror=null; this.style.display='none'; }">
+                <img src="${escapeHtml(optimizedThumb)}" data-full-src="${escapeHtml(media.url)}" class="thread-image" loading="lazy" decoding="async" alt="Post attachment" onerror="handleImageFallback(this, this.dataset.fullSrc)">
                 ${spoilerOverlay}
             </div>
         `;
     }
     return `
-        <img src="${escapeHtml(optimizedThumb)}" data-full-src="${escapeHtml(media.url)}" class="thread-image" loading="lazy" decoding="async" alt="Post attachment" onclick="openLightbox('image', '${escapeHtml(media.url)}')" onerror="if(this.src !== this.dataset.fullSrc){ this.src = this.dataset.fullSrc; } else { this.onerror=null; this.style.display='none'; }" title="Click to expand full-resolution image">
+        <img src="${escapeHtml(optimizedThumb)}" data-full-src="${escapeHtml(media.url)}" class="thread-image" loading="lazy" decoding="async" alt="Post attachment" onclick="openLightbox('image', '${escapeHtml(media.url)}')" onerror="handleImageFallback(this, this.dataset.fullSrc)" title="Click to expand full-resolution image">
     `;
 }
 
@@ -801,11 +823,8 @@ async function validateMediaUrl(url) {
     // Pixiv Direct Image (i.pximg.net): Test via reverse proxy to avoid 403 Forbidden
     const testUrl = (media.type === 'pixiv_image' && media.proxyUrl) ? media.proxyUrl : media.url;
 
-    // Trusted direct upload hosts already verified by /api/upload
-    if (/^https:\/\/(?:files\.catbox\.moe|i\.ibb\.co)\//i.test(testUrl)) {
-        return { valid: true, type: media.type };
-    }
-
+    // Verify all image URLs (including Catbox/ImgBB/Freeimage) actually decode or load via wsrv.nl proxy
+    // so 0-byte ghost files or corrupt links are caught before post submission
     return new Promise((resolve) => {
         const img = new Image();
         img.referrerPolicy = 'no-referrer';
@@ -2040,9 +2059,11 @@ async function prepareMediaBlobForUpload(file) {
 
 function clearUploadedMedia() {
     const urlInput = document.getElementById('imageInput');
+    const qrInput = document.getElementById('qrImage');
     const previewBox = document.getElementById('uploadPreviewBox');
     const previewImg = document.getElementById('uploadPreviewImg');
     const spoilerInput = document.getElementById('spoilerInput');
+    const qrSpoilerInput = document.getElementById('qrSpoilerInput');
     if (currentPreviewObjectUrl) {
         try { URL.revokeObjectURL(currentPreviewObjectUrl); } catch (_) {}
         currentPreviewObjectUrl = null;
@@ -2051,9 +2072,17 @@ function clearUploadedMedia() {
         spoilerInput.checked = false;
         syncSpoilerToggleUI('main');
     }
+    if (qrSpoilerInput) {
+        qrSpoilerInput.checked = false;
+        syncSpoilerToggleUI('qr');
+    }
     if (urlInput) {
         urlInput.value = '';
         urlInput.dispatchEvent(new Event('input'));
+    }
+    if (qrInput) {
+        qrInput.value = '';
+        qrInput.dispatchEvent(new Event('input'));
     }
     if (previewBox) previewBox.style.display = 'none';
     if (previewImg) {
@@ -2164,27 +2193,41 @@ async function uploadMediaFile(file, targetInputEl = null) {
             }
         }
 
-        // Upload the video and (if video) its extracted first-frame JPEG thumbnail to Catbox/ImgBB in parallel (zero D1 storage)
-        const videoUploadPromise = fetch('/api/upload', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/octet-stream',
-                'X-File-Name': encodeURIComponent(processed.filename || 'upload'),
-                'X-Mime-Type': processed.mimeType || 'application/octet-stream'
-            },
-            body: processed.blob
-        }).then(r => r.json());
+        // Helper to upload with automatic 1-time retry on transient network/gateway errors
+        const uploadWithRetry = async (blob, filename, mimeType) => {
+            for (let attempt = 1; attempt <= 2; attempt++) {
+                try {
+                    const resp = await fetch('/api/upload', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/octet-stream',
+                            'X-File-Name': encodeURIComponent(filename || 'upload'),
+                            'X-Mime-Type': mimeType || 'application/octet-stream'
+                        },
+                        body: blob
+                    });
+                    const data = await resp.json();
+                    if (data && data.success && data.url) {
+                        return data;
+                    }
+                    if (attempt === 2) return data;
+                } catch (err) {
+                    if (attempt === 2) throw err;
+                }
+                await new Promise(r => setTimeout(r, 400));
+            }
+            return null;
+        };
+
+        // Upload the media and (if video) its extracted first-frame JPEG thumbnail in parallel (zero D1 storage)
+        const videoUploadPromise = uploadWithRetry(
+            processed.blob,
+            processed.filename || 'upload',
+            processed.mimeType || 'application/octet-stream'
+        );
 
         const thumbUploadPromise = (isAllowedVideo && videoMeta && videoMeta.thumbBlob)
-            ? fetch('/api/upload', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/octet-stream',
-                    'X-File-Name': encodeURIComponent(`vthumb_${Date.now()}.jpg`),
-                    'X-Mime-Type': 'image/jpeg'
-                },
-                body: videoMeta.thumbBlob
-            }).then(r => r.json()).catch(() => null)
+            ? uploadWithRetry(videoMeta.thumbBlob, `vthumb_${Date.now()}.jpg`, 'image/jpeg').catch(() => null)
             : Promise.resolve(null);
 
         const [result, thumbResult] = await Promise.all([videoUploadPromise, thumbUploadPromise]);
@@ -2196,13 +2239,25 @@ async function uploadMediaFile(file, targetInputEl = null) {
                 urlInput.value = finalMediaUrl;
                 urlInput.dispatchEvent(new Event('input'));
             }
+            // Keep Main Form (#imageInput) and Quick Reply (#qrImage) synchronized so switching between
+            // the main reply form and floating Quick Reply never loses the uploaded attachment
+            const mainImageEl = document.getElementById('imageInput');
+            const qrImageEl = document.getElementById('qrImage');
+            if (mainImageEl && mainImageEl !== urlInput) {
+                mainImageEl.value = finalMediaUrl;
+                mainImageEl.dispatchEvent(new Event('input'));
+            }
+            if (qrImageEl && qrImageEl !== urlInput) {
+                qrImageEl.value = finalMediaUrl;
+                qrImageEl.dispatchEvent(new Event('input'));
+            }
             if (isAllowedVideo) {
                 const sizeMB = (processed.originalSize / (1024 * 1024)).toFixed(1);
                 const metaLabel = videoMeta ? ` • ${videoMeta.duration}s • ${videoMeta.width}×${videoMeta.height}` : '';
                 if (previewInfo) {
                     previewInfo.innerHTML = `✓ 🎥 Video on <b>${escapeHtml(result.provider || 'catbox.moe')}</b> (${sizeMB} MB${metaLabel})`;
                 }
-                showToast(`Video uploaded to Catbox.moe! (${sizeMB} MB${metaLabel})`, 3500, "success");
+                showToast(`Video uploaded to ${result.provider || 'Catbox.moe'}! (${sizeMB} MB${metaLabel})`, 3500, "success");
             } else {
                 const origKB = Math.max(1, Math.round(processed.originalSize / 1024));
                 const compKB = Math.max(1, Math.round(processed.compressedSize / 1024));
@@ -2213,7 +2268,7 @@ async function uploadMediaFile(file, targetInputEl = null) {
                 showToast(`Uploaded to ${result.provider || 'Catbox.moe'}! (${compKB} KB${savedPct})`, 3200, "success");
             }
         } else {
-            throw new Error(result.error || 'Upload failed');
+            throw new Error((result && result.error) || 'Upload failed');
         }
     } catch (err) {
         if (previewBox) previewBox.style.display = 'none';
@@ -2309,6 +2364,7 @@ function initMediaUpload() {
 }
 
 if (typeof window !== 'undefined') {
+    window.handleImageFallback = handleImageFallback;
     window.clearUploadedMedia = clearUploadedMedia;
     window.uploadMediaFile = uploadMediaFile;
     window.syncSpoilerToggleUI = syncSpoilerToggleUI;

@@ -572,7 +572,8 @@ function getCatalogThumbnail(mediaUrl) {
         return `<div class="catalog-placeholder-icon">🎵</div>`;
     }
     const optThumb = typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(media.url, 260) : media.url;
-    return `<img src="${escapeHtml(optThumb)}" class="catalog-thumb" alt="Thumbnail" loading="lazy" decoding="async" onerror="if(this.src!=='${escapeHtml(media.url)}'){this.src='${escapeHtml(media.url)}';}else{this.onerror=null; this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\'>🖼️</div>';}">`;
+    const wsrvFallback = `https://wsrv.nl/?url=${encodeURIComponent(media.url)}&w=260&output=webp&q=82&we`;
+    return `<img src="${escapeHtml(optThumb)}" class="catalog-thumb" alt="Thumbnail" loading="lazy" decoding="async" onerror="if(this.dataset.triedDirect!=='true'&&this.src!=='${escapeHtml(media.url)}'){this.dataset.triedDirect='true';this.src='${escapeHtml(media.url)}';}else if(this.dataset.triedWsrv!=='true'){this.dataset.triedWsrv='true';this.src='${escapeHtml(wsrvFallback)}';}else{this.onerror=null; this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\'>🖼️</div>';}">`;
 }
 
 // --- ANONYMOUS PER-THREAD POSTER IDS, OSHI FAN-NAMES, DECOUPLED VANITY & STAMP REACTIONS ---
@@ -1562,10 +1563,22 @@ function openQuickReply(threadId, quoteId = null) {
         title.innerText = `⚡ Quick Reply - ${boardStr}${idStr}`;
     }
 
-    // Sync name from main form
+    // Sync name, media attachment, and spoiler state from main form so switching to Quick Reply never drops an uploaded image
     const mainName = document.getElementById('nameInput');
     if (mainName && mainName.value && nameInput) {
         nameInput.value = mainName.value;
+    }
+    const mainImage = document.getElementById('imageInput');
+    const qrImage = document.getElementById('qrImage');
+    if (mainImage && mainImage.value.trim() && qrImage && !qrImage.value.trim()) {
+        qrImage.value = mainImage.value.trim();
+        qrImage.dispatchEvent(new Event('input'));
+    }
+    const mainSpoiler = document.getElementById('spoilerInput');
+    const qrSpoiler = document.getElementById('qrSpoilerInput');
+    if (mainSpoiler && mainSpoiler.checked && qrSpoiler && !qrSpoiler.checked) {
+        qrSpoiler.checked = true;
+        if (typeof syncSpoilerToggleUI === 'function') syncSpoilerToggleUI('qr');
     }
 
     dock.style.display = 'flex';
@@ -1609,8 +1622,12 @@ async function submitQuickReply() {
         return;
     }
 
-    const rawMediaUrl = imageInput ? imageInput.value : '';
-    const isSpoiler = Boolean(qrSpoilerInput && qrSpoilerInput.checked);
+    const mainImageInput = document.getElementById('imageInput');
+    const mainSpoilerInput = document.getElementById('spoilerInput');
+    const rawMediaUrl = (imageInput && imageInput.value.trim())
+        ? imageInput.value.trim()
+        : (mainImageInput ? mainImageInput.value.trim() : '');
+    const isSpoiler = Boolean((qrSpoilerInput && qrSpoilerInput.checked) || (mainSpoilerInput && mainSpoilerInput.checked));
     const formattedMediaUrl = (typeof formatSpoilerMediaUrl === 'function')
         ? formatSpoilerMediaUrl(rawMediaUrl, isSpoiler)
         : rawMediaUrl;
@@ -2073,10 +2090,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (!commentInput.value.trim()) return;
 
-        const isSpoiler = Boolean(spoilerInput && spoilerInput.checked);
+        const qrImageInput = document.getElementById('qrImage');
+        const qrSpoilerInput = document.getElementById('qrSpoilerInput');
+        const rawMediaUrl = (imageInput && imageInput.value.trim())
+            ? imageInput.value.trim()
+            : (qrImageInput ? qrImageInput.value.trim() : '');
+        const isSpoiler = Boolean((spoilerInput && spoilerInput.checked) || (qrSpoilerInput && qrSpoilerInput.checked));
         const formattedMediaUrl = (typeof formatSpoilerMediaUrl === 'function')
-            ? formatSpoilerMediaUrl(imageInput.value, isSpoiler)
-            : imageInput.value.trim();
+            ? formatSpoilerMediaUrl(rawMediaUrl, isSpoiler)
+            : rawMediaUrl;
 
         if (currentThreadId) {
             // Reply via optimistic submit core
