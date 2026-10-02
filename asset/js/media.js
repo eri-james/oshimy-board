@@ -447,7 +447,57 @@ async function fetchTweetWithFixTweetFallback(id, handle) {
         }
     } catch (_) {}
 
-    // Direct client-side FixTweet helper proxy fallback (zero widgets.js bloat)
+    // 2. Direct client-side vxTwitter API probe
+    try {
+        const vxResp = await fetch(`https://api.vxtwitter.com/${encodeURIComponent(handle || 'i')}/status/${id}`);
+        if (vxResp.ok) {
+            const vxJson = await vxResp.json();
+            if (vxJson && (vxJson.tweetID || vxJson.text || vxJson.media_extended)) {
+                const mediaList = vxJson.media_extended || [];
+                const videoItem = mediaList.find(m => m.type === 'video' || m.type === 'gif' || (m.url && (m.url.includes('.mp4') || m.url.includes('tweet_video'))));
+                const imageItems = mediaList.filter(m => m.type === 'image' && !m.url?.includes('.mp4') && !m.url?.includes('tweet_video'));
+                const isGif = videoItem ? (videoItem.type === 'gif' || (videoItem.url && videoItem.url.includes('tweet_video'))) : false;
+
+                let videoThumb = videoItem ? (videoItem.thumbnail_url || null) : null;
+                if ((!videoThumb || videoThumb.includes('.mp4')) && videoItem && videoItem.url) {
+                    const vidMatch = videoItem.url.match(/tweet_video\/([a-zA-Z0-9_-]+)\.mp4/i);
+                    if (vidMatch) {
+                        videoThumb = `https://pbs.twimg.com/tweet_video_thumb/${vidMatch[1]}.jpg`;
+                    }
+                }
+
+                const pages = imageItems.map((img, idx) => ({
+                    pageIndex: idx,
+                    displayUrl: img.url,
+                    helperUrl: `https://wsrv.nl/?url=${encodeURIComponent(img.url)}&output=webp&we`,
+                    originalUrl: img.url
+                }));
+
+                const mapped = {
+                    id,
+                    url: vxJson.tweetURL || `https://x.com/${vxJson.user_screen_name || handle}/status/${id}`,
+                    text: vxJson.text || '',
+                    authorName: vxJson.user_name || handle,
+                    authorHandle: vxJson.user_screen_name || handle,
+                    avatar: vxJson.user_profile_image_url || '',
+                    likes: vxJson.likes || 0,
+                    retweets: vxJson.retweets || 0,
+                    hasMedia: mediaList.length > 0,
+                    mediaType: videoItem ? 'video' : (imageItems.length > 0 ? 'image' : 'none'),
+                    isGif: Boolean(isGif),
+                    videoUrl: videoItem ? videoItem.url : null,
+                    videoThumbnail: videoThumb,
+                    imageUrl: imageItems.length > 0 ? imageItems[0].url : null,
+                    pages,
+                    pageCount: pages.length
+                };
+                setCachedEmbedMeta('tw_' + id, mapped);
+                return mapped;
+            }
+        }
+    } catch (_) {}
+
+    // 3. Fallback to FixTweet API
     try {
         const fxResp = await fetch(`https://api.fxtwitter.com/${encodeURIComponent(handle || 'i')}/status/${id}`);
         if (fxResp.ok) {
