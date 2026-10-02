@@ -3,10 +3,11 @@
 // ==========================================
 
 export const XP_RULES = {
-    THREAD_CREATION: 25,
-    REPLY_CREATION: 10,
-    OMIKUJI_DRAW: 20,
-    DAILY_STREAK: 5 // per consecutive day
+    THREAD_CREATION: 20,
+    REPLY_CREATION: 8,
+    OMIKUJI_DRAW: 16,
+    DAILY_STREAK: 4, // per consecutive day
+    REACTION_RECEIVED: 4
 };
 
 export const OMIKUJI_FORTUNES = [

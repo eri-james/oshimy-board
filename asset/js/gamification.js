@@ -6,10 +6,10 @@
 const GUEST_GAMIFICATION_KEY = 'oshimy_guest_gamification';
 
 const CLIENT_XP_RULES = {
-    THREAD: 25,
-    REPLY: 10,
-    OMIKUJI: 20,
-    STREAK: 5
+    THREAD: 20,
+    REPLY: 8,
+    OMIKUJI: 16,
+    STREAK: 4
 };
 
 const CLIENT_FORTUNES = [
@@ -337,7 +337,7 @@ function renderOmikujiModalContent() {
                 </div>
                 <div style="margin-top: 16px;">
                     <button type="button" id="omikujiDrawActionBtn" class="btn-draw-omikuji" onclick="executeOmikujiDraw()">
-                        🎋 Draw Daily Fortune (+20 XP)
+                        🎋 Draw Daily Fortune (+16 XP)
                     </button>
                 </div>
             </div>
@@ -553,10 +553,10 @@ function renderProfileModalContent() {
         <details style="font-size:0.8rem; opacity:0.9; background:rgba(0,0,0,0.02); border:1px solid var(--border-color); border-radius:6px; padding:8px 10px;">
             <summary style="cursor:pointer; font-weight:bold;">💡 How to Earn EXP & Ranks</summary>
             <ul style="margin:8px 0 0 16px; padding:0; line-height:1.5;">
-                <li><b>Create New Thread:</b> +25 XP</li>
-                <li><b>Post a Reply:</b> +10 XP</li>
-                <li><b>Draw Daily Omikuji:</b> +20 XP</li>
-                <li><b>Daily Streak:</b> +5 XP bonus per consecutive day</li>
+                <li><b>Create New Thread:</b> +20 XP</li>
+                <li><b>Post a Reply:</b> +8 XP</li>
+                <li><b>Draw Daily Omikuji:</b> +16 XP</li>
+                <li><b>Daily Streak:</b> +4 XP bonus per consecutive day</li>
                 <li style="margin-top:4px; opacity:0.85;"><b>Level Up Requirement:</b> Starts at 25 XP (Lv.1), increasing by +10% max XP each level.</li>
             </ul>
         </details>

@@ -53,10 +53,11 @@ function getDb(env) {
 
 // Gamification Rules & Fortunes
 const XP_RULES = {
-    THREAD_CREATION: 25,
-    REPLY_CREATION: 10,
-    OMIKUJI_DRAW: 20,
-    DAILY_STREAK: 5
+    THREAD_CREATION: 20,
+    REPLY_CREATION: 8,
+    OMIKUJI_DRAW: 16,
+    DAILY_STREAK: 4,
+    REACTION_RECEIVED: 4
 };
 
 const OMIKUJI_FORTUNES = [
@@ -1736,7 +1737,7 @@ export async function onRequest(context) {
                 reactionsObj[stamp] = (parseInt(reactionsObj[stamp], 10) || 0) + 1;
                 active = true;
                 if (target.user_id) {
-                    await awardD1UserXp(db, target.user_id, 5);
+                    await awardD1UserXp(db, target.user_id, XP_RULES.REACTION_RECEIVED || 4);
                 }
             }
 

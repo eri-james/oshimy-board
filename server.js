@@ -1776,9 +1776,9 @@ app.post('/api/reactions/toggle', (req, res) => {
             reactionsObj[stamp] = (parseInt(reactionsObj[stamp], 10) || 0) + 1;
             active = true;
 
-            // Award +5 XP to post author if reacted by someone else
+            // Award +4 XP to post author if reacted by someone else (-20%)
             if (post.user_id && post.ip_hash !== ipHash) {
-                awardUserXP(db, post.user_id, 5);
+                awardUserXP(db, post.user_id, XP_RULES.REACTION_RECEIVED || 4);
             }
         }
 
