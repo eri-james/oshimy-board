@@ -563,6 +563,9 @@ function getCatalogThumbnail(mediaUrl) {
         return `<img src="${escapeHtml(primarySrc)}" class="catalog-thumb" alt="Pixiv Image" loading="lazy" decoding="async" onerror="if(this.dataset.triedHelper!=='true'){this.dataset.triedHelper='true';this.src='${escapeHtml(helperFallback)}';}else{this.onerror=null;this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\' style=\\'color:#0096fa;\\'>🎨</div>';}">`;
     }
     if (media.type === 'video') {
+        if (media.thumbUrl) {
+            return `<img src="${escapeHtml(media.thumbUrl)}" class="catalog-thumb" alt="Video Thumbnail" loading="lazy" decoding="async" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\'>▶️</div>';">`;
+        }
         return `<video src="${escapeHtml(media.url)}#t=0.001" preload="metadata" muted playsinline class="catalog-thumb" style="pointer-events:none;"></video>`;
     }
     if (media.type === 'audio') {

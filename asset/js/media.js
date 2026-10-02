@@ -152,9 +152,21 @@ function getMediaType(url) {
         return { type: 'reddit', subreddit, id, isShare, url: cleanUrl, vxUrl, isSpoiler };
     }
 
-    // 8. Direct HTML5 Video Detection
+    // 8. Direct HTML5 Video Detection (supports optional ?thumb=https://... concrete thumbnail URL)
     if (cleanUrl.match(/\.(mp4|webm|ogv|mov|m4v)(?:\?.*)?$/i)) {
-        return { type: 'video', url: cleanUrl, isSpoiler };
+        let videoSrc = cleanUrl;
+        let thumbUrl = null;
+        const thumbMatch = cleanUrl.match(/^([^?#]+\.(?:mp4|webm|ogv|mov|m4v))\?thumb=(.+)$/i);
+        if (thumbMatch) {
+            videoSrc = thumbMatch[1];
+            try {
+                const decoded = decodeURIComponent(thumbMatch[2].trim());
+                if (/^https?:\/\//i.test(decoded)) thumbUrl = decoded;
+            } catch (_) {
+                if (/^https?:\/\//i.test(thumbMatch[2].trim())) thumbUrl = thumbMatch[2].trim();
+            }
+        }
+        return { type: 'video', url: videoSrc, thumbUrl, isSpoiler };
     }
 
     // 9. Direct HTML5 Audio Detection
@@ -311,9 +323,10 @@ function renderMedia(url) {
 
     // 7. Direct Video
     if (media.type === 'video') {
+        const posterAttr = media.thumbUrl ? ` poster="${escapeHtml(media.thumbUrl)}"` : '';
         return `
             <div class="media-container${spoilerClass}" onclick="openLightbox('video', '${escapeHtml(media.url)}')" style="cursor:pointer;" title="Click to play Video">
-                <video src="${escapeHtml(media.url)}#t=0.001" preload="metadata" muted playsinline style="max-width:200px; max-height:200px; object-fit:cover; display:block; pointer-events:none; border:none;"></video>
+                <video src="${escapeHtml(media.url)}#t=0.001"${posterAttr} preload="metadata" muted playsinline style="max-width:200px; max-height:200px; object-fit:cover; display:block; pointer-events:none; border:none;"></video>
                 <div class="play-overlay">▶</div>
                 ${spoilerOverlay}
             </div>
@@ -1538,11 +1551,12 @@ const ALLOWED_VIDEO_MIMES = ['video/mp4', 'video/webm'];
 function inspectAndValidateVideoFile(file) {
     return new Promise((resolve, reject) => {
         const video = document.createElement('video');
-        video.preload = 'metadata';
+        video.preload = 'auto';
         video.muted = true;
         video.playsInline = true;
         const objectUrl = URL.createObjectURL(file);
         let settled = false;
+        let retriedBlackFrame = false;
 
         const cleanup = () => {
             try {
@@ -1592,17 +1606,16 @@ function inspectAndValidateVideoFile(file) {
                 return;
             }
 
-            // Seek slightly to grab a thumbnail frame for the preview box
-            video.currentTime = Math.min(0.2, duration / 2 || 0);
+            // Seek slightly into the clip to grab a visible first-frame thumbnail
+            video.currentTime = Math.min(0.25, (duration || 0) * 0.2 || 0.05);
         };
 
         video.onseeked = () => {
             if (settled) return;
-            settled = true;
-            clearTimeout(timer);
             let thumbDataUrl = '';
+            let canvas = null;
             try {
-                const canvas = document.createElement('canvas');
+                canvas = document.createElement('canvas');
                 const vw = video.videoWidth || 640;
                 const vh = video.videoHeight || 360;
                 const scale = Math.min(1, 960 / Math.max(vw, 1));
@@ -1610,17 +1623,54 @@ function inspectAndValidateVideoFile(file) {
                 canvas.height = Math.max(1, Math.round(vh * scale));
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                thumbDataUrl = canvas.toDataURL('image/jpeg', 0.84);
+
+                // If the very start of the clip is a fade-from-black, seek slightly further once
+                if (!retriedBlackFrame && (video.duration || 0) > 0.6) {
+                    const sampleW = Math.min(32, canvas.width);
+                    const sampleH = Math.min(32, canvas.height);
+                    const imgData = ctx.getImageData(0, 0, sampleW, sampleH).data;
+                    let sumLum = 0;
+                    const totalPx = Math.max(1, imgData.length / 4);
+                    for (let i = 0; i < imgData.length; i += 4) {
+                        sumLum += (imgData[i] + imgData[i + 1] + imgData[i + 2]) / 3;
+                    }
+                    if (sumLum / totalPx < 6) {
+                        retriedBlackFrame = true;
+                        video.currentTime = Math.min(1.2, (video.duration || 1) * 0.35);
+                        return;
+                    }
+                }
+
+                thumbDataUrl = canvas.toDataURL('image/jpeg', 0.85);
             } catch (_) {}
 
-            const meta = {
-                duration: Math.max(1, Math.round(video.duration || 0)),
-                width: video.videoWidth || 0,
-                height: video.videoHeight || 0,
-                thumbDataUrl
-            };
-            cleanup();
-            resolve(meta);
+            settled = true;
+            clearTimeout(timer);
+            const durationVal = Math.max(1, Math.round(video.duration || 0));
+            const widthVal = video.videoWidth || 0;
+            const heightVal = video.videoHeight || 0;
+
+            if (canvas && typeof canvas.toBlob === 'function') {
+                canvas.toBlob((thumbBlob) => {
+                    cleanup();
+                    resolve({
+                        duration: durationVal,
+                        width: widthVal,
+                        height: heightVal,
+                        thumbDataUrl,
+                        thumbBlob: thumbBlob || null
+                    });
+                }, 'image/jpeg', 0.85);
+            } else {
+                cleanup();
+                resolve({
+                    duration: durationVal,
+                    width: widthVal,
+                    height: heightVal,
+                    thumbDataUrl,
+                    thumbBlob: null
+                });
+            }
         };
 
         video.src = objectUrl;
@@ -1825,7 +1875,8 @@ async function uploadMediaFile(file, targetInputEl = null) {
             }
         }
 
-        const resp = await fetch('/api/upload', {
+        // Upload the video and (if video) its extracted first-frame JPEG thumbnail to Catbox/ImgBB in parallel (zero D1 storage)
+        const videoUploadPromise = fetch('/api/upload', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/octet-stream',
@@ -1833,19 +1884,27 @@ async function uploadMediaFile(file, targetInputEl = null) {
                 'X-Mime-Type': processed.mimeType || 'application/octet-stream'
             },
             body: processed.blob
-        });
-        const result = await resp.json();
+        }).then(r => r.json());
 
-        if (result.success && result.url) {
-            if (isAllowedVideo && videoMeta && videoMeta.thumbDataUrl) {
-                await fetch('/api/video/thumbnail', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url: result.url, thumb_base64: videoMeta.thumbDataUrl })
-                }).catch(() => {});
-            }
+        const thumbUploadPromise = (isAllowedVideo && videoMeta && videoMeta.thumbBlob)
+            ? fetch('/api/upload', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/octet-stream',
+                    'X-File-Name': encodeURIComponent(`vthumb_${Date.now()}.jpg`),
+                    'X-Mime-Type': 'image/jpeg'
+                },
+                body: videoMeta.thumbBlob
+            }).then(r => r.json()).catch(() => null)
+            : Promise.resolve(null);
+
+        const [result, thumbResult] = await Promise.all([videoUploadPromise, thumbUploadPromise]);
+
+        if (result && result.success && result.url) {
+            const concreteThumbUrl = (thumbResult && thumbResult.success && thumbResult.url) ? thumbResult.url : null;
+            const finalMediaUrl = concreteThumbUrl ? `${result.url}?thumb=${concreteThumbUrl}` : result.url;
             if (urlInput) {
-                urlInput.value = result.url;
+                urlInput.value = finalMediaUrl;
                 urlInput.dispatchEvent(new Event('input'));
             }
             if (isAllowedVideo) {

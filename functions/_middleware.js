@@ -439,18 +439,30 @@ async function resolveSocialMedia(rawUrl, origin) {
         }
     }
 
-    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream, including Catbox.moe videos)
+    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream, including Catbox.moe videos with optional ?thumb= concrete thumbnail URL)
     if (/\.(mp4|webm|mov)(?:\?.*)?$/i.test(cleanUrl) || cleanUrl.includes('/api/proxy/stream')) {
-        let absVideoUrl = cleanUrl;
-        if (cleanUrl.startsWith('/') && origin) {
-            absVideoUrl = `${origin}${cleanUrl}`;
+        let baseVideoUrl = cleanUrl;
+        let concreteThumbUrl = null;
+        const thumbMatch = cleanUrl.match(/^([^?#]+\.(?:mp4|webm|mov))\?thumb=(.+)$/i);
+        if (thumbMatch) {
+            baseVideoUrl = thumbMatch[1];
+            try {
+                const decoded = decodeURIComponent(thumbMatch[2].trim());
+                if (/^https?:\/\//i.test(decoded)) concreteThumbUrl = decoded;
+            } catch (_) {
+                if (/^https?:\/\//i.test(thumbMatch[2].trim())) concreteThumbUrl = thumbMatch[2].trim();
+            }
         }
-        const thumbUrl = origin ? `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}` : blackThumbUrl;
+        let absVideoUrl = baseVideoUrl;
+        if (baseVideoUrl.startsWith('/') && origin) {
+            absVideoUrl = `${origin}${baseVideoUrl}`;
+        }
+        const thumbUrl = concreteThumbUrl || (origin ? `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}` : blackThumbUrl);
         return {
             type: 'video',
             imageUrl: thumbUrl,
             videoUrl: absVideoUrl,
-            videoType: cleanUrl.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4',
+            videoType: baseVideoUrl.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4',
             width: 1280,
             height: 720,
             source: 'Video'

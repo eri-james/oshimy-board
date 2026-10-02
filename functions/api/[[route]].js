@@ -635,57 +635,9 @@ export async function onRequest(context) {
             }
         }
 
-        // Video Thumbnail route for Cloudflare Pages (serves stored first-frame JPEG, or falls back to static black thumbnail PNG)
-        if (route === 'video' && path[1] === 'thumbnail') {
-            if (method === 'POST') {
-                try {
-                    const body = await request.json();
-                    const rawUrl = (body?.url || '').trim().replace(/^spoiler:/i, '').replace(/#spoiler$/i, '').trim();
-                    const rawThumb = body?.thumb_base64 || '';
-                    if (!rawUrl || !rawThumb) return json({ error: 'Missing url or thumb_base64' }, 400);
-
-                    const hashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rawUrl));
-                    const urlHash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 32);
-                    const commaIdx = rawThumb.indexOf(',');
-                    const b64Clean = (commaIdx !== -1 ? rawThumb.slice(commaIdx + 1) : rawThumb).replace(/\s+/g, '');
-                    if (b64Clean.length > 100 && b64Clean.length < 2500000) {
-                        await db.prepare('INSERT OR REPLACE INTO site_settings (key, value) VALUES (?, ?)').bind(`vthumb_${urlHash}`, b64Clean).run();
-                    }
-                    return json({ success: true });
-                } catch (_) {
-                    return json({ error: 'Failed to store video thumbnail' }, 500);
-                }
-            }
-
-            if (method === 'GET') {
-                const videoUrl = url.searchParams.get('url');
-                if (videoUrl) {
-                    try {
-                        const cleanVidUrl = decodeURIComponent(videoUrl).trim().replace(/^spoiler:/i, '').replace(/#spoiler$/i, '').trim();
-                        const hashBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(cleanVidUrl));
-                        const urlHash = Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 32);
-                        const row = await db.prepare('SELECT value FROM site_settings WHERE key = ?').bind(`vthumb_${urlHash}`).first();
-                        if (row && row.value) {
-                            const binaryStr = atob(row.value);
-                            const bytes = new Uint8Array(binaryStr.length);
-                            for (let i = 0; i < binaryStr.length; i++) {
-                                bytes[i] = binaryStr.charCodeAt(i);
-                            }
-                            if (bytes.byteLength > 100) {
-                                return new Response(bytes, {
-                                    status: 200,
-                                    headers: {
-                                        'Content-Type': 'image/jpeg',
-                                        'Cache-Control': 'public, max-age=2592000, immutable',
-                                        'Access-Control-Allow-Origin': '*'
-                                    }
-                                });
-                            }
-                        }
-                    } catch (_) {}
-                }
-                return Response.redirect(`${url.origin}/asset/img/video_black_thumb.png`, 302);
-            }
+        // Video Thumbnail fallback route for Cloudflare Pages (zero D1 reads/writes; falls back to static black thumbnail PNG if no ?thumb= was attached)
+        if (route === 'video' && path[1] === 'thumbnail' && method === 'GET') {
+            return Response.redirect(`${url.origin}/asset/img/video_black_thumb.png`, 302);
         }
 
         // Video Streaming Proxy route supporting HTTP Range (scrubbing, streaming)

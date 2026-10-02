@@ -564,31 +564,6 @@ function extractVideoFirstFrame(cleanVidUrl, thumbFile, timeoutMs = 5500) {
     });
 }
 
-// Store client-captured video first-frame thumbnail on upload
-app.post('/api/video/thumbnail', (req, res) => {
-    try {
-        const { url: videoUrl, thumb_base64 } = req.body || {};
-        if (!videoUrl || !thumb_base64 || typeof videoUrl !== 'string' || typeof thumb_base64 !== 'string') {
-            return res.status(400).json({ error: 'Missing url or thumb_base64' });
-        }
-        const cleanVidUrl = videoUrl.trim().replace(/^spoiler:/i, '').replace(/#spoiler$/i, '').trim();
-        const urlHash = crypto.createHash('sha256').update(cleanVidUrl).digest('hex').substring(0, 32);
-        const commaIdx = thumb_base64.indexOf(',');
-        const b64Clean = (commaIdx !== -1 ? thumb_base64.slice(commaIdx + 1) : thumb_base64).replace(/\s+/g, '');
-        const buf = Buffer.from(b64Clean, 'base64');
-        if (buf.length > 100 && buf.length < 2 * 1024 * 1024) {
-            const thumbFile = path.join(VIDEO_THUMBS_DIR, `${urlHash}.jpg`);
-            try { fs.writeFileSync(thumbFile, buf); } catch (_) {}
-            try {
-                db.prepare('INSERT OR REPLACE INTO site_settings (key, value) VALUES (?, ?)').run(`vthumb_${urlHash}`, b64Clean);
-            } catch (_) {}
-        }
-        return res.json({ success: true });
-    } catch (e) {
-        return res.status(500).json({ error: 'Failed to store thumbnail' });
-    }
-});
-
 // Dynamic Video Thumbnail Extraction & Caching Endpoint (First frame of video, black thumb only as fallback)
 app.get('/api/video/thumbnail', async (req, res) => {
     const videoUrl = req.query.url;
@@ -616,21 +591,7 @@ app.get('/api/video/thumbnail', async (req, res) => {
             return fs.createReadStream(thumbFile).pipe(res);
         }
 
-        // 2. Serve from DB site_settings if stored on upload
-        try {
-            const row = db.prepare('SELECT value FROM site_settings WHERE key = ?').get(`vthumb_${urlHash}`);
-            if (row && row.value) {
-                const buf = Buffer.from(row.value, 'base64');
-                if (buf.length > 100) {
-                    try { fs.writeFileSync(thumbFile, buf); } catch (_) {}
-                    res.setHeader('Content-Type', 'image/jpeg');
-                    res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
-                    return res.send(buf);
-                }
-            }
-        } catch (_) {}
-
-        // 3. Extract first frame using ffmpeg
+        // 2. Extract first frame using ffmpeg
         const ok = await extractVideoFirstFrame(cleanVidUrl, thumbFile, 6000);
         if (ok && fs.existsSync(thumbFile) && fs.statSync(thumbFile).size > 100) {
             res.setHeader('Content-Type', 'image/jpeg');
@@ -638,7 +599,7 @@ app.get('/api/video/thumbnail', async (req, res) => {
             return fs.createReadStream(thumbFile).pipe(res);
         }
 
-        // 4. Fallback to black thumbnail only if extraction fails
+        // 3. Fallback to black thumbnail only if extraction fails
         res.setHeader('Content-Type', 'image/png');
         res.setHeader('Cache-Control', 'public, max-age=300');
         return res.sendFile(fallbackPath);
@@ -2536,13 +2497,25 @@ async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redd
         }
     }
 
-    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream, including Catbox.moe videos)
+    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream, including Catbox.moe videos with optional ?thumb= concrete thumbnail URL)
     if (/\.(mp4|webm|mov)(?:\?.*)?$/i.test(cleanUrl) || cleanUrl.includes('/api/proxy/stream')) {
-        let absVideoUrl = cleanUrl;
-        if (cleanUrl.startsWith('/') && origin) {
-            absVideoUrl = `${origin}${cleanUrl}`;
+        let baseVideoUrl = cleanUrl;
+        let concreteThumbUrl = null;
+        const thumbMatch = cleanUrl.match(/^([^?#]+\.(?:mp4|webm|mov))\?thumb=(.+)$/i);
+        if (thumbMatch) {
+            baseVideoUrl = thumbMatch[1];
+            try {
+                const decoded = decodeURIComponent(thumbMatch[2].trim());
+                if (/^https?:\/\//i.test(decoded)) concreteThumbUrl = decoded;
+            } catch (_) {
+                if (/^https?:\/\//i.test(thumbMatch[2].trim())) concreteThumbUrl = thumbMatch[2].trim();
+            }
         }
-        if (origin && /^https?:\/\//i.test(absVideoUrl)) {
+        let absVideoUrl = baseVideoUrl;
+        if (baseVideoUrl.startsWith('/') && origin) {
+            absVideoUrl = `${origin}${baseVideoUrl}`;
+        }
+        if (!concreteThumbUrl && origin && /^https?:\/\//i.test(absVideoUrl)) {
             try {
                 const urlHash = crypto.createHash('sha256').update(absVideoUrl).digest('hex').substring(0, 32);
                 const thumbFile = path.join(VIDEO_THUMBS_DIR, `${urlHash}.jpg`);
@@ -2552,12 +2525,12 @@ async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redd
                 }
             } catch (_) {}
         }
-        const thumbUrl = origin ? `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}` : blackThumbUrl;
+        const thumbUrl = concreteThumbUrl || (origin ? `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}` : blackThumbUrl);
         return {
             type: 'video',
             imageUrl: thumbUrl,
             videoUrl: absVideoUrl,
-            videoType: cleanUrl.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4',
+            videoType: baseVideoUrl.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4',
             width: 1280,
             height: 720,
             source: 'Video'
