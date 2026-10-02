@@ -557,9 +557,10 @@ app.get('/api/video/thumbnail', async (req, res) => {
             return fs.createReadStream(thumbFile).pipe(res);
         }
 
-        // Generate first frame using ffmpeg
+        // Generate first frame using ffmpeg with browser User-Agent so Catbox/CDNs do not block Lavf
         const child = spawn('/usr/bin/ffmpeg', [
             '-y',
+            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             '-ss', '00:00:00.100',
             '-i', cleanVidUrl,
             '-vframes', '1',
@@ -2480,18 +2481,44 @@ async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redd
         }
     }
 
-    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream)
+    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream, including Catbox.moe videos)
     if (/\.(mp4|webm|mov)(?:\?.*)?$/i.test(cleanUrl) || cleanUrl.includes('/api/proxy/stream')) {
         let absVideoUrl = cleanUrl;
         if (cleanUrl.startsWith('/') && origin) {
             absVideoUrl = `${origin}${cleanUrl}`;
         }
-        const thumbUrl = origin ? `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}` : blackThumbUrl;
+        let thumbUrl = blackThumbUrl;
+        if (origin && /^https?:\/\//i.test(absVideoUrl)) {
+            try {
+                const urlHash = crypto.createHash('sha256').update(absVideoUrl).digest('hex').substring(0, 32);
+                const thumbFile = path.join(VIDEO_THUMBS_DIR, `${urlHash}.jpg`);
+                if (fs.existsSync(thumbFile) && fs.statSync(thumbFile).size > 100) {
+                    thumbUrl = `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}`;
+                } else {
+                    // Kick off non-blocking background thumbnail extraction for future crawls while serving instant static PNG now
+                    const bgChild = spawn('/usr/bin/ffmpeg', [
+                        '-y',
+                        '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                        '-ss', '00:00:00.100',
+                        '-i', absVideoUrl,
+                        '-vframes', '1',
+                        '-an',
+                        '-vf', "scale='min(1280,iw)':-2",
+                        '-q:v', '3',
+                        '-f', 'image2',
+                        thumbFile
+                    ], { timeout: 6000, stdio: 'ignore' });
+                    bgChild.on('error', () => {});
+                }
+            } catch (_) {}
+        }
         return {
             type: 'video',
             imageUrl: thumbUrl,
             videoUrl: absVideoUrl,
-            videoType: cleanUrl.includes('.webm') ? 'video/webm' : 'video/mp4',
+            videoType: cleanUrl.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4',
+            width: 1280,
+            height: 720,
             source: 'Video'
         };
     }
@@ -2620,7 +2647,7 @@ app.get('*', async (req, res) => {
 
         if (threadId) {
             try {
-                const thread = db.prepare('SELECT id, board, subject, comment, media_url, created_at, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = threads.id) as reply_count FROM threads WHERE id = ?').get(threadId);
+                const thread = db.prepare('SELECT id, board, name, subject, comment, media_url, created_at, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = threads.id) as reply_count FROM threads WHERE id = ?').get(threadId);
                 if (thread) {
                     const replyId = req.query.r || req.query.reply;
                     let reply = null;
@@ -2704,18 +2731,19 @@ app.get('*', async (req, res) => {
                         const vidType = resolvedMedia.videoType || 'video/mp4';
                         html = html
                             .replace(/<meta property="og:type" content=".*?">/, `<meta property="og:type" content="video.other">`)
-                            .replace(/<meta name="twitter:card" content=".*?">/, `<meta name="twitter:card" content="player">`);
+                            .replace(/<meta name="twitter:card" content=".*?">/, `<meta name="twitter:card" content="player">`)
+                            .replace(/\s*<meta name="twitter:site" content=".*?">/, '')
+                            .replace(/\s*<meta name="twitter:image" content=".*?">/, '');
                         extraMeta += `
     <meta property="og:video" content="${escapeAttr(resolvedMedia.videoUrl)}">
     <meta property="og:video:secure_url" content="${escapeAttr(resolvedMedia.videoUrl)}">
     <meta property="og:video:type" content="${escapeAttr(vidType)}">
     <meta property="og:video:width" content="${vidWidth}">
     <meta property="og:video:height" content="${vidHeight}">
-    <meta name="twitter:player:stream" content="${escapeAttr(resolvedMedia.videoUrl)}">
-    <meta name="twitter:player:stream:content_type" content="${escapeAttr(vidType)}">
-    <meta name="twitter:player" content="${escapeAttr(resolvedMedia.videoUrl)}">
     <meta name="twitter:player:width" content="${vidWidth}">
-    <meta name="twitter:player:height" content="${vidHeight}">`;
+    <meta name="twitter:player:height" content="${vidHeight}">
+    <meta name="twitter:player:stream" content="${escapeAttr(resolvedMedia.videoUrl)}">
+    <meta name="twitter:player:stream:content_type" content="${escapeAttr(vidType)}">`;
                     } else {
                         html = html
                             .replace(/<meta property="og:type" content=".*?">/, `<meta property="og:type" content="article">`)
@@ -2755,10 +2783,10 @@ app.get('*', async (req, res) => {
 
         // Check if a specific board is requested
         const boardKey = req.query.b;
-        if (boardKey && SFW_BOARDS[boardKey]) {
-            const b = SFW_BOARDS[boardKey];
-            const pageTitle = `${b.title} | OshiMY`;
-            const pageDesc = `${b.description} Participate in anonymous discussions on /${boardKey}/ at OshiMY.`;
+        const boardMeta = boardKey ? (SFW_BOARDS[boardKey] || BOARDS[boardKey]) : null;
+        if (boardKey && boardMeta) {
+            const pageTitle = `${boardMeta.title} | OshiMY`;
+            const pageDesc = `${boardMeta.description || `Anonymous discussions on /${boardKey}/ at OshiMY.`} Participate in anonymous discussions on /${boardKey}/ at OshiMY.`;
             const canonicalUrl = `${origin}/?b=${boardKey}`;
             const siteName = `OshiMY - /${boardKey}/`;
 

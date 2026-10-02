@@ -1,7 +1,7 @@
 // Cloudflare Pages Edge Middleware
 // Dynamically rewrites SEO, OpenGraph & Twitter tags for crawlers, Discord, WhatsApp, and Google
 
-const SFW_BOARDS = {
+const ALL_BOARDS = {
     'myvt':  { title: '/myvt/ - MY VTuber', description: 'Malaysian Virtual YouTuber discussions, streams, talents, and community banter.' },
     'vt':    { title: '/vt/ - SEA & Global VTuber', description: 'Southeast Asian and international VTuber discussion, talents, and agency updates.' },
     'vg':    { title: '/vg/ - Video Games', description: 'Video games, gacha, co-op lobbies, gameplay clips, and gamer discussion.' },
@@ -9,7 +9,11 @@ const SFW_BOARDS = {
     'ca':    { title: '/ca/ - Cosplay & Art', description: 'Cosplay photography, illustrations, artwork showcases, and craft discussion.' },
     'tech':  { title: '/tech/ - Tech Stuff', description: 'Hardware, software, gadgets, PC building, streaming gear, and tech topics.' },
     'mamak': { title: '/mamak/ - MY Stuff & Off-topic', description: 'Malaysian daily life, mamak session banter, food, and general off-topic lounge.' },
-    'rqr':   { title: '/rqr/ - Board Request & Report', description: 'Feedback, board requests, bug reports, and suggestions for OshiMY.' }
+    'rqr':   { title: '/rqr/ - Board Request & Report', description: 'Feedback, board requests, bug reports, and suggestions for OshiMY.' },
+    'myvth': { title: '/myvth/ - MY VTuber (18+)', description: 'NSFW Malaysian VTuber discussion board on OshiMY.' },
+    'vth':   { title: '/vth/ - Global VTuber (18+)', description: 'NSFW SEA & Global VTuber discussion board on OshiMY.' },
+    'hm':    { title: '/hm/ - Hentai & Doujin (18+)', description: 'NSFW Hentai, manga, and doujin discussion board on OshiMY.' },
+    'hg':    { title: '/hg/ - Hentai Games & VN (18+)', description: 'NSFW Hentai games and visual novel discussion board on OshiMY.' }
 };
 
 // Helper sanitizers for HTML injection
@@ -435,18 +439,19 @@ async function resolveSocialMedia(rawUrl, origin) {
         }
     }
 
-    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream)
+    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream, including Catbox.moe videos)
     if (/\.(mp4|webm|mov)(?:\?.*)?$/i.test(cleanUrl) || cleanUrl.includes('/api/proxy/stream')) {
         let absVideoUrl = cleanUrl;
         if (cleanUrl.startsWith('/') && origin) {
             absVideoUrl = `${origin}${cleanUrl}`;
         }
-        const thumbUrl = origin ? `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}` : blackThumbUrl;
         return {
             type: 'video',
-            imageUrl: thumbUrl,
+            imageUrl: blackThumbUrl,
             videoUrl: absVideoUrl,
-            videoType: cleanUrl.includes('.webm') ? 'video/webm' : 'video/mp4',
+            videoType: cleanUrl.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4',
+            width: 1280,
+            height: 720,
             source: 'Video'
         };
     }
@@ -508,7 +513,7 @@ export async function onRequest(context) {
         // Check if thread is requested
         const threadId = url.searchParams.get('t') || url.searchParams.get('thread');
         if (threadId) {
-            const thread = await env.DB.prepare('SELECT id, board, subject, comment, media_url, created_at, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = threads.id) as reply_count FROM threads WHERE id = ?').bind(threadId).first();
+            const thread = await env.DB.prepare('SELECT id, board, name, subject, comment, media_url, created_at, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = threads.id) as reply_count FROM threads WHERE id = ?').bind(threadId).first();
             if (thread) {
                 const replyId = url.searchParams.get('r') || url.searchParams.get('reply');
                 let reply = null;
@@ -582,11 +587,10 @@ export async function onRequest(context) {
 <meta property="og:video:type" content="${escapeAttr(vidType)}">
 <meta property="og:video:width" content="${vidWidth}">
 <meta property="og:video:height" content="${vidHeight}">
-<meta name="twitter:player:stream" content="${escapeAttr(resolvedMedia.videoUrl)}">
-<meta name="twitter:player:stream:content_type" content="${escapeAttr(vidType)}">
-<meta name="twitter:player" content="${escapeAttr(resolvedMedia.videoUrl)}">
 <meta name="twitter:player:width" content="${vidWidth}">
-<meta name="twitter:player:height" content="${vidHeight}">`, { html: true });
+<meta name="twitter:player:height" content="${vidHeight}">
+<meta name="twitter:player:stream" content="${escapeAttr(resolvedMedia.videoUrl)}">
+<meta name="twitter:player:stream:content_type" content="${escapeAttr(vidType)}">`, { html: true });
                             }
                         }
                     })
@@ -599,9 +603,10 @@ export async function onRequest(context) {
                     .on('meta[property="og:image"]', { element(el) { el.setAttribute('content', displayImage); } })
                     .on('meta[property="og:url"]', { element(el) { el.setAttribute('content', canonicalUrl); } })
                     .on('meta[name="twitter:card"]', { element(el) { el.setAttribute('content', isVideo ? 'player' : 'summary_large_image'); } })
+                    .on('meta[name="twitter:site"]', { element(el) { if (isVideo) el.remove(); } })
                     .on('meta[name="twitter:title"]', { element(el) { el.setAttribute('content', pageTitle); } })
                     .on('meta[name="twitter:description"]', { element(el) { el.setAttribute('content', pageDesc); } })
-                    .on('meta[name="twitter:image"]', { element(el) { el.setAttribute('content', displayImage); } })
+                    .on('meta[name="twitter:image"]', { element(el) { if (isVideo) el.remove(); else el.setAttribute('content', displayImage); } })
                     .on('link[rel="canonical"]', { element(el) { el.setAttribute('href', canonicalUrl); } })
                     .transform(response);
             }
@@ -609,8 +614,8 @@ export async function onRequest(context) {
 
         // Check if board is requested
         const boardKey = url.searchParams.get('b');
-        if (boardKey && SFW_BOARDS[boardKey]) {
-            const b = SFW_BOARDS[boardKey];
+        if (boardKey && ALL_BOARDS[boardKey]) {
+            const b = ALL_BOARDS[boardKey];
             const pageTitle = `${b.title} | OshiMY`;
             const pageDesc = `${b.description} Participate in anonymous discussions on /${boardKey}/ at OshiMY.`;
             const canonicalUrl = `${origin}/?b=${boardKey}`;

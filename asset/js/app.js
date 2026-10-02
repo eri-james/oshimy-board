@@ -1797,7 +1797,8 @@ async function submitReplyCore({ threadId, comment, name, media_url, source = 'm
                 if (typeof hydrateTwitterEmbeds === 'function') hydrateTwitterEmbeds();
                 if (typeof hydrateRedditEmbeds === 'function') hydrateRedditEmbeds();
             } else if (currentThreadId !== threadId) {
-                window.location.hash = `#thread_${threadId}`;
+                history.pushState(null, '', `?b=${currentBoard}&t=${threadId}`);
+                router();
             }
 
             if (qrStatus) {
@@ -2046,7 +2047,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (typeof clearUploadedMedia === 'function') clearUploadedMedia();
                 const badge = document.getElementById('mediaDetectedBadge');
                 if (badge) { badge.style.display = 'none'; badge.innerHTML = ''; }
-                window.location.hash = `#thread_${res.thread.id}`;
+                history.pushState(null, '', `?b=${currentBoard}&t=${res.thread.id}`);
+                router();
             }
         } catch (err) {
             showToast("Posting Error: " + err.message, 4000, "error");
@@ -2389,12 +2391,12 @@ async function openWatchlistModal() {
                         <div style="font-size:0.85em; opacity:0.8; margin-bottom:2px;">
                             <span style="font-weight:bold; color:var(--main-accent);">/${th.board}/</span> • ${th.reply_count} replies • Last bumped ${timeAgo}
                         </div>
-                        <a href="?b=${th.board}#thread_${th.id}" onclick="closeWatchlistModal()" style="font-weight:bold; text-decoration:none; color:var(--text-color); font-size:0.95em; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                        <a href="?b=${th.board}&t=${th.id}" onclick="closeWatchlistModal()" style="font-weight:bold; text-decoration:none; color:var(--text-color); font-size:0.95em; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
                             ${title}
                         </a>
                     </div>
                     <div style="display:flex; gap:6px; flex-shrink:0;">
-                        <a href="?b=${th.board}#thread_${th.id}" onclick="closeWatchlistModal()" style="padding:4px 8px; background:var(--main-accent); color:#fff; border-radius:4px; font-size:0.8em; text-decoration:none; font-weight:bold;">Visit ➜</a>
+                        <a href="?b=${th.board}&t=${th.id}" onclick="closeWatchlistModal()" style="padding:4px 8px; background:var(--main-accent); color:#fff; border-radius:4px; font-size:0.8em; text-decoration:none; font-weight:bold;">Visit ➜</a>
                         <button onclick="unwatchFromModal('${th.id}')" style="padding:4px 8px; background:none; border:1px solid var(--border-color); border-radius:4px; font-size:0.8em; cursor:pointer; color:var(--text-color);">✕</button>
                     </div>
                 </div>
@@ -2460,7 +2462,7 @@ async function openNotificationsModal() {
                         "${snippet}"
                     </div>
                     <div style="text-align:right;">
-                        <a href="?b=${n.board}#thread_${n.thread_id}" onclick="closeNotificationsModal()" style="font-size:0.8em; font-weight:bold; color:var(--main-accent); text-decoration:none;">
+                        <a href="?b=${n.board}&t=${n.thread_id}&r=${n.id}#post_${n.id}" onclick="closeNotificationsModal()" style="font-size:0.8em; font-weight:bold; color:var(--main-accent); text-decoration:none;">
                             View in Thread [➜]
                         </a>
                     </div>

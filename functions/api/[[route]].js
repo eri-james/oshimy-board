@@ -635,6 +635,11 @@ export async function onRequest(context) {
             }
         }
 
+        // Video Thumbnail fallback route for Cloudflare Pages (serves static 200 OK PNG thumbnail)
+        if (route === 'video' && path[1] === 'thumbnail' && method === 'GET') {
+            return Response.redirect(`${url.origin}/asset/img/video_black_thumb.png`, 302);
+        }
+
         // Video Streaming Proxy route supporting HTTP Range (scrubbing, streaming)
         if (route === 'proxy' && path[1] === 'video' && method === 'GET') {
             const rawUrl = url.searchParams.get('url');
