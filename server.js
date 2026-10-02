@@ -714,7 +714,7 @@ app.get('/api/twitter/tweet', async (req, res) => {
         const pages = imageItems.map((img, idx) => ({
             pageIndex: idx,
             displayUrl: img.url,
-            helperUrl: img.url,
+            helperUrl: `https://wsrv.nl/?url=${encodeURIComponent(img.url)}&output=webp&we`,
             originalUrl: img.url
         }));
 

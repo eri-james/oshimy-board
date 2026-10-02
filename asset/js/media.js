@@ -459,7 +459,7 @@ async function fetchTweetWithFixTweetFallback(id, handle) {
                 const pages = photos.map((p, idx) => ({
                     pageIndex: idx,
                     displayUrl: p.url,
-                    helperUrl: p.url,
+                    helperUrl: `https://wsrv.nl/?url=${encodeURIComponent(p.url)}&output=webp&we`,
                     originalUrl: p.url
                 }));
                 const mapped = {
@@ -894,14 +894,33 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         }
     }
 
-    if (type === 'image' && img) {
+    if ((type === 'image' || type === 'pixiv_image') && img) {
+        img.referrerPolicy = "no-referrer";
+        img.dataset.triedFallback = 'false';
+        img.dataset.originalSrc = content;
+        img.onerror = function() {
+            const original = this.dataset.originalSrc || content;
+            if (this.dataset.triedFallback !== 'true' && original && !this.src.includes('wsrv.nl')) {
+                this.dataset.triedFallback = 'true';
+                this.src = `https://wsrv.nl/?url=${encodeURIComponent(original)}&output=webp&we`;
+            } else {
+                this.style.display = 'none';
+                if (custom) {
+                    custom.innerHTML = `
+                        <div style="background:#111827; color:#fff; border-radius:12px; padding:22px 20px; text-align:center; max-width:400px; border:2px solid #ef4444; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
+                            <div style="font-size:1.1em; color:#ef4444; font-weight:bold; margin-bottom:8px;">⚠️ Image Unavailable</div>
+                            <div style="font-size:0.85em; opacity:0.8; margin-bottom:14px;">This image could not be loaded directly from the source host.</div>
+                            <a href="${escapeHtml(original)}" target="_blank" rel="noopener noreferrer" style="background:#1DA1F2; color:#fff; font-size:0.85em; font-weight:bold; padding:8px 16px; border-radius:6px; text-decoration:none; display:inline-block;">Open Source Link ↗</a>
+                        </div>
+                    `;
+                    custom.style.display = 'block';
+                }
+            }
+        };
+        img.onload = function() {
+            this.style.display = 'block';
+        };
         img.src = content;
-        img.style.display = 'block';
-    } 
-    else if (type === 'pixiv_image' && img) {
-        // Fallback for direct images where no illustration ID was detected
-        img.src = content;
-        img.style.display = 'block';
     }
     else if ((type === 'video' || type === 'audio') && vid) {
         vid.src = content;
@@ -945,11 +964,25 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                         return;
                     }
 
-                    // 2. If it has multiple images: open in multi-page carousel with ◀ ▶ keys!
-                    if (t.pages && t.pages.length > 1) {
+                    // 2. If it has images (single or multi-page): open in interactive gallery with post caption & link!
+                    const tweetPages = (t.pages && t.pages.length > 0) 
+                        ? t.pages 
+                        : (t.imageUrl ? [{
+                            pageIndex: 0,
+                            displayUrl: t.imageUrl,
+                            helperUrl: `https://wsrv.nl/?url=${encodeURIComponent(t.imageUrl)}&output=webp&we`,
+                            originalUrl: t.imageUrl
+                        }] : []);
+
+                    if (tweetPages.length > 0) {
                         currentGallery = {
                             platform: 'x',
-                            pages: t.pages,
+                            pages: tweetPages.map((p, idx) => ({
+                                pageIndex: idx,
+                                displayUrl: p.displayUrl || p.url,
+                                helperUrl: `https://wsrv.nl/?url=${encodeURIComponent(p.originalUrl || p.displayUrl || p.url)}&output=webp&we`,
+                                originalUrl: p.originalUrl || p.displayUrl || p.url
+                            })),
                             currentIndex: 0,
                             title: t.text.slice(0, 80) || `Tweet by @${t.authorHandle}`,
                             author: `${t.authorName} (@${t.authorHandle})`,
@@ -964,17 +997,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                         return;
                     }
 
-                    // 3. If single image: open directly in lightbox
-                    if (t.imageUrl) {
-                        if (custom) custom.style.display = 'none';
-                        if (img) {
-                            img.src = t.imageUrl;
-                            img.style.display = 'block';
-                        }
-                        return;
-                    }
-
-                    // 4. If text-only tweet: show clean, high-fidelity dark-mode card
+                    // 3. If text-only tweet: show clean, high-fidelity dark-mode card
                     if (custom) {
                         custom.innerHTML = `
                             <div style="background:#111827; color:#fff; border-radius:12px; padding:20px 24px; text-align:left; max-width:min(90vw, 550px); border:1.5px solid #1DA1F2; box-shadow:0 8px 36px rgba(0,0,0,0.9);">
@@ -1402,7 +1425,11 @@ function closeLightbox(e) {
 
         const img = document.getElementById('lbImg');
         if (img) {
+            img.onerror = null;
+            img.onload = null;
             img.removeAttribute('src');
+            img.dataset.triedFallback = 'false';
+            delete img.dataset.originalSrc;
         }
 
         const custom = document.getElementById('lbCustom');
