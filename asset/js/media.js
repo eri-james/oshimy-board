@@ -1782,130 +1782,171 @@ const UPLOAD_LIMITS = {
 const ALLOWED_IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const ALLOWED_VIDEO_MIMES = ['video/mp4', 'video/webm'];
 
-// Inspects an MP4/WebM file in <50ms using an offscreen <video> element to check duration, resolution & capture a preview frame
+// Inspects an MP4/WebM file using an offscreen <video> element to check duration, resolution & capture a preview frame
 function inspectAndValidateVideoFile(file) {
     return new Promise((resolve, reject) => {
+        if (typeof document === 'undefined' || typeof URL === 'undefined' || !URL.createObjectURL) {
+            return resolve(null);
+        }
+
         const video = document.createElement('video');
         video.preload = 'auto';
         video.muted = true;
         video.playsInline = true;
-        const objectUrl = URL.createObjectURL(file);
+
+        let objectUrl = null;
+        try {
+            objectUrl = URL.createObjectURL(file);
+        } catch (_) {
+            return resolve(null);
+        }
+
         let settled = false;
-        let retriedBlackFrame = false;
+        let frameExtracted = false;
 
         const cleanup = () => {
             try {
+                video.pause();
                 video.removeAttribute('src');
                 video.load();
-                URL.revokeObjectURL(objectUrl);
             } catch (_) {}
+            if (objectUrl) {
+                try { URL.revokeObjectURL(objectUrl); } catch (_) {}
+                objectUrl = null;
+            }
         };
 
-        const timer = setTimeout(() => {
-            if (!settled) {
-                settled = true;
-                cleanup();
-                reject(new Error('Could not read video metadata. Please ensure the file is a valid MP4 or WebM video.'));
-            }
-        }, 6000);
-
-        video.onerror = () => {
+        const finish = (result) => {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
             cleanup();
-            reject(new Error('Unsupported or corrupted video codec. Please use standard MP4 (H.264) or WebM (VP8/VP9).'));
+            resolve(result);
         };
 
-        video.onloadedmetadata = () => {
-            if (settled) return;
-            const duration = video.duration || 0;
-            const width = video.videoWidth || 0;
-            const height = video.videoHeight || 0;
-
-            if (duration > UPLOAD_LIMITS.VIDEO_MAX_DURATION_SEC) {
-                settled = true;
-                clearTimeout(timer);
-                cleanup();
-                reject(new Error(`Video is ${Math.round(duration)}s long. Maximum allowed clip duration is ${UPLOAD_LIMITS.VIDEO_MAX_DURATION_SEC}s (1m 30s).`));
-                return;
-            }
-
-            const longEdge = Math.max(width, height);
-            const shortEdge = Math.min(width, height);
-            if (longEdge > UPLOAD_LIMITS.VIDEO_MAX_LONG_EDGE || shortEdge > UPLOAD_LIMITS.VIDEO_MAX_SHORT_EDGE) {
-                settled = true;
-                clearTimeout(timer);
-                cleanup();
-                reject(new Error(`Video resolution (${width}×${height}) exceeds 1080p maximum (${UPLOAD_LIMITS.VIDEO_MAX_LONG_EDGE}×${UPLOAD_LIMITS.VIDEO_MAX_SHORT_EDGE}).`));
-                return;
-            }
-
-            // Seek slightly into the clip to grab a visible first-frame thumbnail
-            video.currentTime = Math.min(0.25, (duration || 0) * 0.2 || 0.05);
-        };
-
-        video.onseeked = () => {
-            if (settled) return;
-            let thumbDataUrl = '';
-            let canvas = null;
-            try {
-                canvas = document.createElement('canvas');
-                const vw = video.videoWidth || 640;
-                const vh = video.videoHeight || 360;
-                const scale = Math.min(1, 960 / Math.max(vw, 1));
-                canvas.width = Math.max(1, Math.round(vw * scale));
-                canvas.height = Math.max(1, Math.round(vh * scale));
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                // If the very start of the clip is a fade-from-black, seek slightly further once
-                if (!retriedBlackFrame && (video.duration || 0) > 0.6) {
-                    const sampleW = Math.min(32, canvas.width);
-                    const sampleH = Math.min(32, canvas.height);
-                    const imgData = ctx.getImageData(0, 0, sampleW, sampleH).data;
-                    let sumLum = 0;
-                    const totalPx = Math.max(1, imgData.length / 4);
-                    for (let i = 0; i < imgData.length; i += 4) {
-                        sumLum += (imgData[i] + imgData[i + 1] + imgData[i + 2]) / 3;
-                    }
-                    if (sumLum / totalPx < 6) {
-                        retriedBlackFrame = true;
-                        video.currentTime = Math.min(1.2, (video.duration || 1) * 0.35);
-                        return;
-                    }
-                }
-
-                thumbDataUrl = canvas.toDataURL('image/jpeg', 0.85);
-            } catch (_) {}
-
-            settled = true;
-            clearTimeout(timer);
-            const durationVal = Math.max(1, Math.round(video.duration || 0));
-            const widthVal = video.videoWidth || 0;
-            const heightVal = video.videoHeight || 0;
-
-            if (canvas && typeof canvas.toBlob === 'function') {
-                canvas.toBlob((thumbBlob) => {
-                    cleanup();
-                    resolve({
-                        duration: durationVal,
-                        width: widthVal,
-                        height: heightVal,
-                        thumbDataUrl,
-                        thumbBlob: thumbBlob || null
-                    });
-                }, 'image/jpeg', 0.85);
-            } else {
-                cleanup();
-                resolve({
-                    duration: durationVal,
-                    width: widthVal,
-                    height: heightVal,
-                    thumbDataUrl,
+        // Generous timer for larger 20MB videos or slower devices; never fails the upload on timeout
+        const timer = setTimeout(() => {
+            if (!settled) {
+                finish({
+                    duration: 0,
+                    width: 0,
+                    height: 0,
+                    thumbDataUrl: '',
                     thumbBlob: null
                 });
             }
+        }, 8000);
+
+        // If the browser's native decoder cannot decode this specific video container/codec locally
+        // (e.g. H.265/HEVC, VP9 profile 2, AV1, or unindexed WebM), do NOT block the upload!
+        // Resolve safely with a clean fallback so the valid video file is uploaded to Catbox.moe.
+        video.onerror = () => {
+            if (settled) return;
+            console.warn('Video inspection: browser local decoder reported codec warning for', file.name, video.error);
+            finish({
+                duration: 0,
+                width: 0,
+                height: 0,
+                thumbDataUrl: '',
+                thumbBlob: null
+            });
+        };
+
+        const validateDimensionsAndDuration = () => {
+            const rawDuration = video.duration;
+            // Only validate duration if finite (WebM streaming or unindexed WebM can report Infinity or NaN)
+            if (typeof rawDuration === 'number' && isFinite(rawDuration) && rawDuration > UPLOAD_LIMITS.VIDEO_MAX_DURATION_SEC) {
+                settled = true;
+                clearTimeout(timer);
+                cleanup();
+                const err = new Error(`Video is ${Math.round(rawDuration)}s long. Maximum allowed clip duration is ${UPLOAD_LIMITS.VIDEO_MAX_DURATION_SEC}s (1m 30s).`);
+                err.isLimitViolation = true;
+                reject(err);
+                return false;
+            }
+
+            const width = video.videoWidth || 0;
+            const height = video.videoHeight || 0;
+            if (width > 0 && height > 0) {
+                const longEdge = Math.max(width, height);
+                const shortEdge = Math.min(width, height);
+                if (longEdge > UPLOAD_LIMITS.VIDEO_MAX_LONG_EDGE || shortEdge > UPLOAD_LIMITS.VIDEO_MAX_SHORT_EDGE) {
+                    settled = true;
+                    clearTimeout(timer);
+                    cleanup();
+                    const err = new Error(`Video resolution (${width}×${height}) exceeds 1080p maximum (${UPLOAD_LIMITS.VIDEO_MAX_LONG_EDGE}×${UPLOAD_LIMITS.VIDEO_MAX_SHORT_EDGE}).`);
+                    err.isLimitViolation = true;
+                    reject(err);
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        const captureFrame = () => {
+            if (frameExtracted || settled) return;
+            frameExtracted = true;
+
+            const durationVal = (typeof video.duration === 'number' && isFinite(video.duration)) ? Math.max(1, Math.round(video.duration)) : 0;
+            const widthVal = video.videoWidth || 0;
+            const heightVal = video.videoHeight || 0;
+
+            let canvas = null;
+            let thumbDataUrl = '';
+
+            try {
+                if (widthVal > 0 && heightVal > 0) {
+                    canvas = document.createElement('canvas');
+                    const scale = Math.min(1, 960 / Math.max(widthVal, 1));
+                    canvas.width = Math.max(1, Math.round(widthVal * scale));
+                    canvas.height = Math.max(1, Math.round(heightVal * scale));
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    thumbDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                }
+            } catch (err) {
+                console.warn('Canvas frame capture notice:', err);
+            }
+
+            if (canvas && typeof canvas.toBlob === 'function') {
+                try {
+                    canvas.toBlob((thumbBlob) => {
+                        finish({
+                            duration: durationVal,
+                            width: widthVal,
+                            height: heightVal,
+                            thumbDataUrl,
+                            thumbBlob: thumbBlob || null
+                        });
+                    }, 'image/jpeg', 0.85);
+                    return;
+                } catch (_) {}
+            }
+
+            finish({
+                duration: durationVal,
+                width: widthVal,
+                height: heightVal,
+                thumbDataUrl,
+                thumbBlob: null
+            });
+        };
+
+        video.onloadedmetadata = () => {
+            if (!validateDimensionsAndDuration()) return;
+            if (video.readyState >= 2) {
+                captureFrame();
+            }
+        };
+
+        video.onloadeddata = () => {
+            if (!validateDimensionsAndDuration()) return;
+            captureFrame();
+        };
+
+        video.oncanplay = () => {
+            if (!validateDimensionsAndDuration()) return;
+            captureFrame();
         };
 
         video.src = objectUrl;
@@ -1916,17 +1957,21 @@ function inspectAndValidateVideoFile(file) {
 let currentPreviewObjectUrl = null;
 
 async function prepareMediaBlobForUpload(file) {
+    const fileName = (file && file.name || '').toLowerCase();
+    const fallbackMime = fileName.endsWith('.webm') ? 'video/webm' : (fileName.endsWith('.mp4') ? 'video/mp4' : 'application/octet-stream');
+    const effectiveMime = (file && file.type) ? file.type.toLowerCase() : fallbackMime;
+
     // Keep animated GIFs, Videos, WebP, and any static image <= 5MB completely untouched (exact original bytes!)
     if (
         !file ||
-        !file.type.startsWith('image/') ||
-        file.type === 'image/gif' ||
-        file.type === 'image/webp' ||
+        !effectiveMime.startsWith('image/') ||
+        effectiveMime === 'image/gif' ||
+        effectiveMime === 'image/webp' ||
         file.size <= UPLOAD_LIMITS.STATIC_IMAGE_MAX_FINAL
     ) {
         return {
             blob: file,
-            mimeType: file.type || 'application/octet-stream',
+            mimeType: effectiveMime,
             filename: file.name || `upload_${Date.now()}`,
             originalSize: file.size,
             compressedSize: file.size
@@ -2029,19 +2074,19 @@ async function uploadMediaFile(file, targetInputEl = null) {
         showToast("Unsupported video format. Only MP4 and WebM videos are allowed.", 4000, "error");
         return;
     }
-    const isAllowedImage = ALLOWED_IMAGE_MIMES.includes(mime);
-    const isAllowedVideo = ALLOWED_VIDEO_MIMES.includes(mime);
+    const isAllowedImage = ALLOWED_IMAGE_MIMES.includes(mime) || /\.(jpe?g|png|webp|gif)$/i.test(fileName);
+    const isAllowedVideo = ALLOWED_VIDEO_MIMES.includes(mime) || fileName.endsWith('.mp4') || fileName.endsWith('.webm');
     if (!isAllowedImage && !isAllowedVideo) {
         showToast("Unsupported format. Allowed: JPG, PNG, WebP, GIF, MP4, and WebM.", 4000, "error");
         return;
     }
 
     // 2. Tiered Size Validation
-    if (mime === 'image/gif' && file.size > UPLOAD_LIMITS.GIF_MAX_BYTES) {
+    if ((mime === 'image/gif' || fileName.endsWith('.gif')) && file.size > UPLOAD_LIMITS.GIF_MAX_BYTES) {
         showToast(`GIF is ${(file.size / (1024 * 1024)).toFixed(1)}MB. Max allowed for GIFs is 8MB.`, 4000, "error");
         return;
     }
-    if (isAllowedImage && mime !== 'image/gif' && file.size > UPLOAD_LIMITS.STATIC_IMAGE_MAX_RAW) {
+    if (isAllowedImage && mime !== 'image/gif' && !fileName.endsWith('.gif') && file.size > UPLOAD_LIMITS.STATIC_IMAGE_MAX_RAW) {
         showToast(`Image is ${(file.size / (1024 * 1024)).toFixed(1)}MB. Max raw image size is 15MB (5MB after compression).`, 4000, "error");
         return;
     }
@@ -2065,12 +2110,17 @@ async function uploadMediaFile(file, targetInputEl = null) {
         try {
             videoMeta = await inspectAndValidateVideoFile(file);
         } catch (vErr) {
-            if (uploadBtn) {
-                uploadBtn.innerText = "📤 Upload (Catbox)";
-                uploadBtn.disabled = false;
+            // Only halt if it is an explicit duration or resolution limit violation
+            if (vErr && vErr.isLimitViolation) {
+                if (uploadBtn) {
+                    uploadBtn.innerText = "📤 Upload (Catbox)";
+                    uploadBtn.disabled = false;
+                }
+                showToast(vErr.message, 4500, "error");
+                return;
             }
-            showToast(vErr.message || "Invalid video file", 4500, "error");
-            return;
+            console.warn("Non-fatal video inspection notice, proceeding with upload:", vErr);
+            videoMeta = null;
         }
     }
 
@@ -2081,15 +2131,16 @@ async function uploadMediaFile(file, targetInputEl = null) {
     if (previewBox && (!targetInputEl || targetInputEl.id === 'imageInput')) {
         previewBox.style.display = 'flex';
         if (previewInfo) {
+            const hasMetaDetails = videoMeta && videoMeta.duration && videoMeta.width && videoMeta.height;
             previewInfo.innerText = isAllowedVideo
-                ? `Uploading ${videoMeta ? `${videoMeta.duration}s (${videoMeta.width}×${videoMeta.height})` : ''} video to Catbox.moe...`
+                ? `Uploading ${hasMetaDetails ? `${videoMeta.duration}s (${videoMeta.width}×${videoMeta.height}) ` : ''}video to Catbox.moe...`
                 : 'Uploading to Catbox.moe...';
         }
     }
 
     try {
         const processed = await prepareMediaBlobForUpload(file);
-        if (!isAllowedVideo && mime !== 'image/gif' && processed.compressedSize > UPLOAD_LIMITS.STATIC_IMAGE_MAX_FINAL) {
+        if (!isAllowedVideo && mime !== 'image/gif' && !fileName.endsWith('.gif') && processed.compressedSize > UPLOAD_LIMITS.STATIC_IMAGE_MAX_FINAL) {
             throw new Error('Image exceeds 5MB limit even after compression.');
         }
 
@@ -2100,6 +2151,9 @@ async function uploadMediaFile(file, targetInputEl = null) {
             }
             if (isAllowedVideo && videoMeta && videoMeta.thumbDataUrl) {
                 previewImg.src = videoMeta.thumbDataUrl;
+                previewImg.style.display = 'block';
+            } else if (isAllowedVideo) {
+                previewImg.src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="320" height="180" fill="%231a1a24"/><text x="160" y="90" font-family="sans-serif" font-weight="bold" font-size="24" fill="%2300f2fe" text-anchor="middle" dominant-baseline="middle">🎬 Video Clip</text><text x="160" y="125" font-family="sans-serif" font-size="13" fill="%239ca3af" text-anchor="middle">Ready to Upload</text></svg>';
                 previewImg.style.display = 'block';
             } else if (processed.blob && processed.mimeType.startsWith('image/')) {
                 currentPreviewObjectUrl = URL.createObjectURL(processed.blob);
