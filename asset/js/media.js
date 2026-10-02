@@ -1603,11 +1603,14 @@ function inspectAndValidateVideoFile(file) {
             let thumbDataUrl = '';
             try {
                 const canvas = document.createElement('canvas');
-                canvas.width = Math.min(320, video.videoWidth || 320);
-                canvas.height = Math.min(180, video.videoHeight || 180);
+                const vw = video.videoWidth || 640;
+                const vh = video.videoHeight || 360;
+                const scale = Math.min(1, 960 / Math.max(vw, 1));
+                canvas.width = Math.max(1, Math.round(vw * scale));
+                canvas.height = Math.max(1, Math.round(vh * scale));
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                thumbDataUrl = canvas.toDataURL('image/webp', 0.75);
+                thumbDataUrl = canvas.toDataURL('image/jpeg', 0.84);
             } catch (_) {}
 
             const meta = {
@@ -1834,6 +1837,13 @@ async function uploadMediaFile(file, targetInputEl = null) {
         const result = await resp.json();
 
         if (result.success && result.url) {
+            if (isAllowedVideo && videoMeta && videoMeta.thumbDataUrl) {
+                await fetch('/api/video/thumbnail', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: result.url, thumb_base64: videoMeta.thumbDataUrl })
+                }).catch(() => {});
+            }
             if (urlInput) {
                 urlInput.value = result.url;
                 urlInput.dispatchEvent(new Event('input'));

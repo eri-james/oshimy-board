@@ -531,7 +531,65 @@ app.get('/api/pixiv/artwork', async (req, res) => {
     }
 });
 
-// Dynamic Video Thumbnail Extraction & Caching Endpoint
+// Helper to extract and cache first frame of a video URL via ffmpeg
+function extractVideoFirstFrame(cleanVidUrl, thumbFile, timeoutMs = 5500) {
+    return new Promise((resolve) => {
+        if (fs.existsSync(thumbFile) && fs.statSync(thumbFile).size > 100) {
+            return resolve(true);
+        }
+        let settled = false;
+        const done = (ok) => {
+            if (settled) return;
+            settled = true;
+            resolve(Boolean(ok && fs.existsSync(thumbFile) && fs.statSync(thumbFile).size > 100));
+        };
+        try {
+            const child = spawn('/usr/bin/ffmpeg', [
+                '-y',
+                '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                '-ss', '00:00:00.100',
+                '-i', cleanVidUrl,
+                '-vframes', '1',
+                '-an',
+                '-vf', "scale='min(1280,iw)':-2",
+                '-q:v', '3',
+                '-f', 'image2',
+                thumbFile
+            ], { timeout: timeoutMs });
+            child.on('close', (code) => done(code === 0));
+            child.on('error', () => done(false));
+        } catch (_) {
+            done(false);
+        }
+    });
+}
+
+// Store client-captured video first-frame thumbnail on upload
+app.post('/api/video/thumbnail', (req, res) => {
+    try {
+        const { url: videoUrl, thumb_base64 } = req.body || {};
+        if (!videoUrl || !thumb_base64 || typeof videoUrl !== 'string' || typeof thumb_base64 !== 'string') {
+            return res.status(400).json({ error: 'Missing url or thumb_base64' });
+        }
+        const cleanVidUrl = videoUrl.trim().replace(/^spoiler:/i, '').replace(/#spoiler$/i, '').trim();
+        const urlHash = crypto.createHash('sha256').update(cleanVidUrl).digest('hex').substring(0, 32);
+        const commaIdx = thumb_base64.indexOf(',');
+        const b64Clean = (commaIdx !== -1 ? thumb_base64.slice(commaIdx + 1) : thumb_base64).replace(/\s+/g, '');
+        const buf = Buffer.from(b64Clean, 'base64');
+        if (buf.length > 100 && buf.length < 2 * 1024 * 1024) {
+            const thumbFile = path.join(VIDEO_THUMBS_DIR, `${urlHash}.jpg`);
+            try { fs.writeFileSync(thumbFile, buf); } catch (_) {}
+            try {
+                db.prepare('INSERT OR REPLACE INTO site_settings (key, value) VALUES (?, ?)').run(`vthumb_${urlHash}`, b64Clean);
+            } catch (_) {}
+        }
+        return res.json({ success: true });
+    } catch (e) {
+        return res.status(500).json({ error: 'Failed to store thumbnail' });
+    }
+});
+
+// Dynamic Video Thumbnail Extraction & Caching Endpoint (First frame of video, black thumb only as fallback)
 app.get('/api/video/thumbnail', async (req, res) => {
     const videoUrl = req.query.url;
     const fallbackPath = path.join(__dirname, 'asset', 'img', 'video_black_thumb.png');
@@ -541,7 +599,7 @@ app.get('/api/video/thumbnail', async (req, res) => {
     }
 
     try {
-        const cleanVidUrl = decodeURIComponent(videoUrl).trim();
+        const cleanVidUrl = decodeURIComponent(videoUrl).trim().replace(/^spoiler:/i, '').replace(/#spoiler$/i, '').trim();
         // SSRF protection: only permit http/https schemes, reject loopback / internal private targets
         if (!/^https?:\/\//i.test(cleanVidUrl) || cleanVidUrl.includes('localhost') || cleanVidUrl.includes('127.0.0.1')) {
             res.setHeader('Content-Type', 'image/png');
@@ -551,45 +609,42 @@ app.get('/api/video/thumbnail', async (req, res) => {
         const urlHash = crypto.createHash('sha256').update(cleanVidUrl).digest('hex').substring(0, 32);
         const thumbFile = path.join(VIDEO_THUMBS_DIR, `${urlHash}.jpg`);
 
+        // 1. Serve from disk cache if available
         if (fs.existsSync(thumbFile) && fs.statSync(thumbFile).size > 100) {
             res.setHeader('Content-Type', 'image/jpeg');
             res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
             return fs.createReadStream(thumbFile).pipe(res);
         }
 
-        // Generate first frame using ffmpeg with browser User-Agent so Catbox/CDNs do not block Lavf
-        const child = spawn('/usr/bin/ffmpeg', [
-            '-y',
-            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            '-ss', '00:00:00.100',
-            '-i', cleanVidUrl,
-            '-vframes', '1',
-            '-an',
-            '-vf', "scale='min(1280,iw)':-2",
-            '-q:v', '3',
-            '-f', 'image2',
-            thumbFile
-        ], { timeout: 6000 });
-
-        let answered = false;
-        const answer = (success) => {
-            if (answered) return;
-            answered = true;
-            if (success && fs.existsSync(thumbFile) && fs.statSync(thumbFile).size > 100) {
-                res.setHeader('Content-Type', 'image/jpeg');
-                res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
-                return fs.createReadStream(thumbFile).pipe(res);
+        // 2. Serve from DB site_settings if stored on upload
+        try {
+            const row = db.prepare('SELECT value FROM site_settings WHERE key = ?').get(`vthumb_${urlHash}`);
+            if (row && row.value) {
+                const buf = Buffer.from(row.value, 'base64');
+                if (buf.length > 100) {
+                    try { fs.writeFileSync(thumbFile, buf); } catch (_) {}
+                    res.setHeader('Content-Type', 'image/jpeg');
+                    res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+                    return res.send(buf);
+                }
             }
-            res.setHeader('Content-Type', 'image/png');
-            res.setHeader('Cache-Control', 'public, max-age=86400');
-            return res.sendFile(fallbackPath);
-        };
+        } catch (_) {}
 
-        child.on('close', (code) => answer(code === 0));
-        child.on('error', () => answer(false));
+        // 3. Extract first frame using ffmpeg
+        const ok = await extractVideoFirstFrame(cleanVidUrl, thumbFile, 6000);
+        if (ok && fs.existsSync(thumbFile) && fs.statSync(thumbFile).size > 100) {
+            res.setHeader('Content-Type', 'image/jpeg');
+            res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+            return fs.createReadStream(thumbFile).pipe(res);
+        }
+
+        // 4. Fallback to black thumbnail only if extraction fails
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        return res.sendFile(fallbackPath);
     } catch (_) {
         res.setHeader('Content-Type', 'image/png');
-        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader('Cache-Control', 'public, max-age=300');
         return res.sendFile(fallbackPath);
     }
 });
@@ -2487,31 +2542,17 @@ async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redd
         if (cleanUrl.startsWith('/') && origin) {
             absVideoUrl = `${origin}${cleanUrl}`;
         }
-        let thumbUrl = blackThumbUrl;
         if (origin && /^https?:\/\//i.test(absVideoUrl)) {
             try {
                 const urlHash = crypto.createHash('sha256').update(absVideoUrl).digest('hex').substring(0, 32);
                 const thumbFile = path.join(VIDEO_THUMBS_DIR, `${urlHash}.jpg`);
-                if (fs.existsSync(thumbFile) && fs.statSync(thumbFile).size > 100) {
-                    thumbUrl = `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}`;
-                } else {
-                    // Kick off non-blocking background thumbnail extraction for future crawls while serving instant static PNG now
-                    const bgChild = spawn('/usr/bin/ffmpeg', [
-                        '-y',
-                        '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                        '-ss', '00:00:00.100',
-                        '-i', absVideoUrl,
-                        '-vframes', '1',
-                        '-an',
-                        '-vf', "scale='min(1280,iw)':-2",
-                        '-q:v', '3',
-                        '-f', 'image2',
-                        thumbFile
-                    ], { timeout: 6000, stdio: 'ignore' });
-                    bgChild.on('error', () => {});
+                // Pre-extract first frame during HTML crawl so when Discord requests /api/video/thumbnail 50ms later, it is already cached on disk
+                if (!fs.existsSync(thumbFile) || fs.statSync(thumbFile).size <= 100) {
+                    await extractVideoFirstFrame(absVideoUrl, thumbFile, 3800);
                 }
             } catch (_) {}
         }
+        const thumbUrl = origin ? `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}` : blackThumbUrl;
         return {
             type: 'video',
             imageUrl: thumbUrl,
@@ -2731,19 +2772,18 @@ app.get('*', async (req, res) => {
                         const vidType = resolvedMedia.videoType || 'video/mp4';
                         html = html
                             .replace(/<meta property="og:type" content=".*?">/, `<meta property="og:type" content="video.other">`)
-                            .replace(/<meta name="twitter:card" content=".*?">/, `<meta name="twitter:card" content="player">`)
-                            .replace(/\s*<meta name="twitter:site" content=".*?">/, '')
-                            .replace(/\s*<meta name="twitter:image" content=".*?">/, '');
+                            .replace(/<meta name="twitter:card" content=".*?">/, `<meta name="twitter:card" content="player">`);
                         extraMeta += `
     <meta property="og:video" content="${escapeAttr(resolvedMedia.videoUrl)}">
     <meta property="og:video:secure_url" content="${escapeAttr(resolvedMedia.videoUrl)}">
     <meta property="og:video:type" content="${escapeAttr(vidType)}">
     <meta property="og:video:width" content="${vidWidth}">
     <meta property="og:video:height" content="${vidHeight}">
-    <meta name="twitter:player:width" content="${vidWidth}">
-    <meta name="twitter:player:height" content="${vidHeight}">
     <meta name="twitter:player:stream" content="${escapeAttr(resolvedMedia.videoUrl)}">
-    <meta name="twitter:player:stream:content_type" content="${escapeAttr(vidType)}">`;
+    <meta name="twitter:player:stream:content_type" content="${escapeAttr(vidType)}">
+    <meta name="twitter:player" content="${escapeAttr(resolvedMedia.videoUrl)}">
+    <meta name="twitter:player:width" content="${vidWidth}">
+    <meta name="twitter:player:height" content="${vidHeight}">`;
                     } else {
                         html = html
                             .replace(/<meta property="og:type" content=".*?">/, `<meta property="og:type" content="article">`)

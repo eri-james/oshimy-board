@@ -445,9 +445,10 @@ async function resolveSocialMedia(rawUrl, origin) {
         if (cleanUrl.startsWith('/') && origin) {
             absVideoUrl = `${origin}${cleanUrl}`;
         }
+        const thumbUrl = origin ? `${origin}/api/video/thumbnail?url=${encodeURIComponent(absVideoUrl)}` : blackThumbUrl;
         return {
             type: 'video',
-            imageUrl: blackThumbUrl,
+            imageUrl: thumbUrl,
             videoUrl: absVideoUrl,
             videoType: cleanUrl.toLowerCase().includes('.webm') ? 'video/webm' : 'video/mp4',
             width: 1280,
@@ -587,10 +588,11 @@ export async function onRequest(context) {
 <meta property="og:video:type" content="${escapeAttr(vidType)}">
 <meta property="og:video:width" content="${vidWidth}">
 <meta property="og:video:height" content="${vidHeight}">
-<meta name="twitter:player:width" content="${vidWidth}">
-<meta name="twitter:player:height" content="${vidHeight}">
 <meta name="twitter:player:stream" content="${escapeAttr(resolvedMedia.videoUrl)}">
-<meta name="twitter:player:stream:content_type" content="${escapeAttr(vidType)}">`, { html: true });
+<meta name="twitter:player:stream:content_type" content="${escapeAttr(vidType)}">
+<meta name="twitter:player" content="${escapeAttr(resolvedMedia.videoUrl)}">
+<meta name="twitter:player:width" content="${vidWidth}">
+<meta name="twitter:player:height" content="${vidHeight}">`, { html: true });
                             }
                         }
                     })
@@ -603,10 +605,9 @@ export async function onRequest(context) {
                     .on('meta[property="og:image"]', { element(el) { el.setAttribute('content', displayImage); } })
                     .on('meta[property="og:url"]', { element(el) { el.setAttribute('content', canonicalUrl); } })
                     .on('meta[name="twitter:card"]', { element(el) { el.setAttribute('content', isVideo ? 'player' : 'summary_large_image'); } })
-                    .on('meta[name="twitter:site"]', { element(el) { if (isVideo) el.remove(); } })
                     .on('meta[name="twitter:title"]', { element(el) { el.setAttribute('content', pageTitle); } })
                     .on('meta[name="twitter:description"]', { element(el) { el.setAttribute('content', pageDesc); } })
-                    .on('meta[name="twitter:image"]', { element(el) { if (isVideo) el.remove(); else el.setAttribute('content', displayImage); } })
+                    .on('meta[name="twitter:image"]', { element(el) { el.setAttribute('content', displayImage); } })
                     .on('link[rel="canonical"]', { element(el) { el.setAttribute('href', canonicalUrl); } })
                     .transform(response);
             }
