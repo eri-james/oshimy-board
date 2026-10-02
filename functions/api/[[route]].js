@@ -895,20 +895,11 @@ export async function onRequest(context) {
                             const fxJson = await fxResp.json();
                             if (fxJson && fxJson.tweet) {
                                 const t = fxJson.tweet;
-                                tweetData = {
-                                    tweetID: t.id,
-                                    tweetURL: t.url,
-                                    text: t.text,
-                                    user_name: t.author?.name || handle,
-                                    user_screen_name: t.author?.screen_name || handle,
-                                    user_profile_image_url: t.author?.avatar_url,
-                                    likes: t.likes || 0,
-                                    retweets: t.retweets || 0,
-                        const allMedia = [
-                            ...(t.media?.all || []),
-                            ...(t.media?.videos || []),
-                            ...(t.media?.photos || [])
-                        ];
+                                const allMedia = [
+                                    ...(t.media?.all || []),
+                                    ...(t.media?.videos || []),
+                                    ...(t.media?.photos || [])
+                                ];
                         const seenUrls = new Set();
                         const uniqueMedia = [];
                         for (const m of allMedia) {

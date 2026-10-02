@@ -182,11 +182,28 @@ function getMediaType(url) {
 const embedMemoryCache = new Map();
 
 function getCachedEmbedMeta(key) {
-    if (embedMemoryCache.has(key)) return embedMemoryCache.get(key);
+    const isCorrupted = (item) => item && (
+        (item.mediaType === 'image' && item.imageUrl && (item.imageUrl.includes('.mp4') || item.imageUrl.includes('tweet_video'))) ||
+        (item.pages && item.pages.some(p => (p.displayUrl && p.displayUrl.includes('.mp4')) || (p.originalUrl && p.originalUrl.includes('.mp4'))))
+    );
+
+    if (embedMemoryCache.has(key)) {
+        const item = embedMemoryCache.get(key);
+        if (isCorrupted(item)) {
+            embedMemoryCache.delete(key);
+            try { sessionStorage.removeItem('oshimy_embed_' + key); } catch (_) {}
+            return null;
+        }
+        return item;
+    }
     try {
         const raw = sessionStorage.getItem('oshimy_embed_' + key);
         if (raw) {
             const parsed = JSON.parse(raw);
+            if (isCorrupted(parsed)) {
+                try { sessionStorage.removeItem('oshimy_embed_' + key); } catch (_) {}
+                return null;
+            }
             embedMemoryCache.set(key, parsed);
             return parsed;
         }
@@ -434,16 +451,51 @@ async function hydrateSinglePixivSlot(placeholder) {
     } catch (_) {}
 }
 
+function sanitizeTweetMedia(t) {
+    if (!t) return t;
+    const isMp4 = (u) => typeof u === 'string' && (u.includes('.mp4') || u.includes('tweet_video') || u.includes('video.twimg.com'));
+    if (!t.videoUrl && isMp4(t.imageUrl)) {
+        t.videoUrl = t.imageUrl;
+        t.mediaType = 'video';
+        t.imageUrl = null;
+    }
+    if (!t.videoUrl && t.pages && t.pages.length > 0 && isMp4(t.pages[0]?.displayUrl || t.pages[0]?.url)) {
+        t.videoUrl = t.pages[0].displayUrl || t.pages[0].url;
+        t.mediaType = 'video';
+    }
+    if (t.videoUrl && isMp4(t.videoUrl)) {
+        t.mediaType = 'video';
+        if (t.videoUrl.includes('tweet_video') || t.isGif) {
+            t.isGif = true;
+        }
+        if (t.imageUrl && isMp4(t.imageUrl)) {
+            t.imageUrl = null;
+        }
+        if (t.pages) {
+            t.pages = t.pages.filter(p => !isMp4(p?.displayUrl) && !isMp4(p?.originalUrl) && !isMp4(p?.url));
+            t.pageCount = t.pages.length;
+        }
+        if (!t.videoThumbnail || isMp4(t.videoThumbnail)) {
+            const vidMatch = t.videoUrl.match(/tweet_video\/([a-zA-Z0-9_-]+)\.mp4/i);
+            if (vidMatch) {
+                t.videoThumbnail = `https://pbs.twimg.com/tweet_video_thumb/${vidMatch[1]}.jpg`;
+            }
+        }
+    }
+    return t;
+}
+
 async function fetchTweetWithFixTweetFallback(id, handle) {
     const cached = getCachedEmbedMeta('tw_' + id);
-    if (cached) return cached;
+    if (cached) return sanitizeTweetMedia(cached);
 
     try {
         const resp = await fetch(`/api/twitter/tweet?id=${id}&handle=${encodeURIComponent(handle || 'i')}`);
         const data = await resp.json();
         if (data.success && data.tweet) {
-            setCachedEmbedMeta('tw_' + id, data.tweet);
-            return data.tweet;
+            const cleanTweet = sanitizeTweetMedia(data.tweet);
+            setCachedEmbedMeta('tw_' + id, cleanTweet);
+            return cleanTweet;
         }
     } catch (_) {}
 
@@ -491,8 +543,9 @@ async function fetchTweetWithFixTweetFallback(id, handle) {
                     pages,
                     pageCount: pages.length
                 };
-                setCachedEmbedMeta('tw_' + id, mapped);
-                return mapped;
+                const cleanMapped = sanitizeTweetMedia(mapped);
+                setCachedEmbedMeta('tw_' + id, cleanMapped);
+                return cleanMapped;
             }
         }
     } catch (_) {}
@@ -544,8 +597,9 @@ async function fetchTweetWithFixTweetFallback(id, handle) {
                     pages,
                     pageCount: pages.length
                 };
-                setCachedEmbedMeta('tw_' + id, mapped);
-                return mapped;
+                const cleanMapped = sanitizeTweetMedia(mapped);
+                setCachedEmbedMeta('tw_' + id, cleanMapped);
+                return cleanMapped;
             }
         }
     } catch (_) {}
@@ -558,8 +612,9 @@ async function hydrateSingleTwitterSlot(placeholder) {
     if (!id || placeholder.getAttribute('data-hydrated') === 'true') return;
     placeholder.setAttribute('data-hydrated', 'true');
 
-    const t = await fetchTweetWithFixTweetFallback(id, handle);
-    if (!t) return;
+    const rawT = await fetchTweetWithFixTweetFallback(id, handle);
+    if (!rawT) return;
+    const t = sanitizeTweetMedia(rawT);
 
     const slot = placeholder.querySelector('.tweet-thumb-slot');
     if (slot) {
@@ -1034,6 +1089,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         fetchTweetWithFixTweetFallback(tweetId, handle)
             .then(t => {
                 if (t) {
+                    t = sanitizeTweetMedia(t);
 
                     // 1. If it has a video or animated GIF:
                     if ((t.mediaType === 'video' || t.videoUrl) && t.videoUrl) {
