@@ -221,27 +221,9 @@ function generateBacklinks(scopeElement = null) {
     if (typeof hydrateRedditEmbeds === 'function') {
         hydrateRedditEmbeds();
     }
-}
-
-// ==========================================
-// TOAST NOTIFICATION
-// ==========================================
-let toastTimer = null;
-function showToast(message, duration = 3000) {
-    let toast = document.getElementById('siteToast');
-    if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'siteToast';
-        toast.className = 'site-toast';
-        document.body.appendChild(toast);
+    if (typeof hydrateTikTokEmbeds === 'function') {
+        hydrateTikTokEmbeds();
     }
-    toast.innerText = message;
-    toast.classList.add('show');
-
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => {
-        toast.classList.remove('show');
-    }, duration);
 }
 
 // ==========================================

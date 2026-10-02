@@ -155,7 +155,17 @@ async function resolveDirectRedditVideoUrl(rawVideoUrl, fallbackVidId = null) {
     return rawVideoUrl;
 }
 
-// Helper: Resolve any image, video, Pixiv, Twitter/X, Reddit, YouTube URL for rich Discord & messenger embeds
+function toTnktokUrl(cleanUrl) {
+    if (!cleanUrl || typeof cleanUrl !== 'string') return '';
+    const trimmed = cleanUrl.trim();
+    if (/https?:\/\/a\.tnktok\.com/i.test(trimmed)) return trimmed;
+    if (/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktxk\.com)/i.test(trimmed)) {
+        return trimmed.replace(/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktxk\.com)/i, 'https://a.tnktok.com');
+    }
+    return trimmed.replace(/https?:\/\/(?:www\.|m\.|vt\.|vm\.)?tiktok\.com/i, 'https://a.tnktok.com');
+}
+
+// Helper: Resolve any image, video, Pixiv, Twitter/X, Reddit, TikTok, YouTube URL for rich Discord & messenger embeds
 async function resolveSocialMedia(rawUrl, origin) {
     if (!rawUrl || typeof rawUrl !== 'string') {
         return { type: 'none', imageUrl: null, videoUrl: null, videoType: null, source: null };
@@ -465,7 +475,57 @@ async function resolveSocialMedia(rawUrl, origin) {
         }
     }
 
-    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream, including Catbox.moe videos with optional ?thumb= concrete thumbnail URL)
+    // 5. TikTok Video & Share URLs (handles tiktok.com, vt.tiktok.com, vm.tiktok.com, a.tnktok.com, tnktok.com)
+    const isTikTok = /(?:tiktok\.com|a\.tnktok\.com|tnktok\.com|vxtiktok\.com|tiktxk\.com)\//i.test(cleanUrl);
+    if (isTikTok) {
+        const tnktokUrl = toTnktokUrl(cleanUrl);
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4000);
+            const ttResp = await fetch(tnktokUrl, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+                redirect: 'follow'
+            });
+            clearTimeout(timeout);
+            if (ttResp.ok) {
+                const ttHtml = await ttResp.text();
+                const vidMatch = ttHtml.match(/<meta\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                 ttHtml.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']/i);
+                const imgMatch = ttHtml.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                 ttHtml.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+                const decodedImg = imgMatch && imgMatch[1] ? decodeHtmlEntities(imgMatch[1].trim()) : null;
+                if (vidMatch && vidMatch[1]) {
+                    return {
+                        type: 'video',
+                        imageUrl: decodedImg || blackThumbUrl,
+                        videoUrl: decodeHtmlEntities(vidMatch[1].trim()),
+                        videoType: 'video/mp4',
+                        source: 'TikTok'
+                    };
+                }
+                if (decodedImg) {
+                    return {
+                        type: 'image',
+                        imageUrl: decodedImg,
+                        videoUrl: null,
+                        videoType: null,
+                        source: 'TikTok'
+                    };
+                }
+            }
+        } catch (_) {}
+
+        return {
+            type: 'image',
+            imageUrl: blackThumbUrl,
+            videoUrl: null,
+            videoType: null,
+            source: 'TikTok'
+        };
+    }
+
+    // 6. Direct Video Files (.mp4, .webm, .mov or proxy stream, including Catbox.moe videos with optional ?thumb= concrete thumbnail URL)
     if (/\.(mp4|webm|mov)(?:\?.*)?$/i.test(cleanUrl) || cleanUrl.includes('/api/proxy/stream')) {
         let baseVideoUrl = cleanUrl;
         let concreteThumbUrl = null;

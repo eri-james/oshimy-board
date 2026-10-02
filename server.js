@@ -1164,6 +1164,105 @@ app.get('/api/reddit/post', async (req, res) => {
     }
 });
 
+// TikTok Video Details Resolver via a.tnktok.com helper proxy
+const tiktokCache = new Map();
+
+function toTnktokUrl(cleanUrl) {
+    if (!cleanUrl || typeof cleanUrl !== 'string') return '';
+    const trimmed = cleanUrl.trim();
+    if (/https?:\/\/a\.tnktok\.com/i.test(trimmed)) return trimmed;
+    if (/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktxk\.com)/i.test(trimmed)) {
+        return trimmed.replace(/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktxk\.com)/i, 'https://a.tnktok.com');
+    }
+    return trimmed.replace(/https?:\/\/(?:www\.|m\.|vt\.|vm\.)?tiktok\.com/i, 'https://a.tnktok.com');
+}
+
+app.get('/api/tiktok/video', async (req, res) => {
+    const rawUrl = req.query.url;
+    if (!rawUrl) {
+        return res.status(400).json({ error: 'Missing TikTok url' });
+    }
+    const cleanUrl = String(rawUrl).trim();
+    if (tiktokCache.has(cleanUrl)) {
+        return res.json({ success: true, video: tiktokCache.get(cleanUrl) });
+    }
+
+    try {
+        const proxyUrl = toTnktokUrl(cleanUrl);
+        const userMatch = cleanUrl.match(/@([a-zA-Z0-9_.-]+)/i);
+        let authorHandle = userMatch ? userMatch[1] : null;
+
+        let title = '';
+        let description = '';
+        let videoUrl = null;
+        let thumbnailUrl = null;
+
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4000);
+            const resp = await fetch(proxyUrl, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+                redirect: 'follow'
+            });
+            clearTimeout(timeout);
+
+            if (resp.ok) {
+                const html = await resp.text();
+                const vidMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                 html.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']/i);
+                const imgMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                 html.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+                const titleMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:title|twitter:title)["']\s+content=["']([^"']+)["']/i) ||
+                                   html.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:title|twitter:title)["']/i);
+                const descMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:description|twitter:description)["']\s+content=["']([^"']+)["']/i) ||
+                                  html.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:description|twitter:description)["']/i);
+
+                if (vidMatch && vidMatch[1]) videoUrl = decodeHtmlEntities(vidMatch[1].trim());
+                if (imgMatch && imgMatch[1]) thumbnailUrl = decodeHtmlEntities(imgMatch[1].trim());
+                if (titleMatch && titleMatch[1]) {
+                    const rawTitle = decodeHtmlEntities(titleMatch[1].trim());
+                    if (rawTitle && !rawTitle.toLowerCase().includes('error') && !rawTitle.toLowerCase().includes('not find')) {
+                        title = rawTitle;
+                    }
+                }
+                if (descMatch && descMatch[1]) {
+                    const rawDesc = decodeHtmlEntities(descMatch[1].trim());
+                    if (rawDesc && !rawDesc.toLowerCase().includes('error')) {
+                        description = rawDesc;
+                    }
+                }
+            }
+        } catch (_) {}
+
+        if (!authorHandle && title) {
+            const authorMatch = title.match(/@([a-zA-Z0-9_.-]+)/i);
+            if (authorMatch) authorHandle = authorMatch[1];
+        }
+
+        const video = {
+            url: cleanUrl,
+            proxyUrl,
+            authorHandle: authorHandle || 'tiktok',
+            title: title || description || `TikTok Video`,
+            description: description || title || '',
+            thumbnailUrl,
+            videoUrl
+        };
+
+        tiktokCache.set(cleanUrl, video);
+        if (tiktokCache.size > 500) {
+            const firstKey = tiktokCache.keys().next().value;
+            tiktokCache.delete(firstKey);
+        }
+
+        return res.json({ success: true, video });
+    } catch (err) {
+        console.error('TikTok lookup error:', err);
+        return res.status(500).json({ error: 'Failed to fetch TikTok details' });
+    }
+});
+
 // Stateless Media Upload Proxy (Catbox.moe Primary with userhash -> ImgBB Failover for images, Zero DB storage)
 app.post('/api/upload', async (req, res) => {
     try {
@@ -2776,7 +2875,57 @@ async function resolveSocialMedia(rawUrl, origin, tweetCacheContext = null, redd
         }
     }
 
-    // 5. Direct Video Files (.mp4, .webm, .mov or proxy stream, including Catbox.moe videos with optional ?thumb= concrete thumbnail URL)
+    // 5. TikTok Video & Share URLs (handles tiktok.com, vt.tiktok.com, vm.tiktok.com, a.tnktok.com, tnktok.com)
+    const isTikTok = /(?:tiktok\.com|a\.tnktok\.com|tnktok\.com|vxtiktok\.com|tiktxk\.com)\//i.test(cleanUrl);
+    if (isTikTok) {
+        const tnktokUrl = toTnktokUrl(cleanUrl);
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4000);
+            const ttResp = await fetch(tnktokUrl, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+                redirect: 'follow'
+            });
+            clearTimeout(timeout);
+            if (ttResp.ok) {
+                const ttHtml = await ttResp.text();
+                const vidMatch = ttHtml.match(/<meta\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                 ttHtml.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']/i);
+                const imgMatch = ttHtml.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                 ttHtml.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+                const decodedImg = imgMatch && imgMatch[1] ? decodeHtmlEntities(imgMatch[1].trim()) : null;
+                if (vidMatch && vidMatch[1]) {
+                    return {
+                        type: 'video',
+                        imageUrl: decodedImg || blackThumbUrl,
+                        videoUrl: decodeHtmlEntities(vidMatch[1].trim()),
+                        videoType: 'video/mp4',
+                        source: 'TikTok'
+                    };
+                }
+                if (decodedImg) {
+                    return {
+                        type: 'image',
+                        imageUrl: decodedImg,
+                        videoUrl: null,
+                        videoType: null,
+                        source: 'TikTok'
+                    };
+                }
+            }
+        } catch (_) {}
+
+        return {
+            type: 'image',
+            imageUrl: blackThumbUrl,
+            videoUrl: null,
+            videoType: null,
+            source: 'TikTok'
+        };
+    }
+
+    // 6. Direct Video Files (.mp4, .webm, .mov or proxy stream, including Catbox.moe videos with optional ?thumb= concrete thumbnail URL)
     if (/\.(mp4|webm|mov)(?:\?.*)?$/i.test(cleanUrl) || cleanUrl.includes('/api/proxy/stream')) {
         let baseVideoUrl = cleanUrl;
         let concreteThumbUrl = null;

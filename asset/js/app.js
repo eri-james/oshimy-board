@@ -515,6 +515,7 @@ function renderCatalogGrid(threads) {
     if (typeof hydratePixivEmbeds === 'function') hydratePixivEmbeds();
     if (typeof hydrateTwitterEmbeds === 'function') hydrateTwitterEmbeds();
     if (typeof hydrateRedditEmbeds === 'function') hydrateRedditEmbeds();
+    if (typeof hydrateTikTokEmbeds === 'function') hydrateTikTokEmbeds();
 }
 
 function getCatalogThumbnail(mediaUrl) {
@@ -546,6 +547,16 @@ function getCatalogThumbnail(mediaUrl) {
             <div class="reddit-placeholder" data-reddit-url="${escapeHtml(media.url)}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
                 <div class="reddit-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
                     <div class="catalog-placeholder-icon" style="color:#FF4500;">🤖</div>
+                </div>
+            </div>
+        `;
+    }
+    if (media.type === 'tiktok') {
+        const proxyUrl = media.proxyUrl || (typeof getTnktokUrl === 'function' ? getTnktokUrl(media.url) : media.url);
+        return `
+            <div class="tiktok-placeholder" data-tiktok-url="${escapeHtml(media.url)}" data-tiktok-proxy="${escapeHtml(proxyUrl)}" data-tiktok-id="${escapeHtml(media.id || '')}" data-tiktok-user="${escapeHtml(media.username || '')}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                <div class="tiktok-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                    <div class="catalog-placeholder-icon" style="color:#FE2C55;">🎵</div>
                 </div>
             </div>
         `;
@@ -1904,6 +1915,7 @@ async function submitReplyCore({ threadId, comment, name, media_url, source = 'm
                 if (typeof hydratePixivEmbeds === 'function') hydratePixivEmbeds();
                 if (typeof hydrateTwitterEmbeds === 'function') hydrateTwitterEmbeds();
                 if (typeof hydrateRedditEmbeds === 'function') hydrateRedditEmbeds();
+                if (typeof hydrateTikTokEmbeds === 'function') hydrateTikTokEmbeds();
             } else if (currentThreadId !== threadId) {
                 history.pushState(null, '', `?b=${currentBoard}&t=${threadId}`);
                 router();

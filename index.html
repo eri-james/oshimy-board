@@ -136,7 +136,7 @@
             
             <div id="uploadDropzone" class="upload-dropzone">
                 <div style="display: flex; gap: 8px; width: 100%; align-items: center;">
-                    <input type="url" id="imageInput" placeholder="Media URL (Pixiv/Reddit/X/YT/Direct Image or Video) or Drop / Ctrl+V Media" style="flex-grow: 1; margin-bottom: 0;">
+                    <input type="url" id="imageInput" placeholder="Media URL (TikTok/Pixiv/Reddit/X/YT/Direct Image or Video) or Drop / Ctrl+V Media" style="flex-grow: 1; margin-bottom: 0;">
                     <button type="button" id="uploadBtn" title="Upload Image (WebP/GIF) or Video (MP4/WebM)">📤 Upload</button>
                 </div>
                 <div class="dropzone-hint">📎 Drag &amp; drop or <kbd>Ctrl+V</kbd> paste — Images up to 5MB (auto-WebP), GIFs up to 8MB, MP4/WebM videos up to 20MB (≤90s, ≤1080p)</div>
@@ -177,6 +177,7 @@
                         </li>
                         <li><b>External Media &amp; Embed URLs:</b>
                             <ul>
+                                <li><b>TikTok:</b> Video URLs (<code>tiktok.com/@.../video/...</code>), shortlinks (<code>vt.tiktok.com/...</code>, <code>vm.tiktok.com/...</code>), or <code>a.tnktok.com</code> proxy with inline video playback.</li>
                                 <li><b>Pixiv:</b> Artwork URLs (<code>pixiv.net/artworks/...</code>) and direct images (<code>i.pximg.net/...</code>) with multi-image gallery support.</li>
                                 <li><b>Reddit:</b> Post links (<code>reddit.com/r/.../comments/...</code>, <code>redd.it/...</code>), videos (<code>v.redd.it</code>), or <code>vxreddit.com</code> proxy with synchronized audio.</li>
                                 <li><b>X (Twitter):</b> Direct post URLs (<code>https://x.com/.../status/...</code>) with interactive card embeds and video support.</li>
@@ -400,7 +401,7 @@
             <input type="text" id="qrSubject" placeholder="Subject" style="display:none;">
             <textarea id="qrComment" placeholder="Write your comment... (Ctrl+Enter to submit)" required></textarea>
             <div style="display:flex; gap:6px; align-items:center;">
-                <input type="url" id="qrImage" placeholder="Media URL (Pixiv/X/YT/Reddit/Image/Video)" style="flex-grow:1;">
+                <input type="url" id="qrImage" placeholder="Media URL (TikTok/Pixiv/X/YT/Reddit/Image/Video)" style="flex-grow:1;">
                 <button type="button" id="qrUploadBtn" class="qr-upload-btn">Upload</button>
             </div>
             <div id="qrAttachmentMetaRow" class="media-attachment-meta-row" style="display:none;">
