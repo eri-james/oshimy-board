@@ -372,10 +372,11 @@
     </div>
 
     <div id="lightbox" onclick="closeLightbox(event)">
+        <button type="button" class="lb-close-btn" onclick="closeLightbox(event)" title="Close Lightbox (Esc)" aria-label="Close Lightbox">✕</button>
         <div id="lightboxContent">
             <img id="lbImg" referrerpolicy="no-referrer" style="display:none">
             <video id="lbVideo" controls playsinline referrerpolicy="no-referrer" style="display:none"></video>
-            <iframe id="lbFrame" frameborder="0" allowfullscreen style="display:none" loading="lazy"></iframe>
+            <iframe id="lbFrame" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen style="display:none" loading="lazy"></iframe>
             <div id="lbCustom" style="display:none;" onclick="event.stopPropagation()"></div>
         </div>
     </div>

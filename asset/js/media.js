@@ -1068,9 +1068,12 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         vid.style.display = 'block';
         vid.play().catch(() => {});
     } 
-    else if (type === 'youtube' && frame) {
-        frame.src = `https://www.youtube-nocookie.com/embed/${content}?autoplay=1&rel=0`;
-        frame.style.display = 'block';
+    else if (type === 'youtube') {
+        const frame = document.getElementById('lbFrame');
+        if (frame) {
+            frame.src = `https://www.youtube-nocookie.com/embed/${content}?autoplay=1&enablejsapi=1&rel=0`;
+            frame.style.display = 'block';
+        }
     } 
     else if (type === 'x') {
         const tweetId = content;
@@ -1566,21 +1569,47 @@ function openLightbox(type, content, extra1, extra2, extra3) {
 }
 
 function closeLightbox(e) {
-    if (!e || e.target.id === 'lightbox' || e.target.id === 'lightboxContent' || e.key === 'Escape') {
+    const isCloseBtn = e && e.target && (e.target.classList?.contains('lb-close-btn') || e.target.closest?.('.lb-close-btn'));
+    if (!e || e.target.id === 'lightbox' || e.target.id === 'lightboxContent' || e.key === 'Escape' || isCloseBtn) {
         const lb = document.getElementById('lightbox');
         if (!lb) return;
         lb.style.display = 'none';
 
         const vid = document.getElementById('lbVideo');
         if (vid) {
-            vid.pause();
-            vid.removeAttribute('src');
-            vid.load();
+            try {
+                vid.pause();
+                vid.removeAttribute('src');
+                vid.load();
+            } catch (_) {}
         }
 
         const frame = document.getElementById('lbFrame');
         if (frame) {
-            frame.removeAttribute('src');
+            try {
+                // Post command to pause and stop YouTube player immediately
+                frame.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: '' }), '*');
+                frame.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'stopVideo', args: '' }), '*');
+            } catch (_) {}
+            try {
+                frame.src = 'about:blank';
+                frame.removeAttribute('src');
+                frame.style.display = 'none';
+            } catch (_) {}
+
+            // Fully replace iframe element to unconditionally terminate any media player / audio process in browser
+            try {
+                const freshFrame = document.createElement('iframe');
+                freshFrame.id = 'lbFrame';
+                freshFrame.setAttribute('frameborder', '0');
+                freshFrame.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
+                freshFrame.setAttribute('allowfullscreen', '');
+                freshFrame.style.display = 'none';
+                freshFrame.style.width = '800px';
+                freshFrame.style.height = '450px';
+                freshFrame.setAttribute('loading', 'lazy');
+                frame.parentNode?.replaceChild(freshFrame, frame);
+            } catch (_) {}
         }
 
         const img = document.getElementById('lbImg');
@@ -1600,6 +1629,17 @@ function closeLightbox(e) {
                     v.pause();
                     v.removeAttribute('src');
                     v.load();
+                } catch (_) {}
+            });
+            const iframes = custom.querySelectorAll('iframe');
+            iframes.forEach(f => {
+                try {
+                    f.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: '' }), '*');
+                    f.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'stopVideo', args: '' }), '*');
+                } catch (_) {}
+                try {
+                    f.src = 'about:blank';
+                    f.removeAttribute('src');
                 } catch (_) {}
             });
             custom.style.display = 'none';
