@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "lint": "node --check server.js server/db.js server/gamification.js functions/api/[[route]].js",
+    "lint": "node --check server.js server/db.js server/gamification.js server/archive.js functions/api/[[route]].js",
     "build": "node -e \"console.log('Build OK')\""
   },
   "dependencies": {

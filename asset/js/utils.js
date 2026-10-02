@@ -123,6 +123,15 @@ function quotePost(postId, threadId, event = null) {
         return;
     }
 
+    // If the thread is archived/locked, do not open reply box, highlight and copy link instead
+    if (window.isCurrentThreadArchived) {
+        highlightPost(postId);
+        if (typeof copyPostLink === 'function') {
+            copyPostLink(postId, threadId, typeof currentBoard !== 'undefined' ? currentBoard : null, event);
+        }
+        return;
+    }
+
     // Modern Imageboard UX: Open floating Quick Reply dock right where the user is reading
     if (typeof openQuickReply === 'function') {
         openQuickReply(threadId, postId);

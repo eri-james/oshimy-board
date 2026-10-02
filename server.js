@@ -15,6 +15,13 @@ import {
     XP_RULES, 
     ALLOWED_OSHI_BADGES 
 } from './server/gamification.js';
+import {
+    runArchiveLifecycle,
+    autoLockOldThreads,
+    bakeThreadToStaticHtml,
+    ONE_MONTH_MS,
+    FOURTEEN_DAYS_MS
+} from './server/archive.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +36,23 @@ const VIDEO_THUMBS_DIR = path.join(__dirname, 'cache', 'video_thumbs');
 if (!fs.existsSync(VIDEO_THUMBS_DIR)) {
     try { fs.mkdirSync(VIDEO_THUMBS_DIR, { recursive: true }); } catch (_) {}
 }
+
+// Static HTML archives directory for permanently archived threads
+const ARCHIVES_DIR = path.join(__dirname, 'archives');
+if (!fs.existsSync(ARCHIVES_DIR)) {
+    try { fs.mkdirSync(ARCHIVES_DIR, { recursive: true }); } catch (_) {}
+}
+app.use('/archives', express.static(ARCHIVES_DIR));
+
+// Initialize and schedule archive lifecycle checks (auto-lock after 1 month, static baking after 14 days)
+runArchiveLifecycle(db, ARCHIVES_DIR);
+setInterval(() => {
+    try {
+        runArchiveLifecycle(db, ARCHIVES_DIR);
+    } catch (err) {
+        console.error('[Archive Lifecycle Error]:', err);
+    }
+}, 10 * 60 * 1000);
 
 // Consistent HTTPS-aware origin resolver
 function getOrigin(req) {
@@ -1244,6 +1268,7 @@ app.get('/api/boards', (req, res) => {
         const stats = db.prepare(`
             SELECT board, COUNT(*) as thread_count, MAX(bumped_at) as last_activity
             FROM threads
+            WHERE is_locked = 0 AND is_archived = 0
             GROUP BY board
         `).all();
 
@@ -1276,13 +1301,15 @@ app.get('/api/threads', (req, res) => {
     }
 
     try {
-        const now = Date.now();
-        const cutoff = now - ARCHIVE_TIME_MS;
+        // Run lifecycle checks (auto-lock threads > 30 days inactive, bake expired > 14 days)
+        runArchiveLifecycle(db, ARCHIVES_DIR, getOrigin(req));
 
         // HTTP Caching & 304 Not Modified check using fast index lookup
         let metaQuery = 'SELECT MAX(bumped_at) as max_bump, COUNT(*) as count FROM threads WHERE board = ?';
         if (isArchive) {
-            metaQuery += ` AND bumped_at < ${cutoff}`;
+            metaQuery = 'SELECT MAX(COALESCE(locked_at, bumped_at)) as max_bump, COUNT(*) as count FROM threads WHERE board = ? AND (is_locked = 1 OR is_archived = 1)';
+        } else {
+            metaQuery = 'SELECT MAX(bumped_at) as max_bump, COUNT(*) as count FROM threads WHERE board = ? AND is_locked = 0 AND is_archived = 0';
         }
         const meta = db.prepare(metaQuery).get(board);
         const maxBump = meta?.max_bump || 0;
@@ -1303,10 +1330,10 @@ app.get('/api/threads', (req, res) => {
         `;
 
         if (isArchive) {
-            query += ` AND t.bumped_at < ${cutoff} ORDER BY t.bumped_at DESC LIMIT 100`;
+            query += ` AND (t.is_locked = 1 OR t.is_archived = 1) ORDER BY COALESCE(t.locked_at, t.bumped_at) DESC LIMIT 100`;
         } else {
-            // Active view (or all if board has few threads)
-            query += ` ORDER BY t.is_pinned DESC, t.bumped_at DESC LIMIT 50`;
+            // Active view: only non-locked, non-archived threads
+            query += ` AND t.is_locked = 0 AND t.is_archived = 0 ORDER BY t.is_pinned DESC, t.bumped_at DESC LIMIT 50`;
         }
 
         const threads = db.prepare(query).all(board);
@@ -1408,6 +1435,17 @@ app.get('/api/thread', (req, res) => {
         const thread = db.prepare('SELECT * FROM threads WHERE id = ?').get(threadId);
         if (!thread) {
             return res.status(404).json({ error: 'Thread not found' });
+        }
+
+        if (thread.is_static) {
+            return res.json({
+                success: true,
+                thread,
+                replies: [],
+                is_static: true,
+                static_url: `/${thread.static_path || ('archives/' + thread.board + '/' + thread.id + '.html')}`,
+                total_replies: thread.reply_count
+            });
         }
 
         thread.poster_id = generatePosterId(thread.ip_hash, thread.id);
@@ -1538,8 +1576,8 @@ app.post('/api/replies', (req, res) => {
         if (!thread) {
             return res.status(404).json({ error: 'Thread not found' });
         }
-        if (thread.is_locked) {
-            return res.status(403).json({ error: 'Thread is locked.' });
+        if (thread.is_locked || thread.is_archived || thread.is_static) {
+            return res.status(403).json({ error: 'This thread is archived and locked. New replies are disabled.' });
         }
 
         const id = generateId();
@@ -1650,11 +1688,30 @@ app.post('/api/reactions/toggle', (req, res) => {
         return res.status(400).json({ error: 'Invalid reaction parameters' });
     }
 
-    const table = targetType === 'thread' ? 'threads' : 'replies';
     try {
-        const post = db.prepare(`SELECT id, user_id, ip_hash, reactions FROM ${table} WHERE id = ?`).get(targetId);
+        let post = null;
+        let isClosed = false;
+
+        if (targetType === 'thread') {
+            post = db.prepare('SELECT id, user_id, ip_hash, reactions, is_locked, is_archived, is_static FROM threads WHERE id = ?').get(targetId);
+            if (post && (post.is_locked || post.is_archived || post.is_static)) {
+                isClosed = true;
+            }
+        } else {
+            post = db.prepare('SELECT id, thread_id, user_id, ip_hash, reactions FROM replies WHERE id = ?').get(targetId);
+            if (post) {
+                const parent = db.prepare('SELECT is_locked, is_archived, is_static FROM threads WHERE id = ?').get(post.thread_id);
+                if (parent && (parent.is_locked || parent.is_archived || parent.is_static)) {
+                    isClosed = true;
+                }
+            }
+        }
+
         if (!post) {
             return res.status(404).json({ error: 'Post not found' });
+        }
+        if (isClosed) {
+            return res.status(403).json({ error: 'This thread is archived. Reactions are closed.' });
         }
 
         const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
@@ -2024,7 +2081,7 @@ app.post('/api/admin/pin', (req, res) => {
     }
 });
 
-// 12. Admin: Lock Thread
+// 12. Admin: Lock / Archive Thread
 app.post('/api/admin/lock', (req, res) => {
     if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'mod')) {
         return res.status(403).json({ error: 'Unauthorized.' });
@@ -2032,12 +2089,43 @@ app.post('/api/admin/lock', (req, res) => {
 
     const { thread_id } = req.body;
     try {
-        const thread = db.prepare('SELECT is_locked FROM threads WHERE id = ?').get(thread_id);
+        const thread = db.prepare('SELECT is_locked, is_archived, is_static FROM threads WHERE id = ?').get(thread_id);
         if (!thread) return res.status(404).json({ error: 'Thread not found' });
 
+        if (thread.is_static) {
+            return res.status(400).json({ error: 'This thread is permanently baked into static HTML and cannot be unlocked.' });
+        }
+
         const newLocked = thread.is_locked ? 0 : 1;
-        db.prepare('UPDATE threads SET is_locked = ? WHERE id = ?').run(newLocked, thread_id);
-        res.json({ success: true, is_locked: newLocked });
+        const now = Date.now();
+        if (newLocked) {
+            db.prepare('UPDATE threads SET is_locked = 1, is_archived = 1, locked_at = ? WHERE id = ?').run(now, thread_id);
+        } else {
+            db.prepare('UPDATE threads SET is_locked = 0, is_archived = 0, locked_at = NULL WHERE id = ?').run(thread_id);
+        }
+
+        res.json({ success: true, is_locked: newLocked, is_archived: newLocked });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 12b. Admin: Manually Bake Thread to Static HTML Immediately
+app.post('/api/admin/bake-static', (req, res) => {
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'mod')) {
+        return res.status(403).json({ error: 'Unauthorized.' });
+    }
+
+    const { thread_id } = req.body;
+    try {
+        const thread = db.prepare('SELECT * FROM threads WHERE id = ?').get(thread_id);
+        if (!thread) return res.status(404).json({ error: 'Thread not found' });
+        if (thread.is_static) {
+            return res.status(400).json({ error: 'Thread is already permanently baked to static HTML.' });
+        }
+
+        const staticPath = bakeThreadToStaticHtml(db, thread, ARCHIVES_DIR, getOrigin(req));
+        res.json({ success: true, message: 'Thread baked to static HTML and replies pruned from SQLite.', static_path: staticPath });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -2661,8 +2749,15 @@ app.get('*', async (req, res) => {
 
         if (threadId) {
             try {
-                const thread = db.prepare('SELECT id, board, name, subject, comment, media_url, created_at, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = threads.id) as reply_count FROM threads WHERE id = ?').get(threadId);
+                const thread = db.prepare('SELECT id, board, name, subject, comment, media_url, created_at, is_static, static_path, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = threads.id) as reply_count FROM threads WHERE id = ?').get(threadId);
                 if (thread) {
+                    if (thread.is_static && thread.static_path) {
+                        const fullStaticPath = path.resolve(__dirname, thread.static_path);
+                        if (fs.existsSync(fullStaticPath)) {
+                            return res.sendFile(fullStaticPath);
+                        }
+                    }
+
                     const replyId = req.query.r || req.query.reply;
                     let reply = null;
                     if (replyId) {

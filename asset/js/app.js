@@ -728,7 +728,7 @@ function saveMyStampedSet(set) {
     } catch (_) {}
 }
 
-function renderStampReactionsBar(postId, postType, reactionsRaw) {
+function renderStampReactionsBar(postId, postType, reactionsRaw, isReadOnly = false) {
     if (!postId || String(postId).startsWith('opt_')) return '';
     let counts = {};
     try {
@@ -736,6 +736,17 @@ function renderStampReactionsBar(postId, postType, reactionsRaw) {
     } catch (_) {
         counts = {};
     }
+
+    if (isReadOnly) {
+        const chipsHtml = STAMP_DEFINITIONS.map(st => {
+            const c = parseInt(counts[st.key], 10) || 0;
+            if (c <= 0) return '';
+            return `<span class="stamp-reaction-chip-readonly" style="display:inline-flex; align-items:center; gap:4px; padding:2px 7px; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; font-size:0.8em; opacity:0.85;" title="${escapeHtml(st.title)}"><span class="stamp-emoji">${st.emoji}</span><span class="stamp-label">${st.label}</span><span class="stamp-count">(${c})</span></span>`;
+        }).filter(Boolean).join('');
+        if (!chipsHtml) return '';
+        return `<div class="stamp-reactions-bar stamp-readonly-bar" id="stamps_${escapeHtml(postId)}" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">${chipsHtml}</div>`;
+    }
+
     const myStamps = getMyStampedSet();
 
     const buttonsHtml = STAMP_DEFINITIONS.map(st => {
@@ -1034,8 +1045,15 @@ async function loadBoardView(isArchive = false, isSilent = false) {
 function renderThreadPreview(th) {
     const isOwner = MY_POSTS.includes(th.id);
     const youTag = isOwner ? ` <span style="font-weight:bold; font-style:italic; font-size:0.9em;">(You)</span>` : "";
+    const isArchived = Boolean(th.is_locked || th.is_archived || th.is_static);
+    const isStatic = Boolean(th.is_static);
     const pinnedBadge = th.is_pinned ? `<span style="color:#d97706; font-weight:bold; margin-right:6px;">📌 [Pinned]</span>` : '';
-    const lockedBadge = th.is_locked ? `<span style="color:#dc2626; font-weight:bold; margin-right:6px;">🔒 [Locked]</span>` : '';
+    let lockedBadge = '';
+    if (isStatic) {
+        lockedBadge = `<span style="color:#b91c1c; font-weight:bold; margin-right:6px;">📦 [Static Archive]</span>`;
+    } else if (isArchived) {
+        lockedBadge = `<span style="color:#dc2626; font-weight:bold; margin-right:6px;">🔒 [Archived]</span>`;
+    }
     const roleBadge = th.display_title ? `<span style="background:var(--main-accent); color:#fff; border-radius:4px; padding:1px 5px; font-size:0.85em; margin-right:4px;">${escapeHtml(th.display_title)}</span>` : '';
 
     const dateStr = new Date(th.created_at).toLocaleString();
@@ -1044,10 +1062,15 @@ function renderThreadPreview(th) {
     // Mod controls
     let modControls = "";
     if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'mod')) {
+        const bakeBtn = (isArchived && !isStatic) 
+            ? `[<a href="#" onclick="adminBakeStatic('${th.id}'); return false;" style="color:#8b5cf6;">Bake to HTML</a>]` 
+            : '';
+        const unlockLabel = isStatic ? '' : `[<a href="#" onclick="toggleLock('${th.id}'); return false;">${th.is_locked ? 'Unlock' : 'Lock'}</a>]`;
         modControls = `
             <span style="margin-left: 10px; font-size: 0.9em;">
                 [<a href="#" onclick="togglePin('${th.id}'); return false;">${th.is_pinned ? 'Unpin' : 'Pin'}</a>]
-                [<a href="#" onclick="toggleLock('${th.id}'); return false;">${th.is_locked ? 'Unlock' : 'Lock'}</a>]
+                ${unlockLabel}
+                ${bakeBtn}
                 [<a href="#" onclick="adminDelete('thread', '${th.id}'); return false;" style="color:red;">Delete</a>]
             </span>
         `;
@@ -1055,7 +1078,7 @@ function renderThreadPreview(th) {
 
     // Watch control
     let watchControl = "";
-    if (currentUser) {
+    if (currentUser && !isArchived) {
         const isWatched = userWatchlistIds.has(th.id);
         watchControl = `
             <span style="margin-left: 6px; font-size: 0.9em;">
@@ -1068,7 +1091,7 @@ function renderThreadPreview(th) {
     let repliesHtml = "";
     if (th.preview_replies && th.preview_replies.length > 0) {
         for (const r of th.preview_replies) {
-            repliesHtml += renderReplyCard(r, th.id, true);
+            repliesHtml += renderReplyCard(r, th.id, true, isArchived);
         }
     }
 
@@ -1077,7 +1100,16 @@ function renderThreadPreview(th) {
         : `No replies yet`;
     const posterIdHtml = renderPosterIdBadge(th.poster_id);
     const vanityFlairHtml = renderVanityFlairBadges(th.vanity_flair);
-    const stampsBarHtml = renderStampReactionsBar(th.id, 'thread', th.reactions);
+    const stampsBarHtml = renderStampReactionsBar(th.id, 'thread', th.reactions, isArchived);
+
+    const staticTargetUrl = th.static_path ? `/${th.static_path}` : `/archives/${currentBoard}/${th.id}.html`;
+    const threadTargetUrl = isStatic ? staticTargetUrl : `?b=${currentBoard}&t=${th.id}`;
+    let actionBtnHtml = `<a href="?b=${currentBoard}&t=${th.id}" class="reply-link">[Reply ➜]</a>`;
+    if (isStatic) {
+        actionBtnHtml = `<a href="${staticTargetUrl}" class="reply-link" style="color:#b91c1c; font-weight:bold;">[View Static Archive ➜]</a>`;
+    } else if (isArchived) {
+        actionBtnHtml = `<a href="?b=${currentBoard}&t=${th.id}" class="reply-link" style="color:#dc2626; font-weight:bold;">[View Archive ➜]</a>`;
+    }
 
     return `
         <div class="thread" id="thread_${th.id}">
@@ -1093,9 +1125,9 @@ function renderThreadPreview(th) {
                         ${vanityFlairHtml}
                         ${posterIdHtml}
                         <span class="date">${dateStr}</span>
-                        <span class="post-id">No. <a href="?b=${currentBoard}&t=${th.id}#post_${th.id}" onclick="quotePost('${th.id}', '${th.id}', event)" title="Quote post (Click) / Copy link (Right-click)">${th.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${th.id}', '${th.id}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a></span>
+                        <span class="post-id">No. <a href="${threadTargetUrl}#post_${th.id}" onclick="${isStatic ? '' : `quotePost('${th.id}', '${th.id}', event)`}" title="Quote post (Click) / Copy link (Right-click)">${th.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${th.id}', '${th.id}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a></span>
                         ${youTag}
-                        <a href="?b=${currentBoard}&t=${th.id}" class="reply-link">[Reply ➜]</a>
+                        ${actionBtnHtml}
                         ${watchControl}
                         ${modControls}
                     </div>
@@ -1103,7 +1135,7 @@ function renderThreadPreview(th) {
                     <div class="comment">${formatComment(th.comment)}</div>
                     ${stampsBarHtml}
                     <div style="font-size:0.85em; color:var(--text-color); opacity:0.8; margin-top:8px;">
-                        [ <a href="?b=${currentBoard}&t=${th.id}" class="reply-count-link">${replyCountText}</a> ]
+                        [ <a href="${threadTargetUrl}" class="reply-count-link">${replyCountText}</a> ]
                     </div>
                 </div>
             </div>
@@ -1161,6 +1193,10 @@ async function loadThreadView(threadId, isSilent = false) {
             : `/thread?id=${threadId}`;
 
         const data = await apiFetch(endpoint, { signal });
+        if (data && data.is_static && data.static_url) {
+            window.location.href = data.static_url;
+            return;
+        }
         if (isSilent && data.notModified) {
             return; // 304 Not Modified: server confirmed zero changes during silent background update
         }
@@ -1169,6 +1205,9 @@ async function loadThreadView(threadId, isSilent = false) {
         }
         const th = data.thread;
         const replies = data.replies || [];
+
+        const isArchived = Boolean(th && (th.is_locked || th.is_archived || th.is_static));
+        window.isCurrentThreadArchived = isArchived;
 
         if (th && th.board && (!currentBoard || currentBoard !== th.board)) {
             currentBoard = th.board;
@@ -1199,12 +1238,8 @@ async function loadThreadView(threadId, isSilent = false) {
 
         // If delta update arrived, only append brand-new replies without full re-render
         if (data.is_delta) {
-            if (th) {
-                if (th.is_locked && formWrapper) {
-                    formWrapper.style.display = "none";
-                } else if (formWrapper) {
-                    formWrapper.style.display = "block";
-                }
+            if (formWrapper) {
+                formWrapper.style.display = isArchived ? "none" : "block";
             }
 
             if (replies.length > 0) {
@@ -1212,7 +1247,7 @@ async function loadThreadView(threadId, isSilent = false) {
                 for (const r of replies) {
                     if (!document.getElementById(`post_${r.id}`)) {
                         const temp = document.createElement('div');
-                        temp.innerHTML = renderReplyCard(r, th.id, false);
+                        temp.innerHTML = renderReplyCard(r, th.id, false, isArchived);
                         const el = temp.firstElementChild;
                         repliesContainer.appendChild(el);
                         newElements.push(el);
@@ -1266,24 +1301,34 @@ async function loadThreadView(threadId, isSilent = false) {
             const isOwner = MY_POSTS.includes(th.id);
             const youTag = isOwner ? ` <span style="font-weight:bold; font-style:italic; font-size:0.9em;">(You)</span>` : "";
             const pinnedBadge = th.is_pinned ? `<span style="color:#d97706; font-weight:bold; margin-right:6px;">📌 [Pinned]</span>` : '';
-            const lockedBadge = th.is_locked ? `<span style="color:#dc2626; font-weight:bold; margin-right:6px;">🔒 [Locked]</span>` : '';
+            let lockedBadge = '';
+            if (th.is_static) {
+                lockedBadge = `<span style="color:#b91c1c; font-weight:bold; margin-right:6px;">📦 [Static Archive]</span>`;
+            } else if (isArchived) {
+                lockedBadge = `<span style="color:#dc2626; font-weight:bold; margin-right:6px;">🔒 [Archived]</span>`;
+            }
             const roleBadge = th.display_title ? `<span style="background:var(--main-accent); color:#fff; border-radius:4px; padding:1px 5px; font-size:0.85em; margin-right:4px;">${escapeHtml(th.display_title)}</span>` : '';
             const dateStr = new Date(th.created_at).toLocaleString();
             const mediaHtml = renderMedia(th.media_url);
 
             let modControls = "";
             if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'mod')) {
+                const bakeBtn = (isArchived && !th.is_static) 
+                    ? `[<a href="#" onclick="adminBakeStatic('${th.id}'); return false;" style="color:#8b5cf6;">Bake to HTML</a>]` 
+                    : '';
+                const unlockLabel = th.is_static ? '' : `[<a href="#" onclick="toggleLock('${th.id}'); return false;">${th.is_locked ? 'Unlock' : 'Lock'}</a>]`;
                 modControls = `
                     <span style="margin-left: 10px; font-size: 0.9em;">
                         [<a href="#" onclick="togglePin('${th.id}'); return false;">${th.is_pinned ? 'Unpin' : 'Pin'}</a>]
-                        [<a href="#" onclick="toggleLock('${th.id}'); return false;">${th.is_locked ? 'Unlock' : 'Lock'}</a>]
+                        ${unlockLabel}
+                        ${bakeBtn}
                         [<a href="#" onclick="adminDelete('thread', '${th.id}'); return false;" style="color:red;">Delete</a>]
                     </span>
                 `;
             }
 
             let watchControl = "";
-            if (currentUser) {
+            if (currentUser && !isArchived) {
                 const isWatched = userWatchlistIds.has(th.id);
                 watchControl = `
                     <span style="margin-left: 6px; font-size: 0.9em;">
@@ -1294,9 +1339,23 @@ async function loadThreadView(threadId, isSilent = false) {
 
             const opPosterIdHtml = renderPosterIdBadge(th.poster_id);
             const opVanityFlairHtml = renderVanityFlairBadges(th.vanity_flair);
-            const opStampsBarHtml = renderStampReactionsBar(th.id, 'thread', th.reactions);
+            const opStampsBarHtml = renderStampReactionsBar(th.id, 'thread', th.reactions, isArchived);
+
+            const daysLeft = th.locked_at ? Math.max(0, Math.ceil((th.locked_at + 14 * 86400000 - Date.now()) / 86400000)) : 14;
+            const archiveBannerHtml = isArchived ? `
+                <div class="archive-banner" style="background: rgba(220, 38, 38, 0.08); border: 1px solid #ef4444; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; color: var(--text-color);">
+                    <div style="font-weight: bold; font-size: 1.05em; display: flex; align-items: center; gap: 6px; margin-bottom: 4px; color: #dc2626;">
+                        <span>🔒</span>
+                        <span>Archived Thread — Read-Only</span>
+                    </div>
+                    <div style="font-size: 0.9em; opacity: 0.9; line-height: 1.4;">
+                        This thread is locked and archived. New replies and stamp reactions are closed. It will be permanently baked into static HTML in <strong>${daysLeft} days</strong> to save server database resources.
+                    </div>
+                </div>
+            ` : '';
 
             opContainer.innerHTML = `
+                ${archiveBannerHtml}
                 <div class="op" id="post_${th.id}">
                     ${mediaHtml}
                     <div class="post-content">
@@ -1327,7 +1386,7 @@ async function loadThreadView(threadId, isSilent = false) {
         if (!isSilent) {
             let repliesHtml = "";
             for (const r of replies) {
-                repliesHtml += renderReplyCard(r, th.id, false);
+                repliesHtml += renderReplyCard(r, th.id, false, isArchived);
             }
             repliesContainer.innerHTML = repliesHtml;
             generateBacklinks();
@@ -1337,7 +1396,7 @@ async function loadThreadView(threadId, isSilent = false) {
             for (const r of replies) {
                 if (!document.getElementById(`post_${r.id}`)) {
                     const temp = document.createElement('div');
-                    temp.innerHTML = renderReplyCard(r, (th ? th.id : threadId), false);
+                    temp.innerHTML = renderReplyCard(r, (th ? th.id : threadId), false, isArchived);
                     const el = temp.firstElementChild;
                     repliesContainer.appendChild(el);
                     newElements.push(el);
@@ -1402,7 +1461,7 @@ async function loadThreadView(threadId, isSilent = false) {
 }
 
 // Render Single Reply
-function renderReplyCard(r, threadId, isPreview = false) {
+function renderReplyCard(r, threadId, isPreview = false, isArchived = false) {
     const isOwner = MY_POSTS.includes(r.id);
     const youTag = isOwner ? ` <span style="font-weight:bold; font-style:italic; font-size:0.9em;">(You)</span>` : "";
     const roleBadge = r.display_title ? `<span style="background:var(--main-accent); color:#fff; border-radius:4px; padding:1px 5px; font-size:0.85em; margin-right:4px;">${escapeHtml(r.display_title)}</span>` : '';
@@ -1424,7 +1483,7 @@ function renderReplyCard(r, threadId, isPreview = false) {
         : `No. <a href="?b=${currentBoard}&t=${threadId}&r=${r.id}#post_${r.id}" onclick="quotePost('${r.id}', '${threadId}', event)" title="Quote post (Click) / Copy link (Right-click)">${r.id.substring(1, 9)}</a><a href="javascript:void(0)" onclick="copyPostLink('${r.id}', '${threadId}', '${currentBoard}', event)" class="post-link-btn" title="Copy link to this post">🔗</a>`;
     const posterIdHtml = renderPosterIdBadge(r.poster_id);
     const vanityFlairHtml = renderVanityFlairBadges(r.vanity_flair);
-    const stampsBarHtml = renderStampReactionsBar(r.id, 'reply', r.reactions);
+    const stampsBarHtml = renderStampReactionsBar(r.id, 'reply', r.reactions, isArchived);
 
     return `
         <div class="reply-container${optClass}" id="post_${r.id}" data-created-at="${r.created_at || 0}" style="margin-bottom: 8px;">
@@ -1448,6 +1507,36 @@ function renderReplyCard(r, threadId, isPreview = false) {
             </div>
         </div>
     `;
+}
+
+// Admin manual action: Bake thread to static HTML immediately to save DB space
+async function adminBakeStatic(threadId) {
+    if (!confirm('Are you sure you want to bake this thread to static HTML immediately? All replies will be deleted from SQLite to save database space.')) {
+        return;
+    }
+    try {
+        const res = await apiFetch('/admin/bake-static', {
+            method: 'POST',
+            body: { thread_id: threadId }
+        });
+        if (res && res.success) {
+            if (typeof showToast === 'function') {
+                showToast('Thread baked to static HTML successfully!', 3000, 'success');
+            } else {
+                alert('Thread baked to static HTML successfully!');
+            }
+            if (typeof loadBoardView === 'function') {
+                const isArch = new URLSearchParams(window.location.search).get('view') === 'archive';
+                loadBoardView(isArch);
+            }
+        }
+    } catch (err) {
+        if (typeof showToast === 'function') {
+            showToast('Error: ' + err.message, 3500, 'error');
+        } else {
+            alert('Error: ' + err.message);
+        }
+    }
 }
 
 // --- FLOATING QUICK REPLY (QR) CONTROLLER ---

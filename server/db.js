@@ -38,6 +38,18 @@ try {
     if (!threadCols.includes('reactions')) {
         db.exec("ALTER TABLE threads ADD COLUMN reactions TEXT DEFAULT '{}';");
     }
+    if (!threadCols.includes('locked_at')) {
+        db.exec("ALTER TABLE threads ADD COLUMN locked_at INTEGER;");
+    }
+    if (!threadCols.includes('is_archived')) {
+        db.exec("ALTER TABLE threads ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0;");
+    }
+    if (!threadCols.includes('is_static')) {
+        db.exec("ALTER TABLE threads ADD COLUMN is_static INTEGER NOT NULL DEFAULT 0;");
+    }
+    if (!threadCols.includes('static_path')) {
+        db.exec("ALTER TABLE threads ADD COLUMN static_path TEXT;");
+    }
 
     const replyCols = db.prepare("PRAGMA table_info(replies)").all().map(c => c.name);
     if (!replyCols.includes('vanity_flair')) {
@@ -46,6 +58,13 @@ try {
     if (!replyCols.includes('reactions')) {
         db.exec("ALTER TABLE replies ADD COLUMN reactions TEXT DEFAULT '{}';");
     }
+
+    // Sync any existing locked threads to be archived as well
+    db.exec(`
+        UPDATE threads 
+        SET is_archived = 1, locked_at = COALESCE(locked_at, bumped_at) 
+        WHERE is_locked = 1 AND is_archived = 0;
+    `);
 
     // Always ensure denormalized reply_count is accurately synced with replies table
     db.exec(`
