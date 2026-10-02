@@ -174,9 +174,47 @@ async function resolveVanityFlairEdge(db, userId, showVanity, guestFlair) {
     return null;
 }
 
+function getXpRequirementForLevel(level) {
+    const lvl = Math.max(1, parseInt(level, 10) || 1);
+    let req = 25;
+    for (let i = 1; i < lvl; i++) {
+        req = Math.round(req * 1.1);
+    }
+    return req;
+}
+
 function calculateLevel(xp) {
     const validXp = Math.max(0, parseInt(xp, 10) || 0);
-    return Math.floor(validXp / 25) + 1;
+    let remXp = validXp;
+    let level = 1;
+    let currentReq = 25;
+    while (remXp >= currentReq) {
+        remXp -= currentReq;
+        level++;
+        currentReq = Math.round(currentReq * 1.1);
+    }
+    return level;
+}
+
+function getLevelProgress(xp) {
+    const validXp = Math.max(0, parseInt(xp, 10) || 0);
+    let remXp = validXp;
+    let level = 1;
+    let currentReq = 25;
+    while (remXp >= currentReq) {
+        remXp -= currentReq;
+        level++;
+        currentReq = Math.round(currentReq * 1.1);
+    }
+    const progressXp = remXp;
+    const nextLevelReq = currentReq;
+    const percent = nextLevelReq > 0 ? Math.min(100, Math.floor((progressXp / nextLevelReq) * 100)) : 100;
+    return {
+        level,
+        progressXp,
+        nextLevelReq,
+        percent
+    };
 }
 
 function getRank(level) {
@@ -195,12 +233,16 @@ function getTodayDateStr() {
 async function awardD1UserXp(db, userId, xpAmount) {
     if (!userId || !xpAmount || xpAmount <= 0) return;
     try {
+        const user = await db.prepare('SELECT xp FROM users WHERE id = ?').bind(userId).first();
+        if (!user) return;
+        const newXp = (user.xp || 0) + xpAmount;
+        const newLevel = calculateLevel(newXp);
         await db.prepare(`
             UPDATE users
-            SET xp = xp + ?,
-                level = ((xp + ?) / 25) + 1
+            SET xp = ?,
+                level = ?
             WHERE id = ?
-        `).bind(xpAmount, xpAmount, userId).run();
+        `).bind(newXp, newLevel, userId).run();
     } catch {}
 }
 

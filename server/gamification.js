@@ -53,9 +53,47 @@ export const ALLOWED_OSHI_BADGES = [
     'Phase Connect'
 ];
 
+export function getXpRequirementForLevel(level) {
+    const lvl = Math.max(1, parseInt(level, 10) || 1);
+    let req = 25;
+    for (let i = 1; i < lvl; i++) {
+        req = Math.round(req * 1.1);
+    }
+    return req;
+}
+
 export function calculateLevel(xp) {
     const validXp = Math.max(0, parseInt(xp, 10) || 0);
-    return Math.floor(validXp / 25) + 1;
+    let remXp = validXp;
+    let level = 1;
+    let currentReq = 25;
+    while (remXp >= currentReq) {
+        remXp -= currentReq;
+        level++;
+        currentReq = Math.round(currentReq * 1.1);
+    }
+    return level;
+}
+
+export function getLevelProgress(xp) {
+    const validXp = Math.max(0, parseInt(xp, 10) || 0);
+    let remXp = validXp;
+    let level = 1;
+    let currentReq = 25;
+    while (remXp >= currentReq) {
+        remXp -= currentReq;
+        level++;
+        currentReq = Math.round(currentReq * 1.1);
+    }
+    const progressXp = remXp;
+    const nextLevelReq = currentReq;
+    const percent = nextLevelReq > 0 ? Math.min(100, Math.floor((progressXp / nextLevelReq) * 100)) : 100;
+    return {
+        level,
+        progressXp,
+        nextLevelReq,
+        percent
+    };
 }
 
 export function getRank(level) {
@@ -84,18 +122,21 @@ export function drawRandomOmikuji() {
 }
 
 /**
- * Safely awards XP to a user in SQLite and updates their level in a single atomic query.
- * Eliminates redundant read query on post/reply submission (Audit Recommendation A.4).
+ * Safely awards XP to a user in SQLite and updates their level using the dynamic scaling formula.
  */
 export function awardUserXP(db, userId, xpAmount) {
     if (!userId || !xpAmount || xpAmount <= 0) return null;
     try {
+        const user = db.prepare('SELECT xp FROM users WHERE id = ?').get(userId);
+        if (!user) return null;
+        const newXp = (user.xp || 0) + xpAmount;
+        const newLevel = calculateLevel(newXp);
         db.prepare(`
             UPDATE users
-            SET xp = xp + ?,
-                level = ((xp + ?) / 25) + 1
+            SET xp = ?,
+                level = ?
             WHERE id = ?
-        `).run(xpAmount, xpAmount, userId);
+        `).run(newXp, newLevel, userId);
         return true;
     } catch (err) {
         console.error('[Gamification] awardUserXP error:', err);

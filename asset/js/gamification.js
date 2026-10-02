@@ -71,9 +71,47 @@ let currentGamificationState = {
     last_fortune: null
 };
 
+function getXpRequirementForLevel(level) {
+    const lvl = Math.max(1, parseInt(level, 10) || 1);
+    let req = 25;
+    for (let i = 1; i < lvl; i++) {
+        req = Math.round(req * 1.1);
+    }
+    return req;
+}
+
 function calculateLevelFromXp(xp) {
     const validXp = Math.max(0, parseInt(xp, 10) || 0);
-    return Math.floor(validXp / 25) + 1;
+    let remXp = validXp;
+    let level = 1;
+    let currentReq = 25;
+    while (remXp >= currentReq) {
+        remXp -= currentReq;
+        level++;
+        currentReq = Math.round(currentReq * 1.1);
+    }
+    return level;
+}
+
+function getLevelProgress(xp) {
+    const validXp = Math.max(0, parseInt(xp, 10) || 0);
+    let remXp = validXp;
+    let level = 1;
+    let currentReq = 25;
+    while (remXp >= currentReq) {
+        remXp -= currentReq;
+        level++;
+        currentReq = Math.round(currentReq * 1.1);
+    }
+    const progressXp = remXp;
+    const nextLevelReq = currentReq;
+    const percent = nextLevelReq > 0 ? Math.min(100, Math.floor((progressXp / nextLevelReq) * 100)) : 100;
+    return {
+        level,
+        progressXp,
+        nextLevelReq,
+        percent
+    };
 }
 
 function getRankFromLevel(level) {
@@ -433,10 +471,14 @@ function renderProfileModalContent() {
     if (!box) return;
 
     const s = currentGamificationState;
-    const currentBaseXp = (s.level - 1) * 25;
-    const nextLevelBaseXp = s.level * 25;
-    const progressXp = Math.max(0, s.xp - currentBaseXp);
-    const percent = Math.min(100, Math.floor((progressXp / 25) * 100));
+    const prog = getLevelProgress(s.xp);
+    s.level = prog.level;
+    const rank = getRankFromLevel(s.level);
+    s.rankTitle = rank.title;
+    s.rankBadge = rank.badge;
+    const progressXp = prog.progressXp;
+    const nextLevelReq = prog.nextLevelReq;
+    const percent = prog.percent;
 
     // Next Rank Milestone
     let nextMilestone = 'Max Rank Achieved (Superchat Whale 🐳)';
@@ -465,7 +507,7 @@ function renderProfileModalContent() {
         <div style="margin-bottom:18px;">
             <div style="display:flex; justify-content:space-between; font-size:0.82rem; margin-bottom:4px; opacity:0.85;">
                 <span>EXP: <b>${s.xp} XP</b></span>
-                <span>${progressXp} / 25 XP to Lv.${s.level + 1} (${percent}%)</span>
+                <span>${progressXp} / ${nextLevelReq} XP to Lv.${s.level + 1} (${percent}%)</span>
             </div>
             <div style="height:10px; background:rgba(0,0,0,0.08); border-radius:9999px; overflow:hidden; border:1px solid var(--border-color);">
                 <div style="width:${percent}%; height:100%; background:var(--main-accent); transition:width 0.4s ease;"></div>
@@ -515,6 +557,7 @@ function renderProfileModalContent() {
                 <li><b>Post a Reply:</b> +10 XP</li>
                 <li><b>Draw Daily Omikuji:</b> +20 XP</li>
                 <li><b>Daily Streak:</b> +5 XP bonus per consecutive day</li>
+                <li style="margin-top:4px; opacity:0.85;"><b>Level Up Requirement:</b> Starts at 25 XP (Lv.1), increasing by +10% max XP each level.</li>
             </ul>
         </details>
     `;
