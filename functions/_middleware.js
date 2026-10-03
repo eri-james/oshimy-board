@@ -475,8 +475,8 @@ async function resolveSocialMedia(rawUrl, origin) {
         }
     }
 
-    // 5. TikTok Video & Share URLs (handles tiktok.com, vt.tiktok.com, vm.tiktok.com, a.tnktok.com, tnktok.com)
-    const isTikTok = /(?:tiktok\.com|a\.tnktok\.com|tnktok\.com|vxtiktok\.com|tiktxk\.com)\//i.test(cleanUrl);
+    // 5. TikTok Video & Share URLs (handles tiktok.com, vt.tiktok.com, vm.tiktok.com, a.tnktok.com, tnktok.com, tfxktok.com)
+    const isTikTok = /(?:tiktok\.com|a\.tnktok\.com|tnktok\.com|vxtiktok\.com|tiktxk\.com|tfxktok\.com)\//i.test(cleanUrl);
     if (isTikTok) {
         const tnktokUrl = toTnktokUrl(cleanUrl);
         try {

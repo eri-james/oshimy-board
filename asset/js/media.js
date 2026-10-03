@@ -22,10 +22,21 @@ function getVxTikTokUrl(url) {
     if (!url || typeof url !== 'string') return '';
     const cleanUrl = url.trim();
     if (/https?:\/\/(?:www\.)?vxtiktok\.com/i.test(cleanUrl)) return cleanUrl;
-    if (/https?:\/\/(?:www\.)?(?:tiktx\.com|tiktxk\.com|tnktok\.com|a\.tnktok\.com)/i.test(cleanUrl)) {
-        return cleanUrl.replace(/https?:\/\/(?:www\.)?(?:tiktx\.com|tiktxk\.com|tnktok\.com|a\.tnktok\.com)/i, 'https://vxtiktok.com');
+    if (/https?:\/\/(?:www\.)?(?:tiktx\.com|tiktxk\.com|tnktok\.com|a\.tnktok\.com|tfxktok\.com)/i.test(cleanUrl)) {
+        return cleanUrl.replace(/https?:\/\/(?:www\.)?(?:tiktx\.com|tiktxk\.com|tnktok\.com|a\.tnktok\.com|tfxktok\.com)/i, 'https://vxtiktok.com');
     }
     return cleanUrl.replace(/https?:\/\/(?:www\.|m\.|vt\.|vm\.)?tiktok\.com/i, 'https://vxtiktok.com');
+}
+
+// Rewrites any TikTok video, photo, or short URL to use the tfxktok.com helper proxy
+function getTfxktokUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    const cleanUrl = url.trim();
+    if (/https?:\/\/(?:www\.)?tfxktok\.com/i.test(cleanUrl)) return cleanUrl;
+    if (/https?:\/\/(?:www\.)?(?:vxtiktok\.com|tiktx\.com|tiktxk\.com|tnktok\.com|a\.tnktok\.com)/i.test(cleanUrl)) {
+        return cleanUrl.replace(/https?:\/\/(?:www\.)?(?:vxtiktok\.com|tiktx\.com|tiktxk\.com|tnktok\.com|a\.tnktok\.com)/i, 'https://tfxktok.com');
+    }
+    return cleanUrl.replace(/https?:\/\/(?:www\.|m\.|vt\.|vm\.)?tiktok\.com/i, 'https://tfxktok.com');
 }
 
 // Rewrites any TikTok video, photo, or short URL to use the tiktx.com helper proxy
@@ -33,8 +44,8 @@ function getTikTxUrl(url) {
     if (!url || typeof url !== 'string') return '';
     const cleanUrl = url.trim();
     if (/https?:\/\/(?:www\.)?tiktx\.com/i.test(cleanUrl)) return cleanUrl;
-    if (/https?:\/\/(?:www\.)?(?:vxtiktok\.com|tiktxk\.com|tnktok\.com|a\.tnktok\.com)/i.test(cleanUrl)) {
-        return cleanUrl.replace(/https?:\/\/(?:www\.)?(?:vxtiktok\.com|tiktxk\.com|tnktok\.com|a\.tnktok\.com)/i, 'https://tiktx.com');
+    if (/https?:\/\/(?:www\.)?(?:vxtiktok\.com|tiktxk\.com|tnktok\.com|a\.tnktok\.com|tfxktok\.com)/i.test(cleanUrl)) {
+        return cleanUrl.replace(/https?:\/\/(?:www\.)?(?:vxtiktok\.com|tiktxk\.com|tnktok\.com|a\.tnktok\.com|tfxktok\.com)/i, 'https://tiktx.com');
     }
     return cleanUrl.replace(/https?:\/\/(?:www\.|m\.|vt\.|vm\.)?tiktok\.com/i, 'https://tiktx.com');
 }
@@ -44,8 +55,8 @@ function getTnktokUrl(url) {
     if (!url || typeof url !== 'string') return '';
     const cleanUrl = url.trim();
     if (/https?:\/\/a\.tnktok\.com/i.test(cleanUrl)) return cleanUrl;
-    if (/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktx\.com|tiktxk\.com)/i.test(cleanUrl)) {
-        return cleanUrl.replace(/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktx\.com|tiktxk\.com)/i, 'https://a.tnktok.com');
+    if (/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktx\.com|tiktxk\.com|tfxktok\.com)/i.test(cleanUrl)) {
+        return cleanUrl.replace(/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktx\.com|tiktxk\.com|tfxktok\.com)/i, 'https://a.tnktok.com');
     }
     return cleanUrl.replace(/https?:\/\/(?:www\.|m\.|vt\.|vm\.)?tiktok\.com/i, 'https://a.tnktok.com');
 }
@@ -54,7 +65,7 @@ function getTnktokUrl(url) {
 function isTikTokUrl(url) {
     if (!url || typeof url !== 'string') return false;
     const clean = stripSpoilerFlag(url);
-    return /(?:https?:\/\/)?(?:(?:www\.|m\.|vt\.|vm\.)?tiktok\.com|vxtiktok\.com|tiktx\.com|tiktxk\.com|a\.tnktok\.com|tnktok\.com)\//i.test(clean);
+    return /(?:https?:\/\/)?(?:(?:www\.|m\.|vt\.|vm\.)?tiktok\.com|vxtiktok\.com|tiktx\.com|tiktxk\.com|a\.tnktok\.com|tnktok\.com|tfxktok\.com)\//i.test(clean);
 }
 
 function isSpoilerMediaUrl(url) {
@@ -192,14 +203,15 @@ function getMediaType(url) {
         return { type: 'reddit', subreddit, id, isShare, url: cleanUrl, vxUrl, isSpoiler };
     }
 
-    // 8. TikTok Video & Share Link Detection (handles tiktok.com, vt.tiktok.com, vm.tiktok.com, vxtiktok.com, tiktx.com, and a.tnktok.com helper proxies)
-    const tiktokRegex = /(?:https?:\/\/)?(?:(?:www\.|m\.)?tiktok\.com|vxtiktok\.com|tiktx\.com|tiktxk\.com|a\.tnktok\.com|tnktok\.com)\/@([a-zA-Z0-9_.-]+)\/(?:video|photo|v)\/(\d+)/i;
+    // 8. TikTok Video & Share Link Detection (handles tiktok.com, vt.tiktok.com, vm.tiktok.com, vxtiktok.com, tiktx.com, tfxktok.com, and a.tnktok.com helper proxies)
+    const tiktokRegex = /(?:https?:\/\/)?(?:(?:www\.|m\.)?tiktok\.com|vxtiktok\.com|tiktx\.com|tiktxk\.com|tfxktok\.com|a\.tnktok\.com|tnktok\.com)\/@([a-zA-Z0-9_.-]+)\/(?:video|photo|v)\/(\d+)/i;
     const tiktokMatch = cleanUrl.match(tiktokRegex);
     if (tiktokMatch) {
         const username = tiktokMatch[1];
         const id = tiktokMatch[2];
         const proxyUrl = getTnktokUrl(cleanUrl);
         const vxUrl = getVxTikTokUrl(cleanUrl);
+        const tfxktokUrl = getTfxktokUrl(cleanUrl);
         const tikTxUrl = getTikTxUrl(cleanUrl);
         return {
             type: 'tiktok',
@@ -207,17 +219,19 @@ function getMediaType(url) {
             id,
             url: cleanUrl,
             vxUrl,
+            tfxktokUrl,
             tikTxUrl,
             proxyUrl,
             isSpoiler
         };
     }
-    const tiktokShortRegex = /(?:https?:\/\/)?(?:(?:vt|vm)\.tiktok\.com|(?:www\.)?tiktok\.com\/(?:t|v|embed|embed\/v2)|(?:vxtiktok\.com|tiktx\.com|tiktxk\.com|a\.tnktok\.com)\/(?:t|v|embed)?)\/([a-zA-Z0-9_-]+)/i;
+    const tiktokShortRegex = /(?:https?:\/\/)?(?:(?:vt|vm)\.tiktok\.com|(?:www\.)?tiktok\.com\/(?:t|v|embed|embed\/v2)|(?:vxtiktok\.com|tiktx\.com|tiktxk\.com|tfxktok\.com|a\.tnktok\.com)\/(?:t|v|embed)?)\/([a-zA-Z0-9_-]+)/i;
     const tiktokShortMatch = cleanUrl.match(tiktokShortRegex);
     if (tiktokShortMatch) {
         const id = tiktokShortMatch[1];
         const proxyUrl = getTnktokUrl(cleanUrl);
         const vxUrl = getVxTikTokUrl(cleanUrl);
+        const tfxktokUrl = getTfxktokUrl(cleanUrl);
         const tikTxUrl = getTikTxUrl(cleanUrl);
         return {
             type: 'tiktok',
@@ -226,6 +240,7 @@ function getMediaType(url) {
             isShort: true,
             url: cleanUrl,
             vxUrl,
+            tfxktokUrl,
             tikTxUrl,
             proxyUrl,
             isSpoiler
@@ -240,6 +255,7 @@ function getMediaType(url) {
             id: idMatch ? idMatch[1] : null,
             url: cleanUrl,
             vxUrl: getVxTikTokUrl(cleanUrl),
+            tfxktokUrl: getTfxktokUrl(cleanUrl),
             tikTxUrl: getTikTxUrl(cleanUrl),
             proxyUrl: getTnktokUrl(cleanUrl),
             isSpoiler
@@ -1446,23 +1462,22 @@ async function fetchTikTokWithProxyFallback(rawUrl, hintId = null, hintUser = nu
 
     // Normalize URL to standard domain if pointing to a known helper proxy
     const standardUrl = cleanUrl
-        .replace(/https?:\/\/(?:www\.)?(?:vxtiktok\.com|tiktx\.com|tiktxk\.com|a\.tnktok\.com|tnktok\.com)/i, 'https://www.tiktok.com');
+        .replace(/https?:\/\/(?:www\.)?(?:vxtiktok\.com|tiktx\.com|tiktxk\.com|tfxktok\.com|a\.tnktok\.com|tnktok\.com)/i, 'https://www.tiktok.com');
 
     const vxUrl = getVxTikTokUrl(cleanUrl);
+    const tfxktokUrl = getTfxktokUrl(cleanUrl);
     const tikTxUrl = getTikTxUrl(cleanUrl);
     const proxyUrl = getTnktokUrl(cleanUrl);
 
     // Extract ID and username if available in the URL
-    const idMatch = cleanUrl.match(/\/(?:video|photo|v)\/(\d+)/i) || cleanUrl.match(/(\d{15,22})/);
+    const idMatch = cleanUrl.match(/\/(?:video|photo|v)\/(\d+)/i) || cleanUrl.match(/(?:share_item_id|item_id)=(\d+)/i) || cleanUrl.match(/(\d{15,22})/);
     const userMatch = cleanUrl.match(/@([a-zA-Z0-9_.-]+)/i);
     const extractedId = idMatch ? idMatch[1] : (hintId || null);
-    const extractedUser = userMatch ? userMatch[1] : (hintUser || null);
-
-    const embedUrl = extractedId ? `https://www.tiktok.com/embed/${extractedId}` : null;
+    const extractedUser = (userMatch && userMatch[1] !== 'video') ? userMatch[1] : (hintUser || null);
 
     // Check embed cache first
     const cached = getCachedEmbedMeta('tt_' + cleanUrl) || (extractedId ? getCachedEmbedMeta('tt_id_' + extractedId) : null);
-    if (cached && (cached.videoUrl || cached.thumbnailUrl || cached.embedUrl)) {
+    if (cached && (cached.videoUrl || cached.thumbnailUrl)) {
         return cached;
     }
 
@@ -1470,6 +1485,7 @@ async function fetchTikTokWithProxyFallback(rawUrl, hintId = null, hintUser = nu
         url: cleanUrl,
         standardUrl,
         vxUrl,
+        tfxktokUrl,
         tikTxUrl,
         proxyUrl,
         videoId: extractedId,
@@ -1478,8 +1494,7 @@ async function fetchTikTokWithProxyFallback(rawUrl, hintId = null, hintUser = nu
         title: '',
         description: '',
         thumbnailUrl: null,
-        videoUrl: null,
-        embedUrl
+        videoUrl: null
     };
 
     // --- Tier 1: Local Backend Resolver (/api/tiktok/video) ---
@@ -1496,7 +1511,7 @@ async function fetchTikTokWithProxyFallback(rawUrl, hintId = null, hintUser = nu
                 if (v.description) result.description = v.description;
                 if (v.thumbnailUrl) result.thumbnailUrl = v.thumbnailUrl;
                 if (v.videoUrl) result.videoUrl = v.videoUrl;
-                if (v.embedUrl) result.embedUrl = v.embedUrl;
+                if (v.tfxktokUrl) result.tfxktokUrl = v.tfxktokUrl;
                 if (v.proxyUrl) result.proxyUrl = v.proxyUrl;
 
                 if (result.videoUrl) {
@@ -1509,7 +1524,6 @@ async function fetchTikTokWithProxyFallback(rawUrl, hintId = null, hintUser = nu
     } catch (_) {}
 
     // --- Tier 2: Direct Public TikTok Stream API (TikWM) ---
-    // TikWM supports open browser CORS and resolves direct MP4 stream and cover
     try {
         const queryTarget = standardUrl || cleanUrl;
         const tikResp = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(queryTarget)}`);
@@ -1530,9 +1544,6 @@ async function fetchTikTokWithProxyFallback(rawUrl, hintId = null, hintUser = nu
                     if (d.author.unique_id) result.authorHandle = d.author.unique_id;
                     if (d.author.nickname) result.authorName = d.author.nickname;
                 }
-                if (result.videoId && !result.embedUrl) {
-                    result.embedUrl = `https://www.tiktok.com/embed/${result.videoId}`;
-                }
                 if (result.videoUrl) {
                     setCachedEmbedMeta('tt_' + cleanUrl, result);
                     if (result.videoId) setCachedEmbedMeta('tt_id_' + result.videoId, result);
@@ -1542,9 +1553,9 @@ async function fetchTikTokWithProxyFallback(rawUrl, hintId = null, hintUser = nu
         }
     } catch (_) {}
 
-    // --- Tier 3: Probe via Embed Proxies (vxtiktok, tiktx, a.tnktok) through Backend API ---
+    // --- Tier 3: Probe via Embed Proxies (tfxktok, vxtiktok, tiktx, a.tnktok) through Backend API ---
     if (!result.videoUrl) {
-        const probeProxies = [vxUrl, tikTxUrl, proxyUrl].filter(Boolean);
+        const probeProxies = [tfxktokUrl, vxUrl, tikTxUrl, proxyUrl].filter(Boolean);
         for (const pUrl of probeProxies) {
             try {
                 const proxyResp = await fetch(`/api/tiktok/video?url=${encodeURIComponent(pUrl)}`);
@@ -1562,10 +1573,6 @@ async function fetchTikTokWithProxyFallback(rawUrl, hintId = null, hintUser = nu
                 }
             } catch (_) {}
         }
-    }
-
-    if (!result.embedUrl && result.videoId) {
-        result.embedUrl = `https://www.tiktok.com/embed/${result.videoId}`;
     }
 
     setCachedEmbedMeta('tt_' + cleanUrl, result);
@@ -2480,6 +2487,7 @@ function openLightbox(type, content, extra1, extra2, extra3) {
         const username = extra1 || '';
         const videoId = extra2 || '';
         const vxUrl = getVxTikTokUrl(tiktokUrl);
+        const tfxktokUrl = getTfxktokUrl(tiktokUrl);
         const tikTxUrl = getTikTxUrl(tiktokUrl);
         const proxyUrl = getTnktokUrl(tiktokUrl);
 
@@ -2492,11 +2500,78 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                         </svg>
                     </div>
                     <div style="font-size:1.15em; color:#FE2C55; font-weight:bold; margin-bottom:6px;">🎵 Loading TikTok...</div>
-                    <div style="font-size:0.85em; opacity:0.8;">Fetching stream via specialized proxy (TikWM / vxTikTok / tiktx)...</div>
+                    <div style="font-size:0.85em; opacity:0.8;">Fetching stream and media details...</div>
                 </div>
             `;
             custom.style.display = 'block';
         }
+
+        const renderTikTokFallbackCard = (meta) => {
+            if (!custom) return;
+            const displayUser = meta?.authorHandle || username || 'TikTok';
+            const authorName = meta?.authorName || displayUser;
+            const title = meta?.title || (meta?.videoId ? `TikTok Video #${meta.videoId}` : 'TikTok Video');
+            const desc = meta?.description || '';
+            const cover = meta?.thumbnailUrl || meta?.cover || '';
+            const watchUrl = meta?.tfxktokUrl || tfxktokUrl || tiktokUrl;
+            const origUrl = meta?.url || tiktokUrl;
+            const altVx = meta?.vxUrl || vxUrl;
+            const altTikTx = meta?.tikTxUrl || tikTxUrl;
+
+            custom.innerHTML = `
+                <div style="background:#111827; color:#fff; border-radius:12px; padding:18px 20px; text-align:left; max-width:min(95vw, 560px); max-height:92vh; display:flex; flex-direction:column; align-items:center; border:2px solid #FE2C55; box-shadow:0 8px 36px rgba(0,0,0,0.95); overflow:hidden;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:12px; border-bottom:1px solid rgba(255,255,255,0.12); padding-bottom:8px; gap:8px; flex-wrap:wrap;">
+                        <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:180px;">
+                            <div style="font-weight:bold; font-size:1.05em; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                                <span style="background:#FE2C55; color:#fff; font-size:0.75em; padding:2px 7px; border-radius:4px; font-weight:bold; margin-right:6px;">TIKTOK</span>
+                                ${escapeHtml(title)}
+                            </div>
+                            <div style="font-size:0.85em; color:#9ca3af; margin-top:2px;">
+                                By <b>@${escapeHtml(displayUser)}</b> ${authorName && authorName !== displayUser ? `(${escapeHtml(authorName)})` : ''}
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                            <a href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener noreferrer" style="background:rgba(254,44,85,0.2); border:1px solid #FE2C55; color:#FE2C55; font-size:11px; font-weight:bold; padding:4px 9px; border-radius:6px; text-decoration:none; white-space:nowrap;" title="Open with tfxktok ad-free web player">tfxktok ↗</a>
+                            <a href="${escapeHtml(altVx)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; font-size:11px; font-weight:bold; padding:4px 8px; border-radius:6px; text-decoration:none; white-space:nowrap;" title="Open with vxTikTok helper proxy">vxTikTok ↗</a>
+                            <a href="${escapeHtml(origUrl)}" target="_blank" rel="noopener noreferrer" style="background:#FE2C55; color:#fff; font-size:11px; font-weight:bold; padding:4px 10px; border-radius:6px; text-decoration:none; white-space:nowrap;">TikTok ↗</a>
+                        </div>
+                    </div>
+
+                    <div style="width:100%; display:flex; flex-direction:column; align-items:center; background:#0b0f19; border-radius:8px; padding:18px 14px; text-align:center; min-height:220px; justify-content:center;">
+                        ${cover ? `
+                            <div style="position:relative; max-width:280px; max-height:280px; margin-bottom:14px; border-radius:8px; overflow:hidden; box-shadow:0 4px 18px rgba(0,0,0,0.7); cursor:pointer;" onclick="window.open('${escapeHtml(watchUrl)}', '_blank')">
+                                <img src="${escapeHtml(cover)}" alt="TikTok Cover" style="width:100%; height:auto; max-height:260px; object-fit:cover; display:block;">
+                                <div style="position:absolute; inset:0; background:rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; transition:background 0.2s ease;">
+                                    <div style="width:50px; height:50px; border-radius:50%; background:#FE2C55; color:#fff; display:flex; align-items:center; justify-content:center; font-size:22px; box-shadow:0 4px 16px rgba(254,44,85,0.6);">▶</div>
+                                </div>
+                            </div>
+                        ` : `
+                            <div style="display:flex; justify-content:center; align-items:center; width:64px; height:64px; border-radius:50%; background:rgba(254,44,85,0.15); margin-bottom:14px;">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="#FE2C55">
+                                    <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64c.298-.002.595.042.88.13V9.4a6.33 6.33 0 0 0-1-.08A6.34 6.34 0 0 0 3 15.66a6.34 6.34 0 0 0 10.82 4.49 6.26 6.26 0 0 0 1.86-4.49V8.52a8.27 8.27 0 0 0 4.84 1.56V6.69z"/>
+                                </svg>
+                            </div>
+                        `}
+                        <div style="font-size:12px; color:#ff8c5a; background:rgba(254,44,85,0.12); border:1px solid rgba(254,44,85,0.3); border-radius:6px; padding:7px 12px; margin-bottom:14px; max-width:440px; line-height:1.4;">
+                            ⚠️ Direct in-app stream blocked by TikTok anti-embed protection. Click below to watch:
+                        </div>
+                        <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+                            <a href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener noreferrer" style="background:#FE2C55; color:#fff; font-weight:bold; font-size:12px; padding:7px 15px; border-radius:6px; text-decoration:none; box-shadow:0 2px 10px rgba(254,44,85,0.4);">Watch via tfxktok ↗</a>
+                            <a href="${escapeHtml(origUrl)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.25); color:#fff; font-weight:bold; font-size:12px; padding:7px 14px; border-radius:6px; text-decoration:none;">Open on TikTok ↗</a>
+                            <a href="${escapeHtml(altVx)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; font-size:12px; font-weight:bold; padding:7px 12px; border-radius:6px; text-decoration:none;">vxTikTok ↗</a>
+                            ${altTikTx ? `<a href="${escapeHtml(altTikTx)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; font-size:12px; font-weight:bold; padding:7px 12px; border-radius:6px; text-decoration:none;">tiktx ↗</a>` : ''}
+                        </div>
+                    </div>
+
+                    ${desc && desc !== title ? `
+                        <div style="font-size:12px; color:#d1d5db; margin-top:10px; max-height:55px; overflow-y:auto; width:100%; text-align:left; line-height:1.35;">
+                            ${escapeHtml(desc)}
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+            custom.style.display = 'block';
+        };
 
         fetchTikTokWithProxyFallback(tiktokUrl, videoId, username)
             .then(v => {
@@ -2505,160 +2580,73 @@ function openLightbox(type, content, extra1, extra2, extra3) {
                 const directVideoUrl = v.videoUrl ? `/api/proxy/video?url=${encodeURIComponent(v.videoUrl)}` : null;
                 const fallbackDirectUrl = v.videoUrl || null;
                 const displayUser = v.authorHandle || username || 'TikTok';
+                const targetTfx = v.tfxktokUrl || tfxktokUrl || `https://tfxktok.com/@${displayUser}/video/${v.videoId || videoId}`;
                 const targetVx = v.vxUrl || vxUrl;
-                const targetTikTx = v.tikTxUrl || tikTxUrl;
-                const targetProxy = v.proxyUrl || proxyUrl;
-                const resolvedId = v.videoId || videoId;
-                const embedUrl = v.embedUrl || (resolvedId ? `https://www.tiktok.com/embed/${resolvedId}` : null);
+                const cover = v.thumbnailUrl || v.cover || '';
 
-                const renderPlayerUI = (mode = 'video') => {
-                    if (!custom) return;
-                    const hasDirect = Boolean(directVideoUrl || fallbackDirectUrl);
-                    const hasEmbed = Boolean(embedUrl);
-
-                    let playerHtml = '';
-                    if (mode === 'embed' && hasEmbed) {
-                        playerHtml = `
-                            <div style="position:relative; width:100%; height:min(75vh, 580px); display:flex; justify-content:center; align-items:center; background:#000; border-radius:8px; overflow:hidden;">
-                                <iframe src="${escapeHtml(embedUrl)}" style="width:100%; height:100%; max-width:380px; border:none; border-radius:8px;" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; picture-in-picture"></iframe>
-                            </div>
-                        `;
-                    } else if (hasDirect) {
-                        const initialSrc = directVideoUrl || fallbackDirectUrl;
-                        playerHtml = `
-                            <div style="position:relative; width:100%; max-height:calc(85vh - 120px); min-height:280px; display:flex; justify-content:center; align-items:center; overflow:hidden; background:#000; border-radius:8px;">
-                                <video id="ttVideoEl" src="${escapeHtml(initialSrc)}" controls autoplay loop playsinline poster="${escapeHtml(v.thumbnailUrl || '')}" style="max-width:100%; max-height:calc(85vh - 130px); object-fit:contain; border-radius:8px; outline:none; background:#000; display:block;"></video>
-                            </div>
-                        `;
-                    } else if (hasEmbed) {
-                        playerHtml = `
-                            <div style="position:relative; width:100%; height:min(75vh, 580px); display:flex; justify-content:center; align-items:center; background:#000; border-radius:8px; overflow:hidden;">
-                                <iframe src="${escapeHtml(embedUrl)}" style="width:100%; height:100%; max-width:380px; border:none; border-radius:8px;" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; picture-in-picture"></iframe>
-                            </div>
-                        `;
-                    } else {
-                        playerHtml = `
-                            <div style="padding:24px 16px; text-align:center; color:#ccc;">
-                                <div style="font-size:1.1em; color:#fff; font-weight:bold; margin-bottom:8px;">Direct stream unavailable</div>
-                                <div style="font-size:0.9em; margin-bottom:14px;">Open video using the proxy buttons below:</div>
-                            </div>
-                        `;
-                    }
-
-                    const toggleBtnHtml = (hasDirect && hasEmbed) ? `
-                        <button id="ttToggleModeBtn" style="background:${mode === 'embed' ? '#FE2C55' : 'rgba(254,44,85,0.2)'}; border:1px solid #FE2C55; color:${mode === 'embed' ? '#fff' : '#FE2C55'}; font-size:11px; font-weight:bold; padding:4px 9px; border-radius:6px; cursor:pointer; white-space:nowrap;" title="Switch between native player and TikTok web embed">
-                            ${mode === 'embed' ? '🎬 Native Video' : '📱 TikTok Embed'}
-                        </button>
-                    ` : '';
-
-                    custom.innerHTML = `
-                        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:left; max-width:min(95vw, 560px); max-height:92vh; display:flex; flex-direction:column; align-items:center; border:2px solid #FE2C55; box-shadow:0 8px 36px rgba(0,0,0,0.95); overflow:hidden;">
-                            <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:10px; border-bottom:1px solid rgba(255,255,255,0.12); padding-bottom:8px; gap:8px; flex-wrap:wrap;">
-                                <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:180px;">
-                                    <div style="font-weight:bold; font-size:1.05em; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                                        <span style="background:#FE2C55; color:#fff; font-size:0.75em; padding:2px 7px; border-radius:4px; font-weight:bold; margin-right:6px;">TIKTOK</span>
-                                        ${escapeHtml(v.title || `Video by @${displayUser}`)}
-                                    </div>
-                                    <div style="font-size:0.85em; color:#9ca3af; margin-top:2px;">
-                                        By <b>@${escapeHtml(displayUser)}</b> ${v.authorName && v.authorName !== displayUser ? `(${escapeHtml(v.authorName)})` : ''}
-                                    </div>
-                                </div>
-                                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
-                                    ${toggleBtnHtml}
-                                    <a href="${escapeHtml(targetVx)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; font-size:11px; font-weight:bold; padding:4px 8px; border-radius:6px; text-decoration:none; white-space:nowrap;" title="Open with vxTikTok helper proxy">vxTikTok ↗</a>
-                                    <a href="${escapeHtml(targetTikTx)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; font-size:11px; font-weight:bold; padding:4px 8px; border-radius:6px; text-decoration:none; white-space:nowrap;" title="Open with tiktx.com helper proxy">tiktx ↗</a>
-                                    <a href="${escapeHtml(tiktokUrl)}" target="_blank" rel="noopener noreferrer" style="background:#FE2C55; color:#fff; font-size:11px; font-weight:bold; padding:4px 10px; border-radius:6px; text-decoration:none; white-space:nowrap;">TikTok ↗</a>
-                                </div>
-                            </div>
-                            <div id="ttPlayerContainer" style="width:100%; display:flex; justify-content:center;">
-                                ${playerHtml}
-                            </div>
-                            ${v.description && v.description !== v.title ? `
-                                <div style="font-size:12px; color:#d1d5db; margin-top:10px; max-height:55px; overflow-y:auto; width:100%; text-align:left; line-height:1.35;">
-                                    ${escapeHtml(v.description)}
-                                </div>
-                            ` : ''}
-                        </div>
-                    `;
-                    custom.style.display = 'block';
-
-                    const toggleBtn = document.getElementById('ttToggleModeBtn');
-                    if (toggleBtn) {
-                        toggleBtn.onclick = (e) => {
-                            e.stopPropagation();
-                            renderPlayerUI(mode === 'video' ? 'embed' : 'video');
-                        };
-                    }
-
-                    const videoEl = document.getElementById('ttVideoEl');
-                    if (videoEl && hasEmbed) {
-                        videoEl.onerror = () => {
-                            if (fallbackDirectUrl && videoEl.src !== fallbackDirectUrl && !videoEl.dataset.triedFallback) {
-                                videoEl.dataset.triedFallback = 'true';
-                                videoEl.src = fallbackDirectUrl;
-                                videoEl.play().catch(() => {});
-                                return;
-                            }
-                            console.warn('[TikTok Player] Direct video error, auto-switching to embed player');
-                            renderPlayerUI('embed');
-                        };
-                    }
-                };
-
-                const preferredMode = (directVideoUrl || fallbackDirectUrl) ? 'video' : 'embed';
-                renderPlayerUI(preferredMode);
-            })
-            .catch(() => {
-                const fallbackId = (tiktokUrl.match(/\/(?:video|photo|v)\/(\d+)/i) || tiktokUrl.match(/(\d{15,22})/))?.[1] || videoId;
-                if (fallbackId && custom) {
-                    const embedUrl = `https://www.tiktok.com/embed/${fallbackId}`;
-                    custom.innerHTML = `
-                        <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:center; max-width:min(95vw, 440px); border:2px solid #FE2C55; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:8px;">
-                                <span style="background:#FE2C55; color:#fff; font-size:0.75em; padding:2px 7px; border-radius:4px; font-weight:bold;">TIKTOK</span>
-                                <div style="display:flex; gap:6px;">
-                                    <a href="${escapeHtml(vxUrl)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; font-size:11px; font-weight:bold; padding:4px 8px; border-radius:6px; text-decoration:none;">vxTikTok ↗</a>
-                                    <a href="${escapeHtml(tikTxUrl)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; font-size:11px; font-weight:bold; padding:4px 8px; border-radius:6px; text-decoration:none;">tiktx ↗</a>
-                                    <a href="${escapeHtml(tiktokUrl)}" target="_blank" rel="noopener noreferrer" style="background:#FE2C55; color:#fff; font-size:11px; font-weight:bold; padding:4px 10px; border-radius:6px; text-decoration:none;">TikTok ↗</a>
-                                </div>
-                            </div>
-                            <div style="position:relative; width:100%; height:min(75vh, 580px); display:flex; justify-content:center; align-items:center; background:#000; border-radius:8px; overflow:hidden;">
-                                <iframe src="${escapeHtml(embedUrl)}" style="width:100%; height:100%; max-width:380px; border:none; border-radius:8px;" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; picture-in-picture"></iframe>
-                            </div>
-                        </div>
-                    `;
-                    custom.style.display = 'block';
+                if (!directVideoUrl && !fallbackDirectUrl) {
+                    renderTikTokFallbackCard(v);
                     return;
                 }
 
-                if (custom) {
-                    custom.innerHTML = `
-                        <div style="background:#111827; color:#fff; border-radius:12px; padding:24px 20px; text-align:center; max-width:440px; border:2px solid #FE2C55; box-shadow:0 8px 30px rgba(0,0,0,0.85);">
-                            <div style="display:flex; justify-content:center; align-items:center; width:52px; height:52px; border-radius:50%; background:rgba(254,44,85,0.15); margin:0 auto 12px;">
-                                <svg width="28" height="28" viewBox="0 0 24 24" fill="#FE2C55">
-                                    <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64c.298-.002.595.042.88.13V9.4a6.33 6.33 0 0 0-1-.08A6.34 6.34 0 0 0 3 15.66a6.34 6.34 0 0 0 10.82 4.49 6.26 6.26 0 0 0 1.86-4.49V8.52a8.27 8.27 0 0 0 4.84 1.56V6.69z"/>
-                                </svg>
+                const initialSrc = directVideoUrl || fallbackDirectUrl;
+                custom.innerHTML = `
+                    <div style="background:#111827; color:#fff; border-radius:12px; padding:16px 20px; text-align:left; max-width:min(95vw, 560px); max-height:92vh; display:flex; flex-direction:column; align-items:center; border:2px solid #FE2C55; box-shadow:0 8px 36px rgba(0,0,0,0.95); overflow:hidden;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; width:100%; margin-bottom:10px; border-bottom:1px solid rgba(255,255,255,0.12); padding-bottom:8px; gap:8px; flex-wrap:wrap;">
+                            <div style="text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:180px;">
+                                <div style="font-weight:bold; font-size:1.05em; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                                    <span style="background:#FE2C55; color:#fff; font-size:0.75em; padding:2px 7px; border-radius:4px; font-weight:bold; margin-right:6px;">TIKTOK</span>
+                                    ${escapeHtml(v.title || `Video by @${displayUser}`)}
+                                </div>
+                                <div style="font-size:0.85em; color:#9ca3af; margin-top:2px;">
+                                    By <b>@${escapeHtml(displayUser)}</b> ${v.authorName && v.authorName !== displayUser ? `(${escapeHtml(v.authorName)})` : ''}
+                                </div>
                             </div>
-                            <div style="font-size:1.15em; font-weight:bold; color:#fff; margin-bottom:6px;">TikTok Video</div>
-                            <div style="font-size:0.9em; color:#bbb; margin-bottom:18px;">Open via proxy helpers or directly on TikTok:</div>
-                            <div style="display:flex; justify-content:center; gap:8px; flex-wrap:wrap;">
-                                <a href="${escapeHtml(vxUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:rgba(254,44,85,0.2); border:1px solid #FE2C55; color:#FE2C55; font-weight:bold; font-size:0.9em; padding:8px 14px; border-radius:8px; text-decoration:none;">
-                                    vxTikTok ↗
-                                </a>
-                                <a href="${escapeHtml(tikTxUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:rgba(254,44,85,0.2); border:1px solid #FE2C55; color:#FE2C55; font-weight:bold; font-size:0.9em; padding:8px 14px; border-radius:8px; text-decoration:none;">
-                                    tiktx ↗
-                                </a>
-                                <a href="${escapeHtml(proxyUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; font-weight:bold; font-size:0.9em; padding:8px 14px; border-radius:8px; text-decoration:none;">
-                                    a.tnktok ↗
-                                </a>
-                                <a href="${escapeHtml(tiktokUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block; background:#FE2C55; color:#fff; font-weight:bold; font-size:0.9em; padding:8px 14px; border-radius:8px; text-decoration:none;">
-                                    TikTok ↗
-                                </a>
+                            <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                                <a href="${escapeHtml(targetTfx)}" target="_blank" rel="noopener noreferrer" style="background:rgba(254,44,85,0.2); border:1px solid #FE2C55; color:#FE2C55; font-size:11px; font-weight:bold; padding:4px 8px; border-radius:6px; text-decoration:none; white-space:nowrap;" title="Open with tfxktok helper proxy">tfxktok ↗</a>
+                                <a href="${escapeHtml(targetVx)}" target="_blank" rel="noopener noreferrer" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:#fff; font-size:11px; font-weight:bold; padding:4px 8px; border-radius:6px; text-decoration:none; white-space:nowrap;" title="Open with vxTikTok helper proxy">vxTikTok ↗</a>
+                                <a href="${escapeHtml(tiktokUrl)}" target="_blank" rel="noopener noreferrer" style="background:#FE2C55; color:#fff; font-size:11px; font-weight:bold; padding:4px 10px; border-radius:6px; text-decoration:none; white-space:nowrap;">TikTok ↗</a>
                             </div>
                         </div>
-                    `;
-                    custom.style.display = 'block';
+                        <div id="ttPlayerContainer" style="width:100%; display:flex; justify-content:center;">
+                            <div style="position:relative; width:100%; max-height:calc(85vh - 120px); min-height:280px; display:flex; justify-content:center; align-items:center; overflow:hidden; background:#000; border-radius:8px;">
+                                <video id="ttVideoEl" src="${escapeHtml(initialSrc)}" controls autoplay loop playsinline poster="${escapeHtml(cover)}" style="max-width:100%; max-height:calc(85vh - 130px); object-fit:contain; border-radius:8px; outline:none; background:#000; display:block;"></video>
+                            </div>
+                        </div>
+                        ${v.description && v.description !== v.title ? `
+                            <div style="font-size:12px; color:#d1d5db; margin-top:10px; max-height:55px; overflow-y:auto; width:100%; text-align:left; line-height:1.35;">
+                                ${escapeHtml(v.description)}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+                custom.style.display = 'block';
+
+                const videoEl = document.getElementById('ttVideoEl');
+                if (videoEl) {
+                    videoEl.onerror = () => {
+                        if (fallbackDirectUrl && videoEl.src !== fallbackDirectUrl && !videoEl.dataset.triedFallback) {
+                            videoEl.dataset.triedFallback = 'true';
+                            videoEl.src = fallbackDirectUrl;
+                            videoEl.play().catch(() => {});
+                            return;
+                        }
+                        // Direct stream blocked by TikTok protection - switch gracefully to rich fallback preview card
+                        renderTikTokFallbackCard(v);
+                    };
                 }
+            })
+            .catch(() => {
+                const fallbackId = (tiktokUrl.match(/\/(?:video|photo|v)\/(\d+)/i) || tiktokUrl.match(/(\d{15,22})/))?.[1] || videoId;
+                renderTikTokFallbackCard({
+                    url: tiktokUrl,
+                    videoId: fallbackId,
+                    authorHandle: username,
+                    title: `TikTok Video${fallbackId ? ` #${fallbackId}` : ''}`,
+                    tfxktokUrl: tfxktokUrl || `https://tfxktok.com/@${username || 'tiktok'}/video/${fallbackId}`,
+                    vxUrl,
+                    tikTxUrl
+                });
             });
     }
 

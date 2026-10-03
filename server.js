@@ -340,10 +340,17 @@ app.get('/api/proxy/video', async (req, res) => {
             'video.twimg.com', 'pbs.twimg.com', 'twimg.com',
             'v.redd.it', 'packaged-media.redd.it', 'preview.redd.it', 'i.redd.it', 'reddit.com', 'redditmedia.com',
             'vxreddit.com', 'rxddit.com', 'embedez.com', 'redditez.com', 'akamaized.net', 'cloudfront.net',
-            'tiktokcdn.com', 'tiktokcdn-us.com', 'tiktok.com', 'byteoversea.com', 'ibytedtos.com',
-            'tikwm.com', 'offload.tnktok.com', 'tnktok.com', 'vxtiktok.com', 'tiktxk.com', 'tiktx.com'
+            'tiktokcdn.com', 'tiktokcdn-us.com', 'tiktokcdn-eu.com', 'tiktokcdn-in.com', 'tiktok.com', 'byteoversea.com', 'ibytedtos.com', 'tiktokv.com',
+            'tikwm.com', 'offload.tnktok.com', 'tnktok.com', 'vxtiktok.com', 'tiktxk.com', 'tiktx.com', 'tfxktok.com'
         ];
-        const isAllowed = allowedHosts.some(h => target.hostname === h || target.hostname.endsWith('.' + h));
+        const isAllowed = allowedHosts.some(h => target.hostname === h || target.hostname.endsWith('.' + h)) ||
+                          target.hostname.includes('tiktok') ||
+                          target.hostname.includes('byteoversea') ||
+                          target.hostname.includes('ibytedtos') ||
+                          target.hostname.includes('tikwm') ||
+                          target.hostname.includes('tnktok') ||
+                          target.hostname.includes('tfxktok') ||
+                          target.hostname.includes('tiktx');
         if (!isAllowed) {
             return res.status(403).send('Host not allowed for video proxy');
         }
@@ -353,7 +360,7 @@ app.get('/api/proxy/video', async (req, res) => {
             referer = 'https://x.com/';
         } else if (target.hostname.includes('vxreddit.com')) {
             referer = 'https://vxreddit.com/';
-        } else if (target.hostname.includes('tiktok') || target.hostname.includes('byte') || target.hostname.includes('tikwm') || target.hostname.includes('tnktok')) {
+        } else if (target.hostname.includes('tiktok') || target.hostname.includes('byte') || target.hostname.includes('tikwm') || target.hostname.includes('tnktok') || target.hostname.includes('tfxktok')) {
             referer = 'https://www.tiktok.com/';
         }
 
@@ -1177,24 +1184,34 @@ app.get('/api/reddit/post', async (req, res) => {
     }
 });
 
-// TikTok Video Details Resolver via TikWM, Official TikTok oEmbed, and a.tnktok.com failover
+// TikTok Video Details Resolver via TikWM, tfxktok scraper, Official TikTok oEmbed, and a.tnktok.com failover
 const tiktokCache = new Map();
 
 function toTnktokUrl(cleanUrl) {
     if (!cleanUrl || typeof cleanUrl !== 'string') return '';
     const trimmed = cleanUrl.trim();
     if (/https?:\/\/a\.tnktok\.com/i.test(trimmed)) return trimmed;
-    if (/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktxk\.com)/i.test(trimmed)) {
-        return trimmed.replace(/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktxk\.com)/i, 'https://a.tnktok.com');
+    if (/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktxk\.com|tfxktok\.com)/i.test(trimmed)) {
+        return trimmed.replace(/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktxk\.com|tfxktok\.com)/i, 'https://a.tnktok.com');
     }
     return trimmed.replace(/https?:\/\/(?:www\.|m\.|vt\.|vm\.)?tiktok\.com/i, 'https://a.tnktok.com');
+}
+
+function toTfxktokUrl(cleanUrl) {
+    if (!cleanUrl || typeof cleanUrl !== 'string') return '';
+    const trimmed = cleanUrl.trim();
+    if (/https?:\/\/(?:www\.)?tfxktok\.com/i.test(trimmed)) return trimmed;
+    if (/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktxk\.com|a\.tnktok\.com)/i.test(trimmed)) {
+        return trimmed.replace(/https?:\/\/(?:www\.)?(?:tnktok\.com|vxtiktok\.com|tiktxk\.com|a\.tnktok\.com)/i, 'https://tfxktok.com');
+    }
+    return trimmed.replace(/https?:\/\/(?:www\.|m\.|vt\.|vm\.)?tiktok\.com/i, 'https://tfxktok.com');
 }
 
 async function resolveTikTokCanonicalUrl(rawUrl) {
     if (!rawUrl || typeof rawUrl !== 'string') return '';
     let clean = rawUrl.trim();
-    if (clean.includes('a.tnktok.com') || clean.includes('vxtiktok.com') || clean.includes('tiktxk.com')) {
-        clean = clean.replace(/https?:\/\/(?:www\.)?(?:a\.tnktok\.com|tnktok\.com|vxtiktok\.com|tiktxk\.com)/i, 'https://www.tiktok.com');
+    if (clean.includes('a.tnktok.com') || clean.includes('vxtiktok.com') || clean.includes('tiktxk.com') || clean.includes('tfxktok.com')) {
+        clean = clean.replace(/https?:\/\/(?:www\.)?(?:a\.tnktok\.com|tnktok\.com|vxtiktok\.com|tiktxk\.com|tfxktok\.com)/i, 'https://www.tiktok.com');
     }
     // Expand short links (vt.tiktok.com, vm.tiktok.com, /t/, /v/)
     if (/(?:vt|vm)\.tiktok\.com|\/t\/|\/v\//i.test(clean)) {
@@ -1233,6 +1250,7 @@ async function fetchTikTokDetails(rawUrl) {
     }
 
     const proxyUrl = toTnktokUrl(canonicalUrl || cleanUrl);
+    const tfxktokUrl = toTfxktokUrl(canonicalUrl || cleanUrl);
     let videoId = null;
     let authorHandle = null;
     let authorName = null;
@@ -1241,10 +1259,10 @@ async function fetchTikTokDetails(rawUrl) {
     let thumbnailUrl = null;
     let videoUrl = null;
 
-    const idMatch = (canonicalUrl || cleanUrl).match(/\/(?:video|photo|v)\/(\d+)/i) || (canonicalUrl || cleanUrl).match(/(\d{15,22})/);
+    const idMatch = (canonicalUrl || cleanUrl).match(/\/(?:video|photo|v)\/(\d+)/i) || (canonicalUrl || cleanUrl).match(/(?:share_item_id|item_id)=(\d+)/i) || (canonicalUrl || cleanUrl).match(/(\d{15,22})/);
     if (idMatch) videoId = idMatch[1];
     const userMatch = (canonicalUrl || cleanUrl).match(/@([a-zA-Z0-9_.-]+)/i);
-    if (userMatch) authorHandle = userMatch[1];
+    if (userMatch && userMatch[1] && userMatch[1] !== 'video') authorHandle = userMatch[1];
 
     const targetQuery = canonicalUrl || cleanUrl;
 
@@ -1273,11 +1291,42 @@ async function fetchTikTokDetails(rawUrl) {
         }
     } catch (_) {}
 
-    // 2. Official TikTok oEmbed API (guaranteed thumbnail & official embed metadata)
+    // 2. tfxktok Scraper (reliable proxy scraper for MP4 CDN streams)
+    if (!videoUrl && videoId) {
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3500);
+            const targetTfUrl = `https://tfxktok.com/@${authorHandle || 'tiktok'}/video/${videoId}`;
+            const tfResp = await fetch(targetTfUrl, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+                redirect: 'follow'
+            });
+            clearTimeout(timeout);
+            if (tfResp.ok) {
+                const tfHtml = await tfResp.text();
+                const vidMatch = tfHtml.match(/property=["']og:video(?::secure_url|:url)?["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                 tfHtml.match(/content=["'](https?:\/\/[^"']+)["']\s+property=["']og:video(?::secure_url|:url)?["']/i);
+                const titleMatch = tfHtml.match(/property=["'](?:og:title|twitter:title)["']\s+content=["']([^"']+)["']/i) ||
+                                   tfHtml.match(/content=["']([^"']+)["']\s+property=["'](?:og:title|twitter:title)["']/i);
+                const descMatch = tfHtml.match(/property=["'](?:og:description|twitter:description)["']\s+content=["']([^"']+)["']/i) ||
+                                  tfHtml.match(/content=["']([^"']+)["']\s+property=["'](?:og:description|twitter:description)["']/i);
+                const imgMatch = tfHtml.match(/property=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                 tfHtml.match(/content=["'](https?:\/\/[^"']+)["']\s+property=["'](?:og:image|twitter:image)["']/i);
+
+                if (!videoUrl && vidMatch && vidMatch[1]) videoUrl = decodeHtmlEntities(vidMatch[1].trim());
+                if (!thumbnailUrl && imgMatch && imgMatch[1]) thumbnailUrl = decodeHtmlEntities(imgMatch[1].trim());
+                if (!title && titleMatch && titleMatch[1]) title = decodeHtmlEntities(titleMatch[1].trim());
+                if (!description && descMatch && descMatch[1]) description = decodeHtmlEntities(descMatch[1].trim());
+            }
+        } catch (_) {}
+    }
+
+    // 3. Official TikTok oEmbed API (guaranteed thumbnail & official embed metadata)
     if (!thumbnailUrl || !title || !videoId) {
         try {
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 4000);
+            const timeout = setTimeout(() => controller.abort(), 3500);
             const oeResp = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(targetQuery)}`, {
                 signal: controller.signal,
                 headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
@@ -1296,7 +1345,7 @@ async function fetchTikTokDetails(rawUrl) {
         } catch (_) {}
     }
 
-    // 3. Failover scraper: a.tnktok.com helper
+    // 4. Failover scraper: a.tnktok.com helper
     if (!videoUrl || !thumbnailUrl) {
         try {
             const controller = new AbortController();
@@ -1324,14 +1373,12 @@ async function fetchTikTokDetails(rawUrl) {
         } catch (_) {}
     }
 
-    const embedUrl = videoId ? `https://www.tiktok.com/embed/${videoId}` : null;
-
     const video = {
         url: cleanUrl,
         canonicalUrl: canonicalUrl || cleanUrl,
         proxyUrl,
+        tfxktokUrl,
         videoId,
-        embedUrl,
         authorHandle: authorHandle || 'tiktok',
         authorName: authorName || authorHandle || 'TikTok',
         title: title || description || 'TikTok Video',
