@@ -552,6 +552,12 @@ function getCatalogThumbnail(mediaUrl) {
         `;
     }
     if (media.type === 'tiktok') {
+        const cached = typeof getCachedEmbedMeta === 'function' ? getCachedEmbedMeta('tt_' + media.url) : null;
+        const rawThumb = cached ? (cached.thumbnailUrl || cached.imageUrl || cached.cover) : null;
+        if (rawThumb) {
+            const optThumb = typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(rawThumb, 240) : rawThumb;
+            return `<img src="${escapeHtml(optThumb)}" class="catalog-thumb" alt="TikTok Thumbnail" loading="lazy" decoding="async" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';else{this.onerror=null;this.parentElement.innerHTML='<div class=\\'catalog-placeholder-icon\\' style=\\'color:#FE2C55;\\'>🎵</div>';}">`;
+        }
         const proxyUrl = media.proxyUrl || (typeof getTnktokUrl === 'function' ? getTnktokUrl(media.url) : media.url);
         return `
             <div class="tiktok-placeholder" data-tiktok-url="${escapeHtml(media.url)}" data-tiktok-proxy="${escapeHtml(proxyUrl)}" data-tiktok-id="${escapeHtml(media.id || '')}" data-tiktok-user="${escapeHtml(media.username || '')}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">

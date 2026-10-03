@@ -818,16 +818,27 @@ export async function onRequest(context) {
                 const allowedHosts = [
                     'video.twimg.com', 'pbs.twimg.com', 'twimg.com',
                     'v.redd.it', 'packaged-media.redd.it', 'preview.redd.it', 'i.redd.it', 'reddit.com', 'redditmedia.com',
-                    'vxreddit.com', 'rxddit.com', 'embedez.com', 'redditez.com', 'akamaized.net', 'cloudfront.net'
+                    'vxreddit.com', 'rxddit.com', 'embedez.com', 'redditez.com', 'akamaized.net', 'cloudfront.net',
+                    'tiktokcdn.com', 'tiktokcdn-us.com', 'tiktok.com', 'byteoversea.com', 'ibytedtos.com',
+                    'tikwm.com', 'offload.tnktok.com', 'tnktok.com', 'vxtiktok.com', 'tiktxk.com'
                 ];
                 const isAllowed = allowedHosts.some(h => target.hostname === h || target.hostname.endsWith('.' + h));
                 if (!isAllowed) {
                     return new Response('Host not allowed for video proxy', { status: 403 });
                 }
 
+                let referer = 'https://www.reddit.com/';
+                if (target.hostname.includes('twimg.com')) {
+                    referer = 'https://x.com/';
+                } else if (target.hostname.includes('vxreddit.com')) {
+                    referer = 'https://vxreddit.com/';
+                } else if (target.hostname.includes('tiktok') || target.hostname.includes('byte') || target.hostname.includes('tikwm') || target.hostname.includes('tnktok')) {
+                    referer = 'https://www.tiktok.com/';
+                }
+
                 const headers = new Headers();
                 headers.set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
-                headers.set('Referer', target.hostname.includes('twimg.com') ? 'https://x.com/' : (target.hostname.includes('vxreddit.com') ? 'https://vxreddit.com/' : 'https://www.reddit.com/'));
+                headers.set('Referer', referer);
 
                 const clientRange = request.headers.get('Range');
                 if (clientRange) {
@@ -1397,7 +1408,7 @@ export async function onRequest(context) {
             }
         }
 
-        // TikTok Video Details Resolver via a.tnktok.com helper proxy
+        // TikTok Video Details Resolver via TikWM, Official TikTok oEmbed, and a.tnktok.com failover
         if (route === 'tiktok' && path[1] === 'video' && method === 'GET') {
             const rawUrl = url.searchParams.get('url');
             if (!rawUrl) {
@@ -1415,64 +1426,137 @@ export async function onRequest(context) {
                 return trimmed.replace(/https?:\/\/(?:www\.|m\.|vt\.|vm\.)?tiktok\.com/i, 'https://a.tnktok.com');
             };
 
-            try {
-                const proxyUrl = toTnktokUrl(cleanUrl);
-                const userMatch = cleanUrl.match(/@([a-zA-Z0-9_.-]+)/i);
-                let authorHandle = userMatch ? userMatch[1] : null;
+            const resolveTikTokCanonicalUrl = async (u) => {
+                if (!u || typeof u !== 'string') return '';
+                let clean = u.trim();
+                if (clean.includes('a.tnktok.com') || clean.includes('vxtiktok.com') || clean.includes('tiktxk.com')) {
+                    clean = clean.replace(/https?:\/\/(?:www\.)?(?:a\.tnktok\.com|tnktok\.com|vxtiktok\.com|tiktxk\.com)/i, 'https://www.tiktok.com');
+                }
+                if (/(?:vt|vm)\.tiktok\.com|\/t\/|\/v\//i.test(clean)) {
+                    try {
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 3500);
+                        const resp = await fetch(clean, {
+                            method: 'GET',
+                            redirect: 'follow',
+                            signal: controller.signal,
+                            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+                        });
+                        clearTimeout(timeout);
+                        if (resp && resp.url && resp.url.includes('tiktok.com')) {
+                            clean = resp.url.split('?')[0];
+                        }
+                    } catch (_) {}
+                }
+                return clean;
+            };
 
+            try {
+                const canonicalUrl = await resolveTikTokCanonicalUrl(cleanUrl);
+                const proxyUrl = toTnktokUrl(canonicalUrl || cleanUrl);
+                let videoId = null;
+                let authorHandle = null;
+                let authorName = null;
                 let title = '';
                 let description = '';
                 let videoUrl = null;
                 let thumbnailUrl = null;
 
+                const idMatch = (canonicalUrl || cleanUrl).match(/\/(?:video|photo|v)\/(\d+)/i) || (canonicalUrl || cleanUrl).match(/(\d{15,22})/);
+                if (idMatch) videoId = idMatch[1];
+                const userMatch = (canonicalUrl || cleanUrl).match(/@([a-zA-Z0-9_.-]+)/i);
+                if (userMatch) authorHandle = userMatch[1];
+
+                const targetQuery = canonicalUrl || cleanUrl;
+
+                // 1. TikWM API
                 try {
                     const controller = new AbortController();
                     const timeout = setTimeout(() => controller.abort(), 4000);
-                    const resp = await fetch(proxyUrl, {
+                    const twResp = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(targetQuery)}`, {
                         signal: controller.signal,
-                        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
-                        redirect: 'follow'
+                        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
                     });
                     clearTimeout(timeout);
-
-                    if (resp.ok) {
-                        const html = await resp.text();
-                        const vidMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
-                                         html.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']/i);
-                        const imgMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
-                                         html.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
-                        const titleMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:title|twitter:title)["']\s+content=["']([^"']+)["']/i) ||
-                                           html.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:title|twitter:title)["']/i);
-                        const descMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:description|twitter:description)["']\s+content=["']([^"']+)["']/i) ||
-                                          html.match(/<meta\s+content=["']([^"']+)["']\s+(?:property|name)=["'](?:og:description|twitter:description)["']/i);
-
-                        if (vidMatch && vidMatch[1]) videoUrl = decodeHtmlEntities(vidMatch[1].trim());
-                        if (imgMatch && imgMatch[1]) thumbnailUrl = decodeHtmlEntities(imgMatch[1].trim());
-                        if (titleMatch && titleMatch[1]) {
-                            const rawTitle = decodeHtmlEntities(titleMatch[1].trim());
-                            if (rawTitle && !rawTitle.toLowerCase().includes('error') && !rawTitle.toLowerCase().includes('not find')) {
-                                title = rawTitle;
-                            }
-                        }
-                        if (descMatch && descMatch[1]) {
-                            const rawDesc = decodeHtmlEntities(descMatch[1].trim());
-                            if (rawDesc && !rawDesc.toLowerCase().includes('error')) {
-                                description = rawDesc;
+                    if (twResp.ok) {
+                        const twData = await twResp.json();
+                        if (twData && twData.code === 0 && twData.data) {
+                            const d = twData.data;
+                            if (d.id) videoId = String(d.id);
+                            if (d.play || d.wmplay) videoUrl = d.play || d.wmplay;
+                            if (d.cover || d.origin_cover) thumbnailUrl = d.cover || d.origin_cover;
+                            if (d.title) title = d.title;
+                            if (d.author) {
+                                if (d.author.unique_id) authorHandle = d.author.unique_id;
+                                if (d.author.nickname) authorName = d.author.nickname;
                             }
                         }
                     }
                 } catch (_) {}
 
-                if (!authorHandle && title) {
-                    const authorMatch = title.match(/@([a-zA-Z0-9_.-]+)/i);
-                    if (authorMatch) authorHandle = authorMatch[1];
+                // 2. Official TikTok oEmbed API
+                if (!thumbnailUrl || !title || !videoId) {
+                    try {
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 4000);
+                        const oeResp = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(targetQuery)}`, {
+                            signal: controller.signal,
+                            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+                        });
+                        clearTimeout(timeout);
+                        if (oeResp.ok) {
+                            const oeData = await oeResp.json();
+                            if (oeData) {
+                                if (!thumbnailUrl && oeData.thumbnail_url) thumbnailUrl = oeData.thumbnail_url;
+                                if (!title && oeData.title) title = oeData.title;
+                                if (!authorHandle && oeData.author_unique_id) authorHandle = oeData.author_unique_id;
+                                if (!authorName && oeData.author_name) authorName = oeData.author_name;
+                                if (!videoId && oeData.embed_product_id) videoId = String(oeData.embed_product_id);
+                            }
+                        }
+                    } catch (_) {}
                 }
+
+                // 3. Failover scraper
+                if (!videoUrl || !thumbnailUrl) {
+                    try {
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 3500);
+                        const resp = await fetch(proxyUrl, {
+                            signal: controller.signal,
+                            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)' },
+                            redirect: 'follow'
+                        });
+                        clearTimeout(timeout);
+
+                        if (resp.ok) {
+                            const html = await resp.text();
+                            const vidMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                             html.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:video(?::secure_url|:url)?|twitter:player:stream)["']/i);
+                            const imgMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:image|twitter:image)["']\s+content=["'](https?:\/\/[^"']+)["']/i) ||
+                                             html.match(/<meta\s+content=["'](https?:\/\/[^"']+)["']\s+(?:property|name)=["'](?:og:image|twitter:image)["']/i);
+                            const titleMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:title|twitter:title)["']\s+content=["']([^"']+)["']/i);
+                            const descMatch = html.match(/<meta\s+(?:property|name)=["'](?:og:description|twitter:description)["']\s+content=["']([^"']+)["']/i);
+
+                            if (!videoUrl && vidMatch && vidMatch[1]) videoUrl = decodeHtmlEntities(vidMatch[1].trim());
+                            if (!thumbnailUrl && imgMatch && imgMatch[1]) thumbnailUrl = decodeHtmlEntities(imgMatch[1].trim());
+                            if (!title && titleMatch && titleMatch[1]) title = decodeHtmlEntities(titleMatch[1].trim());
+                            if (!description && descMatch && descMatch[1]) description = decodeHtmlEntities(descMatch[1].trim());
+                        }
+                    } catch (_) {}
+                }
+
+                const embedUrl = videoId ? `https://www.tiktok.com/embed/${videoId}` : null;
 
                 const video = {
                     url: cleanUrl,
+                    canonicalUrl: canonicalUrl || cleanUrl,
                     proxyUrl,
+                    videoId,
+                    embedUrl,
                     authorHandle: authorHandle || 'tiktok',
-                    title: title || description || `TikTok Video`,
+                    authorName: authorName || authorHandle || 'TikTok',
+                    title: title || description || 'TikTok Video',
                     description: description || title || '',
                     thumbnailUrl,
                     videoUrl
