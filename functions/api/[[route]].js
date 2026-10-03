@@ -1590,6 +1590,74 @@ export async function onRequest(context) {
             return json({ success: true, boards: result });
         }
 
+        // 1b. GET /api/portal/overview
+        if (route === 'portal' && path[1] === 'overview' && method === 'GET') {
+            const publicBoards = ['myvt', 'vt', 'vg', 'amg', 'ca', 'tech', 'mamak'];
+            const placeholders = publicBoards.map(() => '?').join(',');
+
+            // 1. Board Stats
+            const stats = await db.prepare(
+                'SELECT board, COUNT(*) as thread_count, MAX(bumped_at) as last_activity FROM threads WHERE is_locked = 0 AND is_archived = 0 GROUP BY board'
+            ).all();
+
+            const statMap = {};
+            if (stats.results) {
+                for (const s of stats.results) statMap[s.board] = s;
+            }
+
+            const boardResult = {};
+            for (const [k, v] of Object.entries(BOARDS)) {
+                boardResult[k] = {
+                    ...v,
+                    thread_count: statMap[k]?.thread_count || 0,
+                    last_activity: statMap[k]?.last_activity || 0
+                };
+            }
+
+            // 2. Global Totals across public boards
+            const totals = await db.prepare(`
+                SELECT 
+                    (SELECT COUNT(*) FROM threads WHERE board IN (${placeholders}) AND is_locked = 0 AND is_archived = 0) as total_threads,
+                    (SELECT COUNT(*) FROM replies WHERE board IN (${placeholders})) as total_replies
+            `).bind(...publicBoards, ...publicBoards).first();
+
+            // 3. Recent Active Discussions (Top 8 recently bumped threads on public boards)
+            const recentThreadsRes = await db.prepare(`
+                SELECT id, board, subject, substr(comment, 1, 140) as snippet, media_url, reply_count, bumped_at, created_at
+                FROM threads
+                WHERE board IN (${placeholders}) AND is_locked = 0 AND is_archived = 0
+                ORDER BY bumped_at DESC
+                LIMIT 8
+            `).bind(...publicBoards).all();
+
+            // 4. Recent Media Reel (Top 12 attachments across public boards, non-spoiler)
+            const recentMediaRes = await db.prepare(`
+                SELECT media_url, board, id as post_id, id as thread_id, created_at, 'thread' as post_type
+                FROM threads
+                WHERE board IN (${placeholders}) AND length(media_url) > 0 AND media_url NOT LIKE '%spoiler%'
+                UNION ALL
+                SELECT media_url, board, id as post_id, thread_id, created_at, 'reply' as post_type
+                FROM replies
+                WHERE board IN (${placeholders}) AND length(media_url) > 0 AND media_url NOT LIKE '%spoiler%'
+                ORDER BY created_at DESC
+                LIMIT 12
+            `).bind(...publicBoards, ...publicBoards).all();
+
+            return json({
+                success: true,
+                boards: boardResult,
+                stats: {
+                    total_threads: totals?.total_threads || 0,
+                    total_replies: totals?.total_replies || 0,
+                    active_boards: publicBoards.length
+                },
+                recent_threads: recentThreadsRes.results || [],
+                recent_media: recentMediaRes.results || []
+            }, 200, {
+                'Cache-Control': 'public, max-age=15, stale-while-revalidate=45'
+            });
+        }
+
         // 2. GET /api/threads
         if (route === 'threads' && method === 'GET') {
             const board = url.searchParams.get('b');

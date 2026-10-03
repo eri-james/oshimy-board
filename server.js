@@ -1642,6 +1642,92 @@ app.get('/api/boards', (req, res) => {
     }
 });
 
+// 1b. Portal Overview Endpoint (Consolidated stats, top active bumped threads, recent media, and board summaries)
+let portalOverviewCache = null;
+let portalOverviewCacheTime = 0;
+
+app.get('/api/portal/overview', (req, res) => {
+    const now = Date.now();
+    if (portalOverviewCache && (now - portalOverviewCacheTime < 20000)) {
+        res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=45');
+        return res.json(portalOverviewCache);
+    }
+
+    try {
+        const publicBoards = ['myvt', 'vt', 'vg', 'amg', 'ca', 'tech', 'mamak'];
+        const placeholders = publicBoards.map(() => '?').join(',');
+
+        // 1. Board Stats
+        const stats = db.prepare(`
+            SELECT board, COUNT(*) as thread_count, MAX(bumped_at) as last_activity
+            FROM threads
+            WHERE is_locked = 0 AND is_archived = 0
+            GROUP BY board
+        `).all();
+
+        const statMap = {};
+        for (const s of stats) statMap[s.board] = s;
+
+        const boardResult = {};
+        for (const [key, data] of Object.entries(BOARDS)) {
+            boardResult[key] = {
+                ...data,
+                thread_count: statMap[key]?.thread_count || 0,
+                last_activity: statMap[key]?.last_activity || 0
+            };
+        }
+
+        // 2. Global Totals across public boards
+        const totals = db.prepare(`
+            SELECT 
+                (SELECT COUNT(*) FROM threads WHERE board IN (${placeholders}) AND is_locked = 0 AND is_archived = 0) as total_threads,
+                (SELECT COUNT(*) FROM replies WHERE board IN (${placeholders})) as total_replies
+        `).get(...publicBoards, ...publicBoards);
+
+        // 3. Recent Active Discussions (Top 8 recently bumped threads on public boards)
+        const recentThreads = db.prepare(`
+            SELECT id, board, subject, substr(comment, 1, 140) as snippet, media_url, reply_count, bumped_at, created_at
+            FROM threads
+            WHERE board IN (${placeholders}) AND is_locked = 0 AND is_archived = 0
+            ORDER BY bumped_at DESC
+            LIMIT 8
+        `).all(...publicBoards);
+
+        // 4. Recent Media Reel (Top 12 attachments across public boards, non-spoiler)
+        const recentMedia = db.prepare(`
+            SELECT media_url, board, id as post_id, id as thread_id, created_at, 'thread' as post_type
+            FROM threads
+            WHERE board IN (${placeholders}) AND length(media_url) > 0 AND media_url NOT LIKE '%spoiler%'
+            UNION ALL
+            SELECT media_url, board, id as post_id, thread_id, created_at, 'reply' as post_type
+            FROM replies
+            WHERE board IN (${placeholders}) AND length(media_url) > 0 AND media_url NOT LIKE '%spoiler%'
+            ORDER BY created_at DESC
+            LIMIT 12
+        `).all(...publicBoards, ...publicBoards);
+
+        const responsePayload = {
+            success: true,
+            boards: boardResult,
+            stats: {
+                total_threads: totals?.total_threads || 0,
+                total_replies: totals?.total_replies || 0,
+                active_boards: publicBoards.length
+            },
+            recent_threads: recentThreads,
+            recent_media: recentMedia
+        };
+
+        portalOverviewCache = responsePayload;
+        portalOverviewCacheTime = now;
+        res.setHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=45');
+        return res.json(responsePayload);
+    } catch (err) {
+        console.error('[Portal Overview] Error:', err);
+        return res.status(500).json({ error: 'Failed to load portal overview' });
+    }
+});
+
 // 2. Thread List for a Board
 app.get('/api/threads', (req, res) => {
     const board = req.query.b;

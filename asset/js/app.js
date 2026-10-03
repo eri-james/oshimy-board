@@ -261,20 +261,266 @@ function renderBoardNav() {
 // --- PORTAL STATS ON HOME VIEW ---
 const DEFAULT_BANNER = "https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=300&q=80";
 
+const BOARD_PORTAL_META = {
+    'myvt':  { icon: '🏮', name: 'MY VTuber', desc: 'Malaysian Virtual YouTubers, agencies & indies' },
+    'vt':    { icon: '🌐', name: 'SEA & Global VTuber', desc: 'hololive, Nijisanji, Phase & global VTubers' },
+    'vg':    { icon: '🎮', name: 'Video Games', desc: 'Gaming discussion, gacha, esports & PC/console' },
+    'amg':   { icon: '📚', name: 'Anime & Manga', desc: 'Seasonal anime, manga, light novels & figures' },
+    'ca':    { icon: '🎨', name: 'Cosplay & Art', desc: 'Local ACG events, cosplay, fanart & creative works' },
+    'tech':  { icon: '💻', name: 'Tech Stuff', desc: 'Hardware, streaming setups & tech chat' },
+    'mamak': { icon: '☕', name: 'MY Stuff & Off-topic', desc: 'Malaysian daily banter & kopitiam talk' },
+    'rqr':   { icon: '📢', name: 'Board Request & Report', desc: 'Feedback, feature requests & rule reports' }
+};
+
+function saveLastVisitedThread(th) {
+    if (!th || !th.id) return;
+    try {
+        const item = {
+            id: th.id,
+            board: th.board || currentBoard,
+            subject: (th.subject && th.subject.trim()) ? th.subject.trim() : (th.comment ? th.comment.substring(0, 48) : `Thread #${th.id.substring(1, 8)}`),
+            reply_count: th.reply_count || 0,
+            visited_at: Date.now()
+        };
+        localStorage.setItem('oshimy_last_thread', JSON.stringify(item));
+    } catch (_) {}
+}
+
+function renderPortalResumeBar() {
+    const bar = document.getElementById('portalResumeBar');
+    const textEl = document.getElementById('portalResumeText');
+    const btn = document.getElementById('portalResumeBtn');
+    if (!bar || !textEl || !btn) return;
+
+    try {
+        const raw = localStorage.getItem('oshimy_last_thread');
+        if (!raw) {
+            bar.style.display = 'none';
+            return;
+        }
+        const item = JSON.parse(raw);
+        if (!item || !item.id || !item.board) {
+            bar.style.display = 'none';
+            return;
+        }
+
+        textEl.innerHTML = `Continue reading: <b>${escapeHtml(item.subject)}</b> on <span style="color:var(--main-accent); font-weight:bold;">/${escapeHtml(item.board)}/</span>`;
+        btn.href = `?b=${encodeURIComponent(item.board)}&t=${encodeURIComponent(item.id)}`;
+        bar.style.display = 'flex';
+    } catch (_) {
+        bar.style.display = 'none';
+    }
+}
+
+function dismissPortalResume() {
+    try {
+        localStorage.removeItem('oshimy_last_thread');
+    } catch (_) {}
+    const bar = document.getElementById('portalResumeBar');
+    if (bar) bar.style.display = 'none';
+}
+
+function renderPortalOverview(data) {
+    if (!data) return;
+
+    // 1. Pulse Metrics
+    if (data.stats) {
+        const pulseThreads = document.getElementById('pulseThreads');
+        const pulseReplies = document.getElementById('pulseReplies');
+        const pulseBoards = document.getElementById('pulseBoards');
+        if (pulseThreads) pulseThreads.innerText = data.stats.total_threads ?? '--';
+        if (pulseReplies) pulseReplies.innerText = data.stats.total_replies ?? '--';
+        if (pulseBoards) pulseBoards.innerText = data.stats.active_boards ?? '8';
+    }
+
+    // 2. Active Discussions Grid
+    const threadGrid = document.getElementById('portalThreadGrid');
+    if (threadGrid) {
+        if (!data.recent_threads || data.recent_threads.length === 0) {
+            threadGrid.innerHTML = `
+                <div style="grid-column: 1 / -1; text-align: center; padding: 24px; color: var(--text-color); opacity: 0.75;">
+                    No active discussions yet. Click a board below to start a thread!
+                </div>
+            `;
+        } else {
+            let html = '';
+            for (const th of data.recent_threads) {
+                const title = th.subject || th.snippet || `Thread #${th.id.substring(1, 8)}`;
+                const snippet = th.snippet ? th.snippet : '';
+                const timeAgo = formatTimeAgo(th.bumped_at);
+                const thumbUrl = th.media_url ? (typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(th.media_url, 140) : th.media_url) : null;
+
+                const thumbHtml = thumbUrl ? `
+                    <div class="portal-thread-thumb-wrap">
+                        <img src="${escapeHtml(thumbUrl)}" class="portal-thread-thumb" alt="Thread thumbnail" loading="lazy" decoding="async" onerror="this.onerror=null; this.parentElement.innerHTML='<span class=\\'portal-thread-thumb-icon\\'>💬</span>';">
+                    </div>
+                ` : `
+                    <div class="portal-thread-thumb-wrap">
+                        <span class="portal-thread-thumb-icon">💬</span>
+                    </div>
+                `;
+
+                html += `
+                    <a href="?b=${encodeURIComponent(th.board)}&t=${encodeURIComponent(th.id)}" class="portal-thread-card" data-board="${escapeHtml(th.board)}" data-title="${escapeHtml(title.toLowerCase())}" data-snippet="${escapeHtml(snippet.toLowerCase())}">
+                        ${thumbHtml}
+                        <div class="portal-thread-info">
+                            <div>
+                                <div class="portal-thread-top">
+                                    <span class="portal-board-chip">/${escapeHtml(th.board)}/</span>
+                                </div>
+                                <div class="portal-thread-title">${escapeHtml(title)}</div>
+                                ${snippet ? `<div class="portal-thread-snippet">${escapeHtml(snippet)}</div>` : ''}
+                            </div>
+                            <div class="portal-thread-meta">
+                                <span class="portal-thread-replies">💬 ${th.reply_count} replies</span>
+                                <span>${timeAgo}</span>
+                            </div>
+                        </div>
+                    </a>
+                `;
+            }
+            threadGrid.innerHTML = html;
+        }
+    }
+
+    // 3. Recent Media Reel
+    const mediaReel = document.getElementById('portalMediaReel');
+    const mediaSection = document.getElementById('portalMediaSection');
+    if (mediaReel) {
+        if (!data.recent_media || data.recent_media.length === 0) {
+            if (mediaSection) mediaSection.style.display = 'none';
+        } else {
+            if (mediaSection) mediaSection.style.display = 'block';
+            let html = '';
+            for (const m of data.recent_media) {
+                const optThumb = typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(m.media_url, 220) : m.media_url;
+                const isVid = /\.(mp4|webm|mov)(?:\?|$)/i.test(m.media_url) || /youtu|tiktok|v\.redd\.it/i.test(m.media_url);
+                const badgeIcon = isVid ? '▶' : '';
+
+                html += `
+                    <a href="?b=${encodeURIComponent(m.board)}&t=${encodeURIComponent(m.thread_id)}#post_${encodeURIComponent(m.post_id)}" class="portal-media-card" title="View post on /${escapeHtml(m.board)}/">
+                        <img src="${escapeHtml(optThumb)}" class="portal-media-img" loading="lazy" decoding="async" alt="Media attachment" onerror="this.onerror=null; this.src='${escapeHtml(m.media_url)}';">
+                        <span class="portal-media-board-badge">/${escapeHtml(m.board)}/</span>
+                        ${isVid ? `<span class="portal-media-type-badge">${badgeIcon}</span>` : ''}
+                    </a>
+                `;
+            }
+            mediaReel.innerHTML = html;
+        }
+    }
+
+    // 4. Board Hub Grid
+    const boardGrid = document.getElementById('portalBoardGrid');
+    if (boardGrid) {
+        let html = '';
+        const boardEntries = Object.entries(data.boards || BOARDS);
+        for (const [key, b] of boardEntries) {
+            if (b.type === 'nsfw') continue; // Family-friendly SFW portal hub
+            const meta = BOARD_PORTAL_META[key] || { icon: '🍱', name: b.title || key, desc: 'Community board discussions' };
+            const countText = b.thread_count !== undefined ? `${b.thread_count} threads` : 'Browse';
+
+            html += `
+                <div class="portal-board-card" data-board="${escapeHtml(key)}" data-name="${escapeHtml(meta.name.toLowerCase())}" data-desc="${escapeHtml(meta.desc.toLowerCase())}">
+                    <div>
+                        <div class="portal-board-card-head">
+                            <div class="portal-board-code-wrap">
+                                <span class="portal-board-icon">${meta.icon}</span>
+                                <a href="?b=${encodeURIComponent(key)}" class="portal-board-code">/${escapeHtml(key)}/</a>
+                            </div>
+                            <span class="portal-board-thread-count">${countText}</span>
+                        </div>
+                        <div style="font-weight:700; font-size:0.95em; color:var(--text-color); margin-bottom:4px;">${escapeHtml(meta.name)}</div>
+                        <div class="portal-board-desc">${escapeHtml(meta.desc)}</div>
+                    </div>
+                    <div class="portal-board-actions">
+                        <a href="?b=${encodeURIComponent(key)}" class="portal-board-btn portal-btn-feed">💬 Feed</a>
+                        <a href="?b=${encodeURIComponent(key)}&view=catalog" class="portal-board-btn portal-btn-catalog">🖼️ Catalog</a>
+                    </div>
+                </div>
+            `;
+        }
+        boardGrid.innerHTML = html;
+    }
+}
+
+function handlePortalFilter(rawQuery) {
+    const q = (rawQuery || '').trim().toLowerCase();
+    const clearBtn = document.getElementById('portalFilterClear');
+    if (clearBtn) clearBtn.style.display = q ? 'block' : 'none';
+
+    // 1. Filter Board Cards
+    const boardCards = document.querySelectorAll('.portal-board-card');
+    let boardMatches = 0;
+    boardCards.forEach(card => {
+        const board = card.getAttribute('data-board') || '';
+        const name = card.getAttribute('data-name') || '';
+        const desc = card.getAttribute('data-desc') || '';
+        const match = !q || board.includes(q) || name.includes(q) || desc.includes(q);
+        card.style.display = match ? 'flex' : 'none';
+        if (match) boardMatches++;
+    });
+
+    // 2. Filter Active Discussions
+    const threadCards = document.querySelectorAll('.portal-thread-card');
+    let threadMatches = 0;
+    threadCards.forEach(card => {
+        const board = card.getAttribute('data-board') || '';
+        const title = card.getAttribute('data-title') || '';
+        const snippet = card.getAttribute('data-snippet') || '';
+        const match = !q || board.includes(q) || title.includes(q) || snippet.includes(q);
+        card.style.display = match ? 'flex' : 'none';
+        if (match) threadMatches++;
+    });
+
+    const activeHint = document.getElementById('portalActiveHint');
+    if (activeHint) {
+        if (q) {
+            activeHint.innerText = `Showing ${threadMatches} matching discussions & ${boardMatches} boards`;
+        } else {
+            activeHint.innerText = 'Top active topics across all boards';
+        }
+    }
+}
+
+function clearPortalFilter() {
+    const input = document.getElementById('portalSearchInput');
+    if (input) {
+        input.value = '';
+        handlePortalFilter('');
+        input.focus();
+    }
+}
+
 async function loadPortalStats() {
     loadSiteSettings();
+    renderPortalResumeBar();
+
+    // 1. SWR Cache: Render instant cached overview (0ms layout shift)
     try {
-        const data = await apiFetch('/boards');
-        if (data.success && data.boards) {
-            for (const [key, b] of Object.entries(data.boards)) {
-                const el = document.getElementById(`stat_${key}`);
-                if (el) {
-                    el.innerText = `(${b.thread_count} threads)`;
-                }
+        const cachedStr = sessionStorage.getItem('oshimy_portal_overview');
+        if (cachedStr) {
+            const cached = JSON.parse(cachedStr);
+            if (cached && cached.success) {
+                renderPortalOverview(cached);
             }
         }
+    } catch (_) {}
+
+    // 2. Fresh Network Fetch
+    try {
+        const data = await apiFetch('/portal/overview');
+        if (data && data.success) {
+            try { sessionStorage.setItem('oshimy_portal_overview', JSON.stringify(data)); } catch (_) {}
+            renderPortalOverview(data);
+        }
     } catch (err) {
-        console.warn('Could not load board stats:', err);
+        console.warn('[Portal] Overview network fetch fallback:', err);
+        try {
+            const data = await apiFetch('/boards');
+            if (data && data.success && data.boards) {
+                renderPortalOverview({ success: true, boards: data.boards, recent_threads: [], recent_media: [] });
+            }
+        } catch (_) {}
     }
 }
 
@@ -1225,6 +1471,8 @@ async function loadThreadView(threadId, isSilent = false) {
         }
         const th = data.thread;
         const replies = data.replies || [];
+
+        if (th) saveLastVisitedThread(th);
 
         const isArchived = Boolean(th && (th.is_locked || th.is_archived || th.is_static));
         window.isCurrentThreadArchived = isArchived;

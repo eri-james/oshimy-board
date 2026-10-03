@@ -198,9 +198,9 @@
 
     <!-- 3. VIEW: HOME PAGE (Portal View) -->
     <div id="homeView" class="home-view-wrapper" style="display:none;">
-        <!-- BANNER IMAGE SLOT -->
+        <!-- BANNER IMAGE SLOT (Zero-CLS with explicit dimensions and high fetch priority) -->
         <div class="home-banner-wrapper" id="homeBannerWrapper">
-            <img id="homeBannerImg" class="home-banner-img" src="https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=300&q=80" alt="OshiMY Community Banner" loading="lazy" decoding="async">
+            <img id="homeBannerImg" class="home-banner-img" src="https://images.unsplash.com/photo-1578632767115-351597cf2477?auto=format&fit=crop&w=1200&h=300&q=80" alt="OshiMY Community Banner" width="1200" height="300" fetchpriority="high" decoding="async">
             
             <!-- Admin Hover Controls -->
             <div id="bannerAdminControl" class="banner-admin-control" style="display:none;">
@@ -220,31 +220,94 @@
             </div>
         </div>
 
-        <!-- MAIN (CENTER) BOX -->
+        <!-- MAIN (CENTER) PORTAL CONTAINER -->
         <div class="home-container">
-            <div class="welcome-section">
-                <h2>Selamat Datang to OshiMY (おしまい)</h2>
-                <p>The premier anonymous imageboard for the Malaysian Virtual YouTuber community and adjacent Otaku culture.</p>
-                <div style="margin-top: 8px; font-size: 0.9em; opacity: 0.9; font-style: italic; color: var(--main-accent);">
-                    🏮 <i>"It's never oshimai for your oshi."</i>
+            <!-- 1. RESUME READING BAR (Appears automatically if user visited a thread) -->
+            <div id="portalResumeBar" class="portal-resume-bar" style="display:none;">
+                <span class="portal-resume-icon">📖</span>
+                <span class="portal-resume-text" id="portalResumeText">Continue reading...</span>
+                <div class="portal-resume-actions">
+                    <a href="javascript:void(0)" id="portalResumeBtn" class="portal-resume-jump">Jump ↗</a>
+                    <button type="button" class="portal-resume-dismiss" onclick="dismissPortalResume()" title="Dismiss">✕</button>
                 </div>
             </div>
 
-            <div class="instruction-grid">
-                <div class="ins-card">
-                    <h3>🍱 Board Directory</h3>
-                    <div class="home-links">
-                        <a href="?b=myvt">/myvt/ - MY VTuber <span id="stat_myvt" style="font-size:0.85em; opacity:0.8;"></span></a>
-                        <a href="?b=vt">/vt/ - SEA & Global VTuber <span id="stat_vt" style="font-size:0.85em; opacity:0.8;"></span></a>
-                        <a href="?b=vg">/vg/ - Video Games <span id="stat_vg" style="font-size:0.85em; opacity:0.8;"></span></a>
-                        <a href="?b=amg">/amg/ - Anime & Manga <span id="stat_amg" style="font-size:0.85em; opacity:0.8;"></span></a>
-                        <a href="?b=ca">/ca/ - Cosplay & Art <span id="stat_ca" style="font-size:0.85em; opacity:0.8;"></span></a>
-                        <a href="?b=tech">/tech/ - Tech Stuff <span id="stat_tech" style="font-size:0.85em; opacity:0.8;"></span></a>
-                        <a href="?b=mamak">/mamak/ - MY Stuff & Off-topic <span id="stat_mamak" style="font-size:0.85em; opacity:0.8;"></span></a>
-                        <a href="?b=rqr">/rqr/ - Board Request & Report <span id="stat_rqr" style="font-size:0.85em; opacity:0.8;"></span></a>
+            <!-- 2. WELCOME & COMMUNITY PULSE -->
+            <div class="welcome-section">
+                <h2>Selamat Datang to OshiMY (おしまい)</h2>
+                <p>The premier anonymous imageboard for the Malaysian Virtual YouTuber community and adjacent Otaku culture.</p>
+                <div class="portal-motto">
+                    🏮 <i>"It's never oshimai for your oshi."</i>
+                </div>
+
+                <!-- Community Metric Bar -->
+                <div class="portal-pulse-bar" id="portalPulseBar">
+                    <span class="pulse-item">⚡ <b id="pulseThreads">--</b> Active Threads</span>
+                    <span class="pulse-sep">•</span>
+                    <span class="pulse-item">💬 <b id="pulseReplies">--</b> Replies</span>
+                    <span class="pulse-sep">•</span>
+                    <span class="pulse-item">🏮 <b id="pulseBoards">8</b> Boards</span>
+                    <span class="pulse-sep">•</span>
+                    <span class="pulse-item pulse-tag">🚀 Low-Data WebP CDN</span>
+                </div>
+
+                <!-- Portal Real-Time Search & Jump Bar -->
+                <div class="portal-filter-container">
+                    <div class="portal-filter-wrap">
+                        <span class="portal-filter-icon">🔍</span>
+                        <input type="text" id="portalSearchInput" placeholder="Quick filter boards & active topics (e.g. myvt, hololive, art, mamak)..." oninput="handlePortalFilter(this.value)">
+                        <button type="button" id="portalFilterClear" class="portal-filter-clear" onclick="clearPortalFilter()" style="display:none;">✕</button>
                     </div>
                 </div>
-                
+            </div>
+
+            <!-- 3. ACTIVE DISCUSSIONS GRID -->
+            <div class="portal-section" id="portalActiveSection">
+                <div class="portal-section-header">
+                    <div class="portal-section-title">
+                        <span class="portal-title-icon">🔥</span>
+                        <h3>Active Discussions</h3>
+                        <span class="portal-section-badge">Live Bumps</span>
+                    </div>
+                    <div class="portal-section-hint" id="portalActiveHint">Top active topics across all boards</div>
+                </div>
+                <div class="portal-thread-grid" id="portalThreadGrid">
+                    <!-- Populated dynamically by JS -->
+                </div>
+            </div>
+
+            <!-- 4. RECENT MEDIA REEL -->
+            <div class="portal-section" id="portalMediaSection">
+                <div class="portal-section-header">
+                    <div class="portal-section-title">
+                        <span class="portal-title-icon">🎨</span>
+                        <h3>Recent Media &amp; Clips</h3>
+                        <span class="portal-section-badge">Community Reel</span>
+                    </div>
+                    <div class="portal-section-hint">Scroll for more ➔</div>
+                </div>
+                <div class="portal-media-reel" id="portalMediaReel">
+                    <!-- Populated dynamically by JS -->
+                </div>
+            </div>
+
+            <!-- 5. BOARD DIRECTORY HUB (Interactive Tiles) -->
+            <div class="portal-section" id="portalBoardsSection">
+                <div class="portal-section-header">
+                    <div class="portal-section-title">
+                        <span class="portal-title-icon">🍱</span>
+                        <h3>Board Directory</h3>
+                        <span class="portal-section-badge">Direct Access</span>
+                    </div>
+                    <div class="portal-section-hint">Select Feed to read or Catalog for thumbnails</div>
+                </div>
+                <div class="portal-board-grid" id="portalBoardGrid">
+                    <!-- Populated dynamically by JS -->
+                </div>
+            </div>
+
+            <!-- 6. INFORMATION & GUIDELINES -->
+            <div class="instruction-grid" style="margin-top: 28px;">
                 <div class="ins-card">
                     <h3>📖 How to Use</h3>
                     <div class="how-to-accordion">
@@ -252,7 +315,7 @@
                             <summary>📌 Browsing &amp; Boards</summary>
                             <div class="accordion-content">
                                 <ul>
-                                    <li><b>Board Directory:</b> Select a board above to browse active discussions.</li>
+                                    <li><b>Board Directory:</b> Choose <b>[Feed]</b> for traditional reading or <b>[Catalog]</b> for high-density thumbnail browsing.</li>
                                     <li><b>Live Auto-Update:</b> New posts appear automatically every 15 seconds without losing your place.</li>
                                     <li><b>Archive:</b> Click <b>[📦 Archive]</b> on any board to read discussions idle for over 3 days.</li>
                                 </ul>
@@ -267,7 +330,7 @@
                                     <li><b>Greentext:</b> Start any line with <code>&gt;</code> (e.g. <code>&gt;tfw my oshi is streaming</code>).</li>
                                     <li><b>Quoting:</b> Click any <b>No.xxxx</b> to quote a post or reply.</li>
                                     <li><b>Auto-Links:</b> Web URLs (http/https) are auto-linkified.</li>
-                                    <li><b>Media:</b> Click <b>Upload Image</b> for instant free hosting, or paste direct YouTube/X (Twitter) links.</li>
+                                    <li><b>Media:</b> Click <b>Upload Image</b> for instant free hosting, or paste direct YouTube, X (Twitter), Pixiv, Reddit, or TikTok links.</li>
                                 </ul>
                             </div>
                         </details>
@@ -316,11 +379,22 @@
                         </details>
                     </div>
                 </div>
-            </div>
 
-            <div class="rules-box">
-                <h3>📜 OshiMY Guidelines</h3>
-                <p>1. No illegal content (CSAM). 2. No spam or commercial advertising. 3. Be civil regarding local talents and their identities. 4. Post in the appropriate boards.</p>
+                <div class="ins-card" style="display:flex; flex-direction:column; justify-content:space-between;">
+                    <div>
+                        <h3>📜 OshiMY Guidelines</h3>
+                        <div class="rules-box" style="margin-top: 10px; background: var(--card-bg);">
+                            <p style="margin-top:0;"><b>1. No illegal content (CSAM).</b></p>
+                            <p><b>2. No spam or commercial advertising.</b></p>
+                            <p><b>3. Be civil regarding local talents and their identities.</b> Respect real-life privacy and boundaries.</p>
+                            <p><b>4. Post in the appropriate boards.</b> Use /mamak/ for off-topic, and 18+ boards for adult artwork.</p>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 16px; padding: 12px; border-radius: 6px; background: rgba(0, 132, 255, 0.06); border: 1px solid var(--border-color); font-size: 0.85em;">
+                        <b>💡 Power User Tip:</b> Press <kbd>?</kbd> anytime to view keyboard shortcuts, or click <b>[⚡ Quick Reply]</b> to post replies without scrolling!
+                    </div>
+                </div>
             </div>
 
             <footer style="margin-top: 25px; padding-top: 15px; border-top: 1px dashed var(--border-color); text-align: center; font-size: 0.82em; opacity: 0.75;">
