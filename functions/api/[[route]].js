@@ -820,7 +820,7 @@ export async function onRequest(context) {
                     'v.redd.it', 'packaged-media.redd.it', 'preview.redd.it', 'i.redd.it', 'reddit.com', 'redditmedia.com',
                     'vxreddit.com', 'rxddit.com', 'embedez.com', 'redditez.com', 'akamaized.net', 'cloudfront.net',
                     'tiktokcdn.com', 'tiktokcdn-us.com', 'tiktok.com', 'byteoversea.com', 'ibytedtos.com',
-                    'tikwm.com', 'offload.tnktok.com', 'tnktok.com', 'vxtiktok.com', 'tiktxk.com'
+                    'tikwm.com', 'offload.tnktok.com', 'tnktok.com', 'vxtiktok.com', 'tiktxk.com', 'tiktx.com'
                 ];
                 const isAllowed = allowedHosts.some(h => target.hostname === h || target.hostname.endsWith('.' + h));
                 if (!isAllowed) {
