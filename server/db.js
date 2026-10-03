@@ -11,8 +11,14 @@ const rootDir = path.resolve(__dirname, '..');
 const dbPath = path.join(rootDir, 'myvt.db');
 export const db = new DatabaseSync(dbPath);
 
-// Enable foreign keys
-db.exec('PRAGMA foreign_keys = ON;');
+// Performance & Concurrency Pragma Tuning
+db.exec(`
+    PRAGMA foreign_keys = ON;
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA temp_store = MEMORY;
+    PRAGMA cache_size = -64000;
+`);
 
 // Initialize schema
 const schemaSql = fs.readFileSync(path.join(rootDir, 'db', 'schema.sql'), 'utf-8');
@@ -94,6 +100,8 @@ try {
         CREATE INDEX IF NOT EXISTS idx_mentions_target_unread ON reply_mentions(target_user_id, is_read);
         CREATE INDEX IF NOT EXISTS idx_mentions_target_created ON reply_mentions(target_user_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_replies_thread_created_desc ON replies(thread_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_threads_board_pinned_bumped ON threads(board, is_pinned DESC, bumped_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_threads_board_locked_archived ON threads(board, is_locked, is_archived, bumped_at DESC);
     `);
 } catch (err) {
     console.error('[DB] Auto-migration error:', err);

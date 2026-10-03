@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS threads (
 );
 
 CREATE INDEX IF NOT EXISTS idx_threads_board_bumped ON threads(board, bumped_at DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_board_pinned_bumped ON threads(board, is_pinned DESC, bumped_at DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_board_locked_archived ON threads(board, is_locked, is_archived, bumped_at DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_pinned ON threads(is_pinned DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_user_id ON threads(user_id);
 

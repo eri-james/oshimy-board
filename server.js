@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import path from 'path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -30,6 +31,7 @@ const app = express();
 const PORT = 3000;
 
 app.set('trust proxy', true);
+app.use(compression());
 
 // Cache directory for extracted video first-frame thumbnails
 const VIDEO_THUMBS_DIR = path.join(__dirname, 'cache', 'video_thumbs');
@@ -1673,7 +1675,7 @@ app.get('/api/threads', (req, res) => {
         }
 
         let query = `
-            SELECT t.*, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count
+            SELECT t.*
             FROM threads t
             WHERE t.board = ?
         `;
@@ -1942,61 +1944,69 @@ app.post('/api/replies', (req, res) => {
         const displayTitle = (req.user && !hideId) ? req.user.display_title : null;
         const vanityFlair = buildUserVanityFlair(userId, showVanity, guest_flair);
 
+        db.exec('BEGIN IMMEDIATE TRANSACTION;');
         try {
-            db.prepare(`
-                INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, vanity_flair, reactions, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)
-            `).run(id, thread_id, thread.board, posterName, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, vanityFlair, now);
-        } catch (_) {
-            db.prepare(`
-                INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(id, thread_id, thread.board, posterName, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now);
-        }
-
-        // Bump thread activity and denormalized reply_count (Audit Finding 3 & 5)
-        try {
-            db.prepare('UPDATE threads SET reply_count = reply_count + 1, bumped_at = ? WHERE id = ?').run(now, thread_id);
-        } catch (_) {
-            db.prepare('UPDATE threads SET bumped_at = ? WHERE id = ?').run(now, thread_id);
-        }
-
-        // Mention and OP notification detection (Audit Finding 1 & Recommendation A.2)
-        try {
-            const targetUserIds = new Set();
-            if (thread.user_id && thread.user_id !== userId) {
-                targetUserIds.add(thread.user_id);
+            try {
+                db.prepare(`
+                    INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, vanity_flair, reactions, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)
+                `).run(id, thread_id, thread.board, posterName, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, vanityFlair, now);
+            } catch (_) {
+                db.prepare(`
+                    INSERT INTO replies (id, thread_id, board, name, comment, media_url, ip_hash, user_id, role, display_title, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(id, thread_id, thread.board, posterName, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now);
             }
-            const quoteMatches = comment.matchAll(/>>(?:#)?([a-zA-Z0-9_\-]+)/g);
-            for (const match of quoteMatches) {
-                const rawQuote = match[1];
-                if (thread.id === rawQuote || thread.id.includes(rawQuote)) {
-                    if (thread.user_id && thread.user_id !== userId) {
-                        targetUserIds.add(thread.user_id);
+
+            // Bump thread activity and denormalized reply_count (Audit Finding 3 & 5)
+            try {
+                db.prepare('UPDATE threads SET reply_count = reply_count + 1, bumped_at = ? WHERE id = ?').run(now, thread_id);
+            } catch (_) {
+                db.prepare('UPDATE threads SET bumped_at = ? WHERE id = ?').run(now, thread_id);
+            }
+
+            // Mention and OP notification detection (Audit Finding 1 & Recommendation A.2)
+            try {
+                const targetUserIds = new Set();
+                if (thread.user_id && thread.user_id !== userId) {
+                    targetUserIds.add(thread.user_id);
+                }
+                const quoteMatches = comment.matchAll(/>>(?:#)?([a-zA-Z0-9_\-]+)/g);
+                for (const match of quoteMatches) {
+                    const rawQuote = match[1];
+                    if (thread.id === rawQuote || thread.id.includes(rawQuote)) {
+                        if (thread.user_id && thread.user_id !== userId) {
+                            targetUserIds.add(thread.user_id);
+                        }
+                    }
+                    const quotedReply = db.prepare(`
+                        SELECT user_id FROM replies 
+                        WHERE thread_id = ? AND (id = ? OR id LIKE ?)
+                        LIMIT 1
+                    `).get(thread_id, rawQuote, '%' + rawQuote + '%');
+                    if (quotedReply && quotedReply.user_id && quotedReply.user_id !== userId) {
+                        targetUserIds.add(quotedReply.user_id);
                     }
                 }
-                const quotedReply = db.prepare(`
-                    SELECT user_id FROM replies 
-                    WHERE thread_id = ? AND (id = ? OR id LIKE ?)
-                    LIMIT 1
-                `).get(thread_id, rawQuote, '%' + rawQuote + '%');
-                if (quotedReply && quotedReply.user_id && quotedReply.user_id !== userId) {
-                    targetUserIds.add(quotedReply.user_id);
+
+                if (targetUserIds.size > 0) {
+                    const insertMention = db.prepare(`
+                        INSERT OR IGNORE INTO reply_mentions (id, source_reply_id, target_user_id, thread_id, created_at, is_read)
+                        VALUES (?, ?, ?, ?, ?, 0)
+                    `);
+                    for (const targetUid of targetUserIds) {
+                        const mentionId = 'm_' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
+                        insertMention.run(mentionId, id, targetUid, thread_id, now);
+                    }
                 }
+            } catch (mErr) {
+                console.warn('[Mentions] Error registering reply mention:', mErr);
             }
 
-            if (targetUserIds.size > 0) {
-                const insertMention = db.prepare(`
-                    INSERT OR IGNORE INTO reply_mentions (id, source_reply_id, target_user_id, thread_id, created_at, is_read)
-                    VALUES (?, ?, ?, ?, ?, 0)
-                `);
-                for (const targetUid of targetUserIds) {
-                    const mentionId = 'm_' + Date.now().toString(36) + crypto.randomBytes(4).toString('hex');
-                    insertMention.run(mentionId, id, targetUid, thread_id, now);
-                }
-            }
-        } catch (mErr) {
-            console.warn('[Mentions] Error registering reply mention:', mErr);
+            db.exec('COMMIT;');
+        } catch (txErr) {
+            try { db.exec('ROLLBACK;'); } catch (_) {}
+            throw txErr;
         }
 
         // Construct reply in memory - eliminates redundant read query (Audit Recommendation A.5)
@@ -3151,7 +3161,17 @@ ${threadUrlsXml ? '\n' + threadUrlsXml : ''}
 
 // --- STATIC ASSETS & DYNAMIC SSR METADATA ROUTING ---
 // Disable default index.html serving in express.static so root requests hit our dynamic SSR handler
-app.use(express.static(__dirname, { index: false }));
+app.use(express.static(__dirname, {
+    index: false,
+    maxAge: '1d',
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+            res.setHeader('Cache-Control', 'no-cache');
+        } else if (/\.(js|css|webp|png|jpg|jpeg|gif|svg|woff2?|ico)$/i.test(filePath)) {
+            res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+        }
+    }
+}));
 
 app.get('*', async (req, res) => {
     // If request path is an API route, return 404 JSON
