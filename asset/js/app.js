@@ -1156,12 +1156,14 @@ function renderThreadPreview(th) {
                         [ <a href="${threadTargetUrl}" class="reply-count-link">${replyCountText}</a> ]
                     </div>
                 </div>
+                <div style="clear: both;"></div>
             </div>
             <div class="replies" style="margin-left: 20px;">
                 ${repliesHtml}
             </div>
+            <div style="clear: both;"></div>
         </div>
-        <hr style="margin: 20px 0; border-color: var(--border-color);">
+        <hr class="thread-separator" style="clear: both; margin: 30px 0; border: 0; border-bottom: 2px dashed var(--border-color); opacity: 0.6;">
     `;
 }
 
@@ -1394,8 +1396,9 @@ async function loadThreadView(threadId, isSilent = false) {
                         <div class="comment">${formatComment(th.comment)}</div>
                         ${opStampsBarHtml}
                     </div>
+                    <div style="clear: both;"></div>
                 </div>
-                <hr style="margin: 15px 0; border-color: var(--border-color);">
+                <hr class="thread-separator" style="clear: both; margin: 24px 0; border: 0; border-bottom: 2px dashed var(--border-color); opacity: 0.6;">
             `;
         }
 

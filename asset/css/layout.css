@@ -135,6 +135,43 @@ body.night-mode .media-help-drawer .media-help-content code {
     cursor: pointer;
 }
 
+/* --- THREAD & OP CONTAINERS --- */
+.thread {
+    clear: both;
+    display: flow-root;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+    margin-bottom: 25px;
+    position: relative;
+}
+
+.op {
+    clear: both;
+    display: flow-root;
+    width: 100%;
+    position: relative;
+    min-height: 80px;
+    margin-left: 0;
+    margin-right: 0;
+    margin-bottom: 15px;
+}
+
+.thread::after,
+.op::after,
+.post-content::after {
+    content: "";
+    display: table;
+    clear: both;
+}
+
+.replies {
+    clear: both;
+    display: flow-root;
+    margin-left: 20px;
+    margin-top: 10px;
+}
+
 /* --- THREAD CARDS (OP) --- */
 .thread-card {
     background-color: var(--card-bg);
@@ -145,6 +182,8 @@ body.night-mode .media-help-drawer .media-help-content code {
     box-shadow: var(--shadow);
     width: auto;
     overflow: hidden;
+    clear: both;
+    display: flow-root;
 }
 
 /* Metadata Header */
@@ -202,10 +241,13 @@ body.night-mode .post-link-btn:hover {
 .post-content { display: block; min-height: 80px; }
 
 /* Thread Separator Line */
-.thread-separator {
+.thread-separator,
+hr.thread-separator,
+.thread + hr {
+    clear: both !important;
     border: 0;
     border-bottom: 2px dashed var(--border-color);
-    margin: 40px auto;
+    margin: 30px auto;
     width: 100%;
     display: block;
     opacity: 0.6;
