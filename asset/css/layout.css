@@ -2158,6 +2158,26 @@ body.night-mode .portal-thread-thumb-wrap {
     display: flex;
     align-items: center;
     justify-content: center;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.portal-thumb-embed-slot {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.portal-thread-thumb-wrap video,
+.portal-media-card video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    pointer-events: none;
 }
 
 /* 8. Board Hub Cards */

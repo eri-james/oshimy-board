@@ -272,7 +272,7 @@ function getMediaType(url) {
     return { type: 'image', url: cleanUrl, isSpoiler };
 }
 
-// --- EMBED METADATA SESSION CACHE & THUMBNAIL HELPER PROXIES ---
+// --- EMBED METADATA SESSION & LOCALSTORAGE CACHE & THUMBNAIL RESOLUTION ---
 const embedMemoryCache = new Map();
 
 function getCachedEmbedMeta(key) {
@@ -286,16 +286,18 @@ function getCachedEmbedMeta(key) {
         if (isCorrupted(item)) {
             embedMemoryCache.delete(key);
             try { sessionStorage.removeItem('oshimy_embed_' + key); } catch (_) {}
+            try { localStorage.removeItem('oshimy_embed_' + key); } catch (_) {}
             return null;
         }
         return item;
     }
     try {
-        const raw = sessionStorage.getItem('oshimy_embed_' + key);
+        const raw = sessionStorage.getItem('oshimy_embed_' + key) || localStorage.getItem('oshimy_embed_' + key);
         if (raw) {
             const parsed = JSON.parse(raw);
             if (isCorrupted(parsed)) {
                 try { sessionStorage.removeItem('oshimy_embed_' + key); } catch (_) {}
+                try { localStorage.removeItem('oshimy_embed_' + key); } catch (_) {}
                 return null;
             }
             embedMemoryCache.set(key, parsed);
@@ -310,6 +312,374 @@ function setCachedEmbedMeta(key, val) {
     try {
         sessionStorage.setItem('oshimy_embed_' + key, JSON.stringify(val));
     } catch (_) {}
+    try {
+        localStorage.setItem('oshimy_embed_' + key, JSON.stringify(val));
+    } catch (_) {}
+}
+
+// Resolves synchronous or cached thumbnail metadata for any media URL
+function resolveMediaThumbnailMeta(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') {
+        return { type: null, thumbnailUrl: null, isVideo: false, videoUrl: null, isCached: false, rawUrl: '' };
+    }
+    const cleanUrl = typeof stripSpoilerFlag === 'function' ? stripSpoilerFlag(rawUrl.trim()) : rawUrl.trim();
+    const media = typeof getMediaType === 'function' ? getMediaType(cleanUrl) : null;
+    if (!media) {
+        return { type: null, thumbnailUrl: null, isVideo: false, videoUrl: null, isCached: false, rawUrl: cleanUrl };
+    }
+
+    // 1. YouTube: Instant deterministic WebP thumbnail
+    if (media.type === 'youtube') {
+        const webpThumb = `https://i.ytimg.com/vi_webp/${media.id}/mqdefault.webp`;
+        const jpgFallback = `https://i.ytimg.com/vi/${media.id}/mqdefault.jpg`;
+        return {
+            type: 'youtube',
+            id: media.id,
+            thumbnailUrl: webpThumb,
+            fallbackThumbUrl: jpgFallback,
+            isVideo: true,
+            isCached: true,
+            rawUrl: cleanUrl,
+            platform: 'youtube'
+        };
+    }
+
+    // 2. Pixiv Artwork: Instant high-res thumbnail via reverse proxy
+    if (media.type === 'pixiv') {
+        const cached = getCachedEmbedMeta('pixiv_' + media.id);
+        const thumb = cached?.proxyUrl || `https://pixiv.re/${media.id}.jpg`;
+        return {
+            type: 'pixiv',
+            id: media.id,
+            thumbnailUrl: thumb,
+            isVideo: false,
+            isCached: true,
+            rawUrl: cleanUrl,
+            platform: 'pixiv'
+        };
+    }
+
+    // 3. Pixiv Direct Image
+    if (media.type === 'pixiv_image') {
+        const thumb = media.proxyUrl || cleanUrl.replace(/^https?:\/\/[a-zA-Z0-9-]+\.pximg\.net\//i, 'https://i.pixiv.re/');
+        return {
+            type: 'pixiv_image',
+            thumbnailUrl: thumb,
+            isVideo: false,
+            isCached: true,
+            rawUrl: cleanUrl,
+            platform: 'pixiv'
+        };
+    }
+
+    // 4. HTML5 Video (.mp4, .webm, .mov)
+    if (media.type === 'video') {
+        return {
+            type: 'video',
+            thumbnailUrl: media.thumbUrl || null,
+            videoUrl: media.url || cleanUrl,
+            isVideo: true,
+            isCached: Boolean(media.thumbUrl),
+            rawUrl: cleanUrl,
+            platform: 'video'
+        };
+    }
+
+    // 5. Audio
+    if (media.type === 'audio') {
+        return {
+            type: 'audio',
+            thumbnailUrl: null,
+            isAudio: true,
+            isCached: true,
+            rawUrl: cleanUrl,
+            platform: 'audio'
+        };
+    }
+
+    // 6. TikTok: Check cache first
+    if (media.type === 'tiktok') {
+        const cached = getCachedEmbedMeta('tt_' + cleanUrl) || (media.id ? getCachedEmbedMeta('tt_id_' + media.id) : null);
+        const rawThumb = cached ? (cached.thumbnailUrl || cached.imageUrl || cached.cover) : null;
+        return {
+            type: 'tiktok',
+            id: media.id,
+            username: media.username,
+            thumbnailUrl: rawThumb ? (typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(rawThumb, 360) : rawThumb) : null,
+            rawThumb,
+            proxyUrl: media.proxyUrl || (typeof getTnktokUrl === 'function' ? getTnktokUrl(cleanUrl) : cleanUrl),
+            isVideo: true,
+            isCached: Boolean(rawThumb),
+            rawUrl: cleanUrl,
+            platform: 'tiktok'
+        };
+    }
+
+    // 7. Twitter / 𝕏: Check cache first
+    if (media.type === 'x') {
+        const cached = getCachedEmbedMeta('tw_' + media.id);
+        const rawThumb = cached ? (cached.imageUrl || cached.thumbnailUrl || (cached.photos && cached.photos[0] && (cached.photos[0].url || cached.photos[0])) || (cached.video && cached.video.poster)) : null;
+        const isVideo = Boolean(cached && (cached.mediaType === 'video' || cached.videoUrl || cached.isGif));
+        return {
+            type: 'x',
+            id: media.id,
+            handle: media.handle,
+            thumbnailUrl: rawThumb ? (typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(rawThumb, 360) : rawThumb) : null,
+            rawThumb,
+            isVideo,
+            isCached: Boolean(rawThumb),
+            rawUrl: cleanUrl,
+            platform: 'x'
+        };
+    }
+
+    // 8. Reddit: Check cache first
+    if (media.type === 'reddit' || media.type === 'reddit_video') {
+        const cached = getCachedEmbedMeta('rd_' + cleanUrl) || (media.id ? getCachedEmbedMeta('rd_id_' + media.id) : null);
+        const rawThumb = cached ? (cached.thumbnailUrl || cached.imageUrl || cached.videoThumbnail) : null;
+        const isVideo = media.type === 'reddit_video' || Boolean(cached && (cached.mediaType === 'video' || cached.videoUrl));
+        return {
+            type: media.type,
+            id: media.id,
+            subreddit: media.subreddit,
+            thumbnailUrl: rawThumb ? (typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(rawThumb, 360) : rawThumb) : null,
+            rawThumb,
+            isVideo,
+            isCached: Boolean(rawThumb),
+            rawUrl: cleanUrl,
+            platform: 'reddit'
+        };
+    }
+
+    // 9. Direct Static Image
+    const optThumb = typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(cleanUrl, 360) : cleanUrl;
+    return {
+        type: 'image',
+        thumbnailUrl: optThumb,
+        rawThumb: cleanUrl,
+        isVideo: false,
+        isCached: true,
+        rawUrl: cleanUrl,
+        platform: 'image'
+    };
+}
+
+// Renders resilient, responsive thumbnail HTML for Front Landing Page (Active Discussions and Recent Media Reel)
+function getPortalThumbnailHtml(mediaUrl, context = 'thread', serverThumbUrl = null) {
+    if (!mediaUrl || !mediaUrl.trim()) {
+        if (context === 'thread') {
+            return `<div class="portal-thread-thumb-wrap"><span class="portal-thread-thumb-icon">💬</span></div>`;
+        }
+        return `<div style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; opacity:0.6;"><span style="font-size:24px;">💬</span></div>`;
+    }
+
+    // 1. If server provided a valid pre-resolved thumbnail URL (e.g. YouTube / Pixiv / cached image)
+    if (serverThumbUrl && typeof serverThumbUrl === 'string' && !/\.(mp4|webm|mov)(?:\?|$)/i.test(serverThumbUrl)) {
+        const optServerThumb = typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(serverThumbUrl, context === 'thread' ? 140 : 220) : serverThumbUrl;
+        const isVideo = /\.(mp4|webm|mov)(?:\?|$)/i.test(mediaUrl) || /youtu|tiktok|v\.redd\.it/i.test(mediaUrl);
+        const playBadge = isVideo 
+            ? `<span class="portal-media-type-badge"${context === 'thread' ? ' style="width:18px; height:18px; font-size:0.65em;"' : ''}>▶</span>` 
+            : '';
+        if (context === 'thread') {
+            return `
+                <div class="portal-thread-thumb-wrap">
+                    <img src="${escapeHtml(optServerThumb)}" class="portal-thread-thumb" alt="Thumbnail" loading="lazy" decoding="async" onerror="handlePortalThumbError(this, '${escapeHtml(mediaUrl)}')">
+                    ${playBadge}
+                </div>
+            `;
+        }
+        return `
+            <img src="${escapeHtml(optServerThumb)}" class="portal-media-img" alt="Media attachment" loading="lazy" decoding="async" onerror="handlePortalThumbError(this, '${escapeHtml(mediaUrl)}')">
+            ${playBadge}
+        `;
+    }
+
+    const meta = resolveMediaThumbnailMeta(mediaUrl);
+
+    // 2. Direct Video without thumbnail poster
+    if (meta.isVideo && meta.videoUrl && !meta.thumbnailUrl) {
+        const playBadge = `<span class="portal-media-type-badge"${context === 'thread' ? ' style="width:18px; height:18px; font-size:0.65em;"' : ''}>▶</span>`;
+        if (context === 'thread') {
+            return `
+                <div class="portal-thread-thumb-wrap">
+                    <video src="${escapeHtml(meta.videoUrl)}#t=0.001" preload="metadata" muted playsinline class="portal-thread-thumb" style="pointer-events:none; width:100%; height:100%; object-fit:cover;"></video>
+                    ${playBadge}
+                </div>
+            `;
+        }
+        return `
+            <video src="${escapeHtml(meta.videoUrl)}#t=0.001" preload="metadata" muted playsinline class="portal-media-img" style="pointer-events:none; width:100%; height:100%; object-fit:cover;"></video>
+            ${playBadge}
+        `;
+    }
+
+    // 3. Known or Cached Thumbnail Image
+    if (meta.thumbnailUrl) {
+        const optThumb = typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(meta.thumbnailUrl, context === 'thread' ? 140 : 220) : meta.thumbnailUrl;
+        const playBadge = meta.isVideo 
+            ? `<span class="portal-media-type-badge"${context === 'thread' ? ' style="width:18px; height:18px; font-size:0.65em;"' : ''}>▶</span>` 
+            : '';
+        if (context === 'thread') {
+            return `
+                <div class="portal-thread-thumb-wrap">
+                    <img src="${escapeHtml(optThumb)}" class="portal-thread-thumb" alt="Thumbnail" loading="lazy" decoding="async" onerror="handlePortalThumbError(this, '${escapeHtml(mediaUrl)}')">
+                    ${playBadge}
+                </div>
+            `;
+        }
+        return `
+            <img src="${escapeHtml(optThumb)}" class="portal-media-img" alt="Media attachment" loading="lazy" decoding="async" onerror="handlePortalThumbError(this, '${escapeHtml(mediaUrl)}')">
+            ${playBadge}
+        `;
+    }
+
+    // 4. Embeds not in cache yet -> Render hydrateable slot with clean platform badge
+    if (meta.type === 'tiktok') {
+        if (context === 'thread') {
+            return `
+                <div class="portal-thread-thumb-wrap">
+                    <div class="tiktok-placeholder portal-thumb-embed-slot" data-tiktok-url="${escapeHtml(mediaUrl)}" data-tiktok-proxy="${escapeHtml(meta.proxyUrl || '')}" data-tiktok-id="${escapeHtml(meta.id || '')}" data-tiktok-user="${escapeHtml(meta.username || '')}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                        <div class="tiktok-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                            <span style="font-size:22px; color:#FE2C55;">🎵</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        return `
+            <div class="tiktok-placeholder portal-thumb-embed-slot" data-tiktok-url="${escapeHtml(mediaUrl)}" data-tiktok-proxy="${escapeHtml(meta.proxyUrl || '')}" data-tiktok-id="${escapeHtml(meta.id || '')}" data-tiktok-user="${escapeHtml(meta.username || '')}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                <div class="tiktok-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(0,0,0,0.25);">
+                    <span style="font-size:24px; color:#FE2C55;">🎵</span>
+                    <span style="font-size:10px; color:#aaa; margin-top:2px;">TIKTOK</span>
+                </div>
+            </div>
+            <span class="portal-media-type-badge">▶</span>
+        `;
+    }
+
+    if (meta.type === 'x') {
+        if (context === 'thread') {
+            return `
+                <div class="portal-thread-thumb-wrap">
+                    <div class="x-placeholder portal-thumb-embed-slot" data-tweet-id="${escapeHtml(meta.id || '')}" data-tweet-handle="${escapeHtml(meta.handle || 'i')}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                        <div class="tweet-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                            <span style="font-size:20px; color:#1DA1F2; font-weight:bold;">𝕏</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        return `
+            <div class="x-placeholder portal-thumb-embed-slot" data-tweet-id="${escapeHtml(meta.id || '')}" data-tweet-handle="${escapeHtml(meta.handle || 'i')}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                <div class="tweet-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(0,0,0,0.25);">
+                    <span style="font-size:24px; color:#1DA1F2; font-weight:bold;">𝕏</span>
+                    <span style="font-size:10px; color:#aaa; margin-top:2px;">POST</span>
+                </div>
+            </div>
+        `;
+    }
+
+    if (meta.type === 'reddit' || meta.type === 'reddit_video') {
+        if (context === 'thread') {
+            return `
+                <div class="portal-thread-thumb-wrap">
+                    <div class="reddit-placeholder portal-thumb-embed-slot" data-reddit-url="${escapeHtml(mediaUrl)}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                        <div class="reddit-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                            <span style="font-size:22px; color:#FF4500;">🤖</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        return `
+            <div class="reddit-placeholder portal-thumb-embed-slot" data-reddit-url="${escapeHtml(mediaUrl)}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                <div class="reddit-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(0,0,0,0.25);">
+                    <span style="font-size:24px; color:#FF4500;">🤖</span>
+                    <span style="font-size:10px; color:#aaa; margin-top:2px;">REDDIT</span>
+                </div>
+            </div>
+            ${meta.isVideo ? '<span class="portal-media-type-badge">▶</span>' : ''}
+        `;
+    }
+
+    if (meta.type === 'pixiv') {
+        if (context === 'thread') {
+            return `
+                <div class="portal-thread-thumb-wrap">
+                    <div class="pixiv-placeholder portal-thumb-embed-slot" data-pixiv-id="${escapeHtml(meta.id || '')}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                        <div class="pixiv-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                            <span style="font-size:22px; color:#0096fa;">🎨</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        return `
+            <div class="pixiv-placeholder portal-thumb-embed-slot" data-pixiv-id="${escapeHtml(meta.id || '')}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
+                <div class="pixiv-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(0,0,0,0.25);">
+                    <span style="font-size:24px; color:#0096fa;">🎨</span>
+                    <span style="font-size:10px; color:#aaa; margin-top:2px;">PIXIV</span>
+                </div>
+            </div>
+        `;
+    }
+
+    // 5. Default Fallback
+    if (context === 'thread') {
+        return `<div class="portal-thread-thumb-wrap"><span class="portal-thread-thumb-icon">💬</span></div>`;
+    }
+    return `
+        <div style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.25); opacity:0.6;">
+            <span style="font-size:24px;">💬</span>
+        </div>
+    `;
+}
+
+// Resilient error handler for portal thumbnails to prevent broken image icons
+function handlePortalThumbError(imgEl, rawUrl) {
+    if (!imgEl) return;
+    imgEl.onerror = null;
+    const media = typeof getMediaType === 'function' ? getMediaType(rawUrl) : null;
+    if (media && media.type === 'youtube') {
+        const fallback = `https://i.ytimg.com/vi/${media.id}/mqdefault.jpg`;
+        if (imgEl.src !== fallback) {
+            imgEl.src = fallback;
+            return;
+        }
+    }
+    if (rawUrl && (/\.(jpg|jpeg|png|webp|gif)(?:\?.*)?$/i.test(rawUrl) || rawUrl.includes('i.ibb.co') || rawUrl.includes('catbox.moe') || rawUrl.includes('focusmalaysia.my') || rawUrl.includes('pbs.twimg.com'))) {
+        if (imgEl.dataset.triedDirect !== 'true' && imgEl.src !== rawUrl) {
+            imgEl.dataset.triedDirect = 'true';
+            imgEl.src = rawUrl;
+            return;
+        }
+        if (imgEl.dataset.triedWsrv !== 'true' && !rawUrl.includes('wsrv.nl')) {
+            imgEl.dataset.triedWsrv = 'true';
+            imgEl.src = `https://wsrv.nl/?url=${encodeURIComponent(rawUrl)}&w=240`;
+            return;
+        }
+    }
+    // Replace with clean platform icon rather than broken image box
+    const parent = imgEl.parentElement;
+    if (parent) {
+        let icon = '💬';
+        if (media?.type === 'tiktok') icon = '🎵';
+        else if (media?.type === 'x') icon = '𝕏';
+        else if (media?.type === 'reddit' || media?.type === 'reddit_video') icon = '🤖';
+        else if (media?.type === 'youtube') icon = '▶️';
+        else if (media?.type === 'pixiv' || media?.type === 'pixiv_image') icon = '🎨';
+        else if (media?.type === 'video') icon = '▶️';
+        else if (media?.type === 'image') icon = '🖼️';
+        parent.innerHTML = `<div style="display:flex; width:100%; height:100%; align-items:center; justify-content:center; opacity:0.6;"><span style="font-size:22px;">${icon}</span></div>`;
+    }
+}
+
+// Background hydrator for Front Landing Page embed cards
+function hydratePortalEmbeds() {
+    if (typeof hydratePixivEmbeds === 'function') hydratePixivEmbeds();
+    if (typeof hydrateTwitterEmbeds === 'function') hydrateTwitterEmbeds();
+    if (typeof hydrateRedditEmbeds === 'function') hydrateRedditEmbeds();
+    if (typeof hydrateTikTokEmbeds === 'function') hydrateTikTokEmbeds();
 }
 
 // Automatic multi-stage image error recovery:
@@ -572,19 +942,52 @@ async function hydrateSinglePixivSlot(placeholder) {
         const pagesBadge = (art.pageCount && art.pageCount > 1) 
             ? `<div class="pixiv-pages-badge">📚 ${art.pageCount}P</div>` 
             : '';
-        if (art.proxyUrl) {
+        const isPortalThread = Boolean(placeholder.closest('.portal-thread-thumb-wrap'));
+        const isPortalMedia = Boolean(placeholder.closest('.portal-media-card'));
+        const isCatalog = Boolean(placeholder.closest('.catalog-cell') || placeholder.classList.contains('catalog-placeholder'));
+
+        if (art.proxyUrl || id) {
+            const displayUrl = art.proxyUrl || `https://pixiv.re/${id}.jpg`;
+            if (isPortalThread) {
+                slot.innerHTML = `<img src="${displayUrl}" class="portal-thread-thumb" loading="lazy" decoding="async" alt="Pixiv #${id}">`;
+                placeholder.classList.add('pixiv-thumb-loaded');
+                return;
+            }
+            if (isPortalMedia) {
+                slot.innerHTML = `<img src="${displayUrl}" class="portal-media-img" loading="lazy" decoding="async" alt="Pixiv #${id}">`;
+                placeholder.classList.add('pixiv-thumb-loaded');
+                return;
+            }
+            if (isCatalog) {
+                slot.innerHTML = `<img src="${displayUrl}" class="catalog-thumb" loading="lazy" decoding="async" alt="Pixiv #${id}">`;
+                placeholder.classList.add('pixiv-thumb-loaded');
+                return;
+            }
+
             const badgeText = art.isR18 ? 'pixiv • R-18' : 'pixiv';
             const badgeStyle = art.isR18 ? 'background:rgba(225, 29, 72, 0.95);' : '';
             const helperFallback = `https://pixiv.re/${id}.jpg`;
             slot.innerHTML = `
                 <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center;">
-                    <img src="${art.proxyUrl}" class="thread-image" loading="lazy" decoding="async" alt="${escapeHtml(art.title)}" onerror="if(this.src!=='${helperFallback}'){this.src='${helperFallback}';}else{this.style.display='none';}" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                    <img src="${art.proxyUrl || helperFallback}" class="thread-image" loading="lazy" decoding="async" alt="${escapeHtml(art.title)}" onerror="if(this.src!=='${helperFallback}'){this.src='${helperFallback}';}else{this.style.display='none';}" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
                     <div class="pixiv-badge" style="${badgeStyle}">${badgeText}</div>
                     ${pagesBadge}
                 </div>
             `;
             placeholder.classList.add('pixiv-thumb-loaded');
         } else {
+            if (isPortalThread) {
+                slot.innerHTML = `<span class="portal-thread-thumb-icon">🎨</span>`;
+                return;
+            }
+            if (isPortalMedia) {
+                slot.innerHTML = `<div style="display:flex; width:100%; height:100%; align-items:center; justify-content:center; opacity:0.6;"><span style="font-size:22px; color:#0096fa;">🎨</span></div>`;
+                return;
+            }
+            if (isCatalog) {
+                slot.innerHTML = `<div class="catalog-placeholder-icon" style="color:#0096fa;">🎨</div>`;
+                return;
+            }
             slot.innerHTML = `
                 <div class="file-ext" style="color:${art.isR18 ? '#e11d48' : '#0096fa'}; font-size:22px; font-weight:900;">${art.isR18 ? 'R-18' : 'pixiv'}</div>
                 <div style="font-size:11px; color:#fff; font-weight:bold; margin-top:4px; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(art.title)}</div>
@@ -791,8 +1194,36 @@ async function hydrateSingleTwitterSlot(placeholder) {
 
         const streamUrl = t.videoUrl ? `/api/proxy/video?url=${encodeURIComponent(t.videoUrl)}` : null;
 
+        const isPortalThread = Boolean(placeholder.closest('.portal-thread-thumb-wrap'));
+        const isPortalMedia = Boolean(placeholder.closest('.portal-media-card'));
+        const isCatalog = Boolean(placeholder.closest('.catalog-cell') || placeholder.classList.contains('catalog-placeholder'));
+
         if (rawThumb) {
-            const thumb = getOptimizedThumbUrl(rawThumb, 360);
+            const thumb = getOptimizedThumbUrl(rawThumb, isPortalThread ? 140 : (isCatalog || isPortalMedia ? 240 : 360));
+            if (isPortalThread) {
+                slot.innerHTML = `
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}'){this.src='${escapeHtml(rawThumb)}';}" class="portal-thread-thumb" loading="lazy" decoding="async" alt="𝕏 Tweet">
+                    ${isVideo ? `<span class="portal-media-type-badge" style="width:18px; height:18px; font-size:0.65em;">▶</span>` : ''}
+                `;
+                placeholder.classList.add('x-thumb-loaded');
+                return;
+            }
+            if (isPortalMedia) {
+                slot.innerHTML = `
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}'){this.src='${escapeHtml(rawThumb)}';}" class="portal-media-img" loading="lazy" decoding="async" alt="𝕏 Tweet">
+                    ${isVideo ? `<span class="portal-media-type-badge">▶</span>` : ''}
+                `;
+                placeholder.classList.add('x-thumb-loaded');
+                return;
+            }
+            if (isCatalog) {
+                slot.innerHTML = `
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}'){this.src='${escapeHtml(rawThumb)}';}" class="catalog-thumb" loading="lazy" decoding="async" alt="𝕏 Tweet">
+                `;
+                placeholder.classList.add('x-thumb-loaded');
+                return;
+            }
+
             const multiBadge = (t.pageCount && t.pageCount > 1) 
                 ? `<div class="pixiv-pages-badge" style="background:rgba(29,161,242,0.95);">📚 ${t.pageCount}P</div>` 
                 : '';
@@ -812,6 +1243,29 @@ async function hydrateSingleTwitterSlot(placeholder) {
             `;
             placeholder.classList.add('x-thumb-loaded');
         } else if (streamUrl && isGif) {
+            if (isPortalThread) {
+                slot.innerHTML = `
+                    <video src="${escapeHtml(streamUrl)}" autoplay loop muted playsinline class="portal-thread-thumb" style="pointer-events:none;"></video>
+                    <span class="portal-media-type-badge" style="width:18px; height:18px; font-size:0.65em;">▶</span>
+                `;
+                placeholder.classList.add('x-thumb-loaded');
+                return;
+            }
+            if (isPortalMedia) {
+                slot.innerHTML = `
+                    <video src="${escapeHtml(streamUrl)}" autoplay loop muted playsinline class="portal-media-img" style="pointer-events:none;"></video>
+                    <span class="portal-media-type-badge">▶</span>
+                `;
+                placeholder.classList.add('x-thumb-loaded');
+                return;
+            }
+            if (isCatalog) {
+                slot.innerHTML = `
+                    <video src="${escapeHtml(streamUrl)}" autoplay loop muted playsinline class="catalog-thumb" style="pointer-events:none;"></video>
+                `;
+                placeholder.classList.add('x-thumb-loaded');
+                return;
+            }
             slot.innerHTML = `
                 <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
                     <video src="${escapeHtml(streamUrl)}" autoplay loop muted playsinline class="thread-image" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block; pointer-events:none;"></video>
@@ -820,6 +1274,18 @@ async function hydrateSingleTwitterSlot(placeholder) {
             `;
             placeholder.classList.add('x-thumb-loaded');
         } else if (t.text) {
+            if (isPortalThread) {
+                slot.innerHTML = `<span class="portal-thread-thumb-icon">𝕏</span>`;
+                return;
+            }
+            if (isPortalMedia) {
+                slot.innerHTML = `<div style="display:flex; width:100%; height:100%; align-items:center; justify-content:center; opacity:0.6;"><span style="font-size:22px; color:#1DA1F2;">𝕏</span></div>`;
+                return;
+            }
+            if (isCatalog) {
+                slot.innerHTML = `<div class="catalog-placeholder-icon" style="color:#1DA1F2;">𝕏</div>`;
+                return;
+            }
             slot.innerHTML = `
                 <div style="padding:8px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; width:100%;">
                     <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; width:100%;">
@@ -845,9 +1311,37 @@ async function hydrateSingleRedditSlot(placeholder) {
         const slot = placeholder.querySelector('.reddit-thumb-slot');
         if (!slot) return;
         const rawThumb = p.thumbnailUrl || p.imageUrl || p.videoThumbnail || p.videoUrl;
+        const isPortalThread = Boolean(placeholder.closest('.portal-thread-thumb-wrap'));
+        const isPortalMedia = Boolean(placeholder.closest('.portal-media-card'));
+        const isCatalog = Boolean(placeholder.closest('.catalog-cell') || placeholder.classList.contains('catalog-placeholder'));
+
         if (rawThumb && (p.mediaType === 'image' || p.mediaType === 'video')) {
-            const thumb = getOptimizedThumbUrl(rawThumb, 360);
+            const thumb = getOptimizedThumbUrl(rawThumb, isPortalThread ? 140 : (isCatalog || isPortalMedia ? 240 : 360));
             const isVideo = p.mediaType === 'video';
+            if (isPortalThread) {
+                slot.innerHTML = `
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" referrerpolicy="no-referrer" class="portal-thread-thumb" loading="lazy" decoding="async" alt="Reddit">
+                    ${isVideo ? `<span class="portal-media-type-badge" style="width:18px; height:18px; font-size:0.65em;">▶</span>` : ''}
+                `;
+                placeholder.classList.add('reddit-thumb-loaded');
+                return;
+            }
+            if (isPortalMedia) {
+                slot.innerHTML = `
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" referrerpolicy="no-referrer" class="portal-media-img" loading="lazy" decoding="async" alt="Reddit">
+                    ${isVideo ? `<span class="portal-media-type-badge">▶</span>` : ''}
+                `;
+                placeholder.classList.add('reddit-thumb-loaded');
+                return;
+            }
+            if (isCatalog) {
+                slot.innerHTML = `
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" referrerpolicy="no-referrer" class="catalog-thumb" loading="lazy" decoding="async" alt="Reddit">
+                `;
+                placeholder.classList.add('reddit-thumb-loaded');
+                return;
+            }
+
             const playOverlay = isVideo 
                 ? `<div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>` 
                 : '';
@@ -869,6 +1363,18 @@ async function hydrateSingleRedditSlot(placeholder) {
             `;
             placeholder.classList.add('reddit-thumb-loaded');
         } else if (p.title) {
+            if (isPortalThread) {
+                slot.innerHTML = `<span class="portal-thread-thumb-icon">🤖</span>`;
+                return;
+            }
+            if (isPortalMedia) {
+                slot.innerHTML = `<div style="display:flex; width:100%; height:100%; align-items:center; justify-content:center; opacity:0.6;"><span style="font-size:22px; color:#FF4500;">🤖</span></div>`;
+                return;
+            }
+            if (isCatalog) {
+                slot.innerHTML = `<div class="catalog-placeholder-icon" style="color:#FF4500;">🤖</div>`;
+                return;
+            }
             const scoreSnippet = p.score ? `<span style="font-size:10px; color:#ff6a33; font-weight:bold;">⬆️ ${escapeHtml(p.score)}</span>` : '';
             slot.innerHTML = `
                 <div style="padding:8px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; width:100%;">
@@ -1088,25 +1594,57 @@ async function hydrateSingleTikTokSlot(placeholder) {
             placeholder.setAttribute('data-tiktok-user', data.authorHandle);
         }
 
-        const isCatalog = placeholder.closest('.catalog-cell') || placeholder.parentElement?.classList.contains('catalog-cell') || placeholder.classList.contains('catalog-placeholder');
+        const isPortalThread = Boolean(placeholder.closest('.portal-thread-thumb-wrap'));
+        const isPortalMedia = Boolean(placeholder.closest('.portal-media-card'));
+        const isCatalog = Boolean(placeholder.closest('.catalog-cell') || placeholder.parentElement?.classList.contains('catalog-cell') || placeholder.classList.contains('catalog-placeholder'));
 
         if (rawThumb) {
-            const thumb = getOptimizedThumbUrl(rawThumb, isCatalog ? 240 : 360);
+            const thumb = getOptimizedThumbUrl(rawThumb, isPortalThread ? 140 : (isCatalog || isPortalMedia ? 240 : 360));
+            if (isPortalThread) {
+                slot.innerHTML = `
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" referrerpolicy="no-referrer" class="portal-thread-thumb" loading="lazy" decoding="async" alt="TikTok">
+                    <span class="portal-media-type-badge" style="width:18px; height:18px; font-size:0.65em;">▶</span>
+                `;
+                placeholder.classList.add('tiktok-thumb-loaded');
+                return;
+            }
+            if (isPortalMedia) {
+                slot.innerHTML = `
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" referrerpolicy="no-referrer" class="portal-media-img" loading="lazy" decoding="async" alt="TikTok">
+                    <span class="portal-media-type-badge">▶</span>
+                `;
+                placeholder.classList.add('tiktok-thumb-loaded');
+                return;
+            }
             if (isCatalog) {
                 slot.innerHTML = `
                     <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" referrerpolicy="no-referrer" class="catalog-thumb" loading="lazy" decoding="async" alt="TikTok">
                 `;
-            } else {
-                slot.innerHTML = `
-                    <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
-                        <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" referrerpolicy="no-referrer" class="thread-image" loading="lazy" decoding="async" alt="TikTok" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
-                        <div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>
-                        <div class="pixiv-badge" style="background:#FE2C55;">${userText}</div>
-                    </div>
-                `;
+                placeholder.classList.add('tiktok-thumb-loaded');
+                return;
             }
+
+            slot.innerHTML = `
+                <div style="position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+                    <img src="${escapeHtml(thumb)}" onerror="if(this.src!=='${escapeHtml(rawThumb)}')this.src='${escapeHtml(rawThumb)}';" referrerpolicy="no-referrer" class="thread-image" loading="lazy" decoding="async" alt="TikTok" style="max-width:200px; max-height:200px; object-fit:cover; border-radius:4px; display:block;">
+                    <div class="play-overlay" style="position:absolute; width:36px; height:36px; line-height:36px; font-size:18px;">▶</div>
+                    <div class="pixiv-badge" style="background:#FE2C55;">${userText}</div>
+                </div>
+            `;
             placeholder.classList.add('tiktok-thumb-loaded');
         } else if (data.title) {
+            if (isPortalThread) {
+                slot.innerHTML = `<span class="portal-thread-thumb-icon">🎵</span>`;
+                return;
+            }
+            if (isPortalMedia) {
+                slot.innerHTML = `<div style="display:flex; width:100%; height:100%; align-items:center; justify-content:center; opacity:0.6;"><span style="font-size:22px; color:#FE2C55;">🎵</span></div>`;
+                return;
+            }
+            if (isCatalog) {
+                slot.innerHTML = `<div class="catalog-placeholder-icon" style="color:#FE2C55;">🎵</div>`;
+                return;
+            }
             slot.innerHTML = `
                 <div style="padding:8px; display:flex; flex-direction:column; align-items:flex-start; text-align:left; width:100%;">
                     <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px; width:100%;">

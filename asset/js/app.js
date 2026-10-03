@@ -348,17 +348,9 @@ function renderPortalOverview(data) {
                 const title = th.subject || th.snippet || `Thread #${th.id.substring(1, 8)}`;
                 const snippet = th.snippet ? th.snippet : '';
                 const timeAgo = formatTimeAgo(th.bumped_at);
-                const thumbUrl = th.media_url ? (typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(th.media_url, 140) : th.media_url) : null;
-
-                const thumbHtml = thumbUrl ? `
-                    <div class="portal-thread-thumb-wrap">
-                        <img src="${escapeHtml(thumbUrl)}" class="portal-thread-thumb" alt="Thread thumbnail" loading="lazy" decoding="async" onerror="this.onerror=null; this.parentElement.innerHTML='<span class=\\'portal-thread-thumb-icon\\'>💬</span>';">
-                    </div>
-                ` : `
-                    <div class="portal-thread-thumb-wrap">
-                        <span class="portal-thread-thumb-icon">💬</span>
-                    </div>
-                `;
+                const thumbHtml = typeof getPortalThumbnailHtml === 'function' 
+                    ? getPortalThumbnailHtml(th.media_url, 'thread', th.thumbnail_url) 
+                    : `<div class="portal-thread-thumb-wrap"><span class="portal-thread-thumb-icon">💬</span></div>`;
 
                 html += `
                     <a href="?b=${encodeURIComponent(th.board)}&t=${encodeURIComponent(th.id)}" class="portal-thread-card" data-board="${escapeHtml(th.board)}" data-title="${escapeHtml(title.toLowerCase())}" data-snippet="${escapeHtml(snippet.toLowerCase())}">
@@ -393,20 +385,24 @@ function renderPortalOverview(data) {
             if (mediaSection) mediaSection.style.display = 'block';
             let html = '';
             for (const m of data.recent_media) {
-                const optThumb = typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(m.media_url, 220) : m.media_url;
-                const isVid = /\.(mp4|webm|mov)(?:\?|$)/i.test(m.media_url) || /youtu|tiktok|v\.redd\.it/i.test(m.media_url);
-                const badgeIcon = isVid ? '▶' : '';
+                const thumbContent = typeof getPortalThumbnailHtml === 'function'
+                    ? getPortalThumbnailHtml(m.media_url, 'media', m.thumbnail_url)
+                    : `<img src="${escapeHtml(m.media_url)}" class="portal-media-img" loading="lazy" decoding="async" alt="Media attachment">`;
 
                 html += `
                     <a href="?b=${encodeURIComponent(m.board)}&t=${encodeURIComponent(m.thread_id)}#post_${encodeURIComponent(m.post_id)}" class="portal-media-card" title="View post on /${escapeHtml(m.board)}/">
-                        <img src="${escapeHtml(optThumb)}" class="portal-media-img" loading="lazy" decoding="async" alt="Media attachment" onerror="this.onerror=null; this.src='${escapeHtml(m.media_url)}';">
+                        ${thumbContent}
                         <span class="portal-media-board-badge">/${escapeHtml(m.board)}/</span>
-                        ${isVid ? `<span class="portal-media-type-badge">${badgeIcon}</span>` : ''}
                     </a>
                 `;
             }
             mediaReel.innerHTML = html;
         }
+    }
+
+    // Trigger background hydration for any unhydrated embed cards on the portal
+    if (typeof hydratePortalEmbeds === 'function') {
+        hydratePortalEmbeds();
     }
 
     // 4. Board Hub Grid
@@ -779,6 +775,12 @@ function getCatalogThumbnail(mediaUrl) {
         return `<img src="${thumb}" onerror="if(this.src!=='${jpgFallback}')this.src='${jpgFallback}';" class="catalog-thumb" alt="YouTube Thumbnail" loading="lazy" decoding="async">`;
     }
     if (media.type === 'x') {
+        const cached = typeof getCachedEmbedMeta === 'function' ? getCachedEmbedMeta('tw_' + media.id) : null;
+        const rawThumb = cached ? (cached.imageUrl || cached.thumbnailUrl || (cached.photos && cached.photos[0] && (cached.photos[0].url || cached.photos[0])) || (cached.video && cached.video.poster)) : null;
+        if (rawThumb) {
+            const optThumb = typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(rawThumb, 240) : rawThumb;
+            return `<img src="${escapeHtml(optThumb)}" class="catalog-thumb" alt="𝕏 Tweet" loading="lazy" decoding="async">`;
+        }
         const cleanHandle = media.handle || 'i';
         return `
             <div class="x-placeholder" data-tweet-id="${media.id}" data-tweet-handle="${escapeHtml(cleanHandle)}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
@@ -789,6 +791,12 @@ function getCatalogThumbnail(mediaUrl) {
         `;
     }
     if (media.type === 'reddit') {
+        const cached = typeof getCachedEmbedMeta === 'function' ? getCachedEmbedMeta('rd_' + media.url) : null;
+        const rawThumb = cached ? (cached.thumbnailUrl || cached.imageUrl || cached.videoThumbnail) : null;
+        if (rawThumb) {
+            const optThumb = typeof getOptimizedThumbUrl === 'function' ? getOptimizedThumbUrl(rawThumb, 240) : rawThumb;
+            return `<img src="${escapeHtml(optThumb)}" class="catalog-thumb" alt="Reddit" loading="lazy" decoding="async">`;
+        }
         return `
             <div class="reddit-placeholder" data-reddit-url="${escapeHtml(media.url)}" style="width:100%; height:100%; display:flex; align-items:center; justify-content:center; border:none;">
                 <div class="reddit-thumb-slot" style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center;">

@@ -1643,6 +1643,40 @@ export async function onRequest(context) {
                 LIMIT 12
             `).bind(...publicBoards, ...publicBoards).all();
 
+            // Resolves pre-computed or deterministically known thumbnails for portal overview
+            const resolveMediaThumbnail = (rawUrl) => {
+                if (!rawUrl || typeof rawUrl !== 'string') return null;
+                const cleanUrl = rawUrl.trim();
+                const ytMatch = cleanUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([a-zA-Z0-9_-]{11})/i);
+                if (ytMatch) return `https://i.ytimg.com/vi_webp/${ytMatch[1]}/mqdefault.webp`;
+                const pixivMatch = cleanUrl.match(/pixiv\.net\/(?:en\/)?artworks\/(\d+)/i) || cleanUrl.match(/pixiv\.re\/(\d+)/i);
+                if (pixivMatch) return `https://pixiv.re/${pixivMatch[1]}.jpg`;
+                if (/i\.pximg\.net/i.test(cleanUrl)) return cleanUrl.replace(/^https?:\/\/[a-zA-Z0-9-]+\.pximg\.net\//i, 'https://i.pixiv.re/');
+                const thumbParam = cleanUrl.match(/[?&]thumb=([^&]+)/i);
+                if (thumbParam) {
+                    try { return decodeURIComponent(thumbParam[1]); } catch (_) {}
+                }
+                // Direct static image (exclude video extensions)
+                if (/\.(mp4|webm|mov|m4v|ogg)(?:\?.*)?$/i.test(cleanUrl)) return null;
+                if (/\.(jpg|jpeg|png|webp|gif)(?:\?.*)?$/i.test(cleanUrl) || cleanUrl.includes('i.ibb.co') || cleanUrl.includes('images.unsplash.com') || cleanUrl.includes('focusmalaysia.my') || cleanUrl.includes('pbs.twimg.com')) {
+                    return cleanUrl;
+                }
+                if (cleanUrl.includes('catbox.moe') && !/\.(mp4|webm|mov|m4v|ogg)(?:\?.*)?$/i.test(cleanUrl)) {
+                    return cleanUrl;
+                }
+                return null;
+            };
+
+            const recentThreadsList = (recentThreadsRes.results || []).map(th => ({
+                ...th,
+                thumbnail_url: resolveMediaThumbnail(th.media_url)
+            }));
+
+            const recentMediaList = (recentMediaRes.results || []).map(m => ({
+                ...m,
+                thumbnail_url: resolveMediaThumbnail(m.media_url)
+            }));
+
             return json({
                 success: true,
                 boards: boardResult,
@@ -1651,8 +1685,8 @@ export async function onRequest(context) {
                     total_replies: totals?.total_replies || 0,
                     active_boards: publicBoards.length
                 },
-                recent_threads: recentThreadsRes.results || [],
-                recent_media: recentMediaRes.results || []
+                recent_threads: recentThreadsList,
+                recent_media: recentMediaList
             }, 200, {
                 'Cache-Control': 'public, max-age=15, stale-while-revalidate=45'
             });

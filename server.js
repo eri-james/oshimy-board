@@ -1642,6 +1642,62 @@ app.get('/api/boards', (req, res) => {
     }
 });
 
+// Resolves pre-computed or deterministically known thumbnails for portal overview
+function resolveMediaThumbnail(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== 'string') return null;
+    const cleanUrl = rawUrl.trim();
+    // 1. YouTube
+    const ytMatch = cleanUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([a-zA-Z0-9_-]{11})/i);
+    if (ytMatch) {
+        return `https://i.ytimg.com/vi_webp/${ytMatch[1]}/mqdefault.webp`;
+    }
+    // 2. Pixiv Artwork
+    const pixivMatch = cleanUrl.match(/pixiv\.net\/(?:en\/)?artworks\/(\d+)/i) || cleanUrl.match(/pixiv\.re\/(\d+)/i);
+    if (pixivMatch) {
+        return `https://pixiv.re/${pixivMatch[1]}.jpg`;
+    }
+    // 3. Pixiv Direct Image
+    if (/i\.pximg\.net/i.test(cleanUrl)) {
+        return cleanUrl.replace(/^https?:\/\/[a-zA-Z0-9-]+\.pximg\.net\//i, 'https://i.pixiv.re/');
+    }
+    // 4. Video with explicit ?thumb=
+    const thumbParam = cleanUrl.match(/[?&]thumb=([^&]+)/i);
+    if (thumbParam) {
+        try { return decodeURIComponent(thumbParam[1]); } catch (_) {}
+    }
+    // 5. In-memory tweetCache
+    const twMatch = cleanUrl.match(/(?:twitter\.com|x\.com)\/(?:#!\/)?[a-zA-Z0-9_]+\/status\/(\d+)/i);
+    if (twMatch && tweetCache.has(twMatch[1])) {
+        const t = tweetCache.get(twMatch[1]);
+        if (t.imageUrl) return t.imageUrl;
+        if (t.photos?.[0]?.url) return t.photos[0].url;
+        if (t.video?.poster) return t.video.poster;
+    }
+    // 6. In-memory tiktokCache
+    const ttMatch = cleanUrl.match(/\/(?:video|photo|v)\/(\d+)/i) || cleanUrl.match(/(\d{15,22})/);
+    const ttKey = ttMatch ? ttMatch[1] : cleanUrl;
+    if (tiktokCache.has(ttKey)) {
+        const v = tiktokCache.get(ttKey);
+        if (v && v.thumbnailUrl) return v.thumbnailUrl;
+    }
+    // 7. In-memory redditPostCache
+    if (redditPostCache.has(cleanUrl)) {
+        const p = redditPostCache.get(cleanUrl);
+        if (p && (p.imageUrl || p.thumbnailUrl)) return p.imageUrl || p.thumbnailUrl;
+    }
+    // 8. Direct static image (exclude video extensions)
+    if (/\.(mp4|webm|mov|m4v|ogg)(?:\?.*)?$/i.test(cleanUrl)) {
+        return null;
+    }
+    if (/\.(jpg|jpeg|png|webp|gif)(?:\?.*)?$/i.test(cleanUrl) || cleanUrl.includes('i.ibb.co') || cleanUrl.includes('images.unsplash.com') || cleanUrl.includes('focusmalaysia.my') || cleanUrl.includes('pbs.twimg.com')) {
+        return cleanUrl;
+    }
+    if (cleanUrl.includes('catbox.moe') && !/\.(mp4|webm|mov|m4v|ogg)(?:\?.*)?$/i.test(cleanUrl)) {
+        return cleanUrl;
+    }
+    return null;
+}
+
 // 1b. Portal Overview Endpoint (Consolidated stats, top active bumped threads, recent media, and board summaries)
 let portalOverviewCache = null;
 let portalOverviewCacheTime = 0;
@@ -1693,6 +1749,10 @@ app.get('/api/portal/overview', (req, res) => {
             LIMIT 8
         `).all(...publicBoards);
 
+        for (const th of recentThreads) {
+            th.thumbnail_url = resolveMediaThumbnail(th.media_url);
+        }
+
         // 4. Recent Media Reel (Top 12 attachments across public boards, non-spoiler)
         const recentMedia = db.prepare(`
             SELECT media_url, board, id as post_id, id as thread_id, created_at, 'thread' as post_type
@@ -1705,6 +1765,10 @@ app.get('/api/portal/overview', (req, res) => {
             ORDER BY created_at DESC
             LIMIT 12
         `).all(...publicBoards, ...publicBoards);
+
+        for (const m of recentMedia) {
+            m.thumbnail_url = resolveMediaThumbnail(m.media_url);
+        }
 
         const responsePayload = {
             success: true,
