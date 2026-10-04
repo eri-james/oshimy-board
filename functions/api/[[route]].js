@@ -840,7 +840,7 @@ export async function onRequest(context) {
                 } else if (target.hostname.includes('vxreddit.com')) {
                     referer = 'https://vxreddit.com/';
                 } else if (target.hostname.includes('tiktok') || target.hostname.includes('byte') || target.hostname.includes('tikwm') || target.hostname.includes('tnktok') || target.hostname.includes('tfxktok')) {
-                    referer = 'https://www.tiktok.com/';
+                    referer = target.hostname.includes('tikwm') ? 'https://www.tikwm.com/' : 'https://www.tiktok.com/';
                 }
 
                 const headers = new Headers();
@@ -1485,30 +1485,42 @@ export async function onRequest(context) {
                 const userMatch = (canonicalUrl || cleanUrl).match(/@([a-zA-Z0-9_.-]+)/i);
                 if (userMatch && userMatch[1] && userMatch[1] !== 'video') authorHandle = userMatch[1];
 
-                const targetQuery = canonicalUrl || cleanUrl;
+                const targetQuery = (videoId && authorHandle) ? `https://www.tiktok.com/@${authorHandle}/video/${videoId}` : (canonicalUrl || cleanUrl);
 
-                // 1. TikWM API
+                // 1. TikWM API with 1 req/sec rate-limit retry
                 try {
-                    const controller = new AbortController();
-                    const timeout = setTimeout(() => controller.abort(), 4000);
-                    const twResp = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(targetQuery)}`, {
-                        signal: controller.signal,
-                        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-                    });
-                    clearTimeout(timeout);
-                    if (twResp.ok) {
-                        const twData = await twResp.json();
-                        if (twData && twData.code === 0 && twData.data) {
-                            const d = twData.data;
-                            if (d.id) videoId = String(d.id);
-                            if (d.play || d.wmplay) videoUrl = d.play || d.wmplay;
-                            if (d.cover || d.origin_cover) thumbnailUrl = d.cover || d.origin_cover;
-                            if (d.title) title = d.title;
-                            if (d.author) {
-                                if (d.author.unique_id) authorHandle = d.author.unique_id;
-                                if (d.author.nickname) authorName = d.author.nickname;
+                    for (let attempt = 0; attempt < 2; attempt++) {
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 4500);
+                        let twResp = null;
+                        try {
+                            twResp = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(targetQuery)}`, {
+                                signal: controller.signal,
+                                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+                            });
+                        } catch (_) {}
+                        clearTimeout(timeout);
+
+                        if (twResp && twResp.ok) {
+                            const twData = await twResp.json().catch(() => null);
+                            if (twData && twData.code === 0 && twData.data) {
+                                const d = twData.data;
+                                if (d.id) videoId = String(d.id);
+                                if (d.play || d.hdplay || d.wmplay) videoUrl = d.play || d.hdplay || d.wmplay;
+                                if (d.cover || d.origin_cover || d.dynamic_cover) thumbnailUrl = d.cover || d.origin_cover || d.dynamic_cover;
+                                if (d.title) title = d.title;
+                                if (d.author) {
+                                    if (d.author.unique_id) authorHandle = d.author.unique_id;
+                                    if (d.author.nickname) authorName = d.author.nickname;
+                                }
+                                break;
+                            } else if (attempt === 0 && twData && (twData.code === -1 || twData.msg?.includes('Limit'))) {
+                                // Free Api Limit: 1 request/second - wait 1100ms and retry
+                                await new Promise(r => setTimeout(r, 1100));
+                                continue;
                             }
                         }
+                        break;
                     }
                 } catch (_) {}
 
@@ -1595,11 +1607,13 @@ export async function onRequest(context) {
                     } catch (_) {}
                 }
 
+                const embedUrl = videoId ? `https://www.tiktok.com/embed/v2/${videoId}?lang=en` : null;
                 const video = {
                     url: cleanUrl,
                     canonicalUrl: canonicalUrl || cleanUrl,
                     proxyUrl,
                     tfxktokUrl,
+                    embedUrl,
                     videoId,
                     authorHandle: authorHandle || 'tiktok',
                     authorName: authorName || authorHandle || 'TikTok',

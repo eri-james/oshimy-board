@@ -361,7 +361,7 @@ app.get('/api/proxy/video', async (req, res) => {
         } else if (target.hostname.includes('vxreddit.com')) {
             referer = 'https://vxreddit.com/';
         } else if (target.hostname.includes('tiktok') || target.hostname.includes('byte') || target.hostname.includes('tikwm') || target.hostname.includes('tnktok') || target.hostname.includes('tfxktok')) {
-            referer = 'https://www.tiktok.com/';
+            referer = target.hostname.includes('tikwm') ? 'https://www.tikwm.com/' : 'https://www.tiktok.com/';
         }
 
         const headers = {
@@ -1186,6 +1186,28 @@ app.get('/api/reddit/post', async (req, res) => {
 
 // TikTok Video Details Resolver via TikWM, tfxktok scraper, Official TikTok oEmbed, and a.tnktok.com failover
 const tiktokCache = new Map();
+const TIKTOK_CACHE_TTL = 90 * 60 * 1000; // 90 min for valid video stream
+const TIKTOK_FAIL_TTL = 20 * 1000;       // 20 sec for failed or null video stream
+
+function getFromTikTokCache(key) {
+    if (!tiktokCache.has(key)) return null;
+    const entry = tiktokCache.get(key);
+    if (!entry) return null;
+    const ttl = entry.data?.videoUrl ? TIKTOK_CACHE_TTL : TIKTOK_FAIL_TTL;
+    if (Date.now() - entry.timestamp > ttl) {
+        tiktokCache.delete(key);
+        return null;
+    }
+    return entry.data;
+}
+
+function setInTikTokCache(key, data) {
+    tiktokCache.set(key, { data, timestamp: Date.now() });
+    if (tiktokCache.size > 500) {
+        const firstKey = tiktokCache.keys().next().value;
+        tiktokCache.delete(firstKey);
+    }
+}
 
 function toTnktokUrl(cleanUrl) {
     if (!cleanUrl || typeof cleanUrl !== 'string') return '';
@@ -1235,18 +1257,22 @@ async function resolveTikTokCanonicalUrl(rawUrl) {
     return clean;
 }
 
-async function fetchTikTokDetails(rawUrl) {
+async function fetchTikTokDetails(rawUrl, forceFresh = false) {
     if (!rawUrl) return null;
     const cleanUrl = String(rawUrl).trim();
-    if (tiktokCache.has(cleanUrl)) {
-        return tiktokCache.get(cleanUrl);
+
+    if (!forceFresh) {
+        const cached = getFromTikTokCache(cleanUrl);
+        if (cached) return cached;
     }
 
     const canonicalUrl = await resolveTikTokCanonicalUrl(cleanUrl);
-    if (canonicalUrl && tiktokCache.has(canonicalUrl)) {
-        const cached = tiktokCache.get(canonicalUrl);
-        tiktokCache.set(cleanUrl, cached);
-        return cached;
+    if (!forceFresh && canonicalUrl) {
+        const cached = getFromTikTokCache(canonicalUrl);
+        if (cached) {
+            setInTikTokCache(cleanUrl, cached);
+            return cached;
+        }
     }
 
     const proxyUrl = toTnktokUrl(canonicalUrl || cleanUrl);
@@ -1264,34 +1290,46 @@ async function fetchTikTokDetails(rawUrl) {
     const userMatch = (canonicalUrl || cleanUrl).match(/@([a-zA-Z0-9_.-]+)/i);
     if (userMatch && userMatch[1] && userMatch[1] !== 'video') authorHandle = userMatch[1];
 
-    const targetQuery = canonicalUrl || cleanUrl;
+    const targetQuery = (videoId && authorHandle) ? `https://www.tiktok.com/@${authorHandle}/video/${videoId}` : (canonicalUrl || cleanUrl);
 
-    // 1. TikWM API (direct video & high-res thumbnail cover)
+    // 1. TikWM API (direct video stream & cover) with 1 req/sec rate-limit retry
     try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 4000);
-        const twResp = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(targetQuery)}`, {
-            signal: controller.signal,
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-        });
-        clearTimeout(timeout);
-        if (twResp.ok) {
-            const twData = await twResp.json();
-            if (twData && twData.code === 0 && twData.data) {
-                const d = twData.data;
-                if (d.id) videoId = String(d.id);
-                if (d.play || d.wmplay) videoUrl = d.play || d.wmplay;
-                if (d.cover || d.origin_cover) thumbnailUrl = d.cover || d.origin_cover;
-                if (d.title) title = d.title;
-                if (d.author) {
-                    if (d.author.unique_id) authorHandle = d.author.unique_id;
-                    if (d.author.nickname) authorName = d.author.nickname;
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4500);
+            let twResp = null;
+            try {
+                twResp = await fetch(`https://www.tikwm.com/api/?url=${encodeURIComponent(targetQuery)}`, {
+                    signal: controller.signal,
+                    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+                });
+            } catch (_) {}
+            clearTimeout(timeout);
+
+            if (twResp && twResp.ok) {
+                const twData = await twResp.json().catch(() => null);
+                if (twData && twData.code === 0 && twData.data) {
+                    const d = twData.data;
+                    if (d.id) videoId = String(d.id);
+                    if (d.play || d.hdplay || d.wmplay) videoUrl = d.play || d.hdplay || d.wmplay;
+                    if (d.cover || d.origin_cover || d.dynamic_cover) thumbnailUrl = d.cover || d.origin_cover || d.dynamic_cover;
+                    if (d.title) title = d.title;
+                    if (d.author) {
+                        if (d.author.unique_id) authorHandle = d.author.unique_id;
+                        if (d.author.nickname) authorName = d.author.nickname;
+                    }
+                    break;
+                } else if (attempt === 0 && twData && (twData.code === -1 || twData.msg?.includes('Limit'))) {
+                    // Free Api Limit: 1 request/second - wait 1100ms and retry
+                    await new Promise(r => setTimeout(r, 1100));
+                    continue;
                 }
             }
+            break;
         }
     } catch (_) {}
 
-    // 2. tfxktok Scraper (reliable proxy scraper for MP4 CDN streams)
+    // 2. tfxktok Scraper (proxy scraper for MP4 CDN streams)
     if (!videoUrl && videoId) {
         try {
             const controller = new AbortController();
@@ -1373,11 +1411,13 @@ async function fetchTikTokDetails(rawUrl) {
         } catch (_) {}
     }
 
+    const embedUrl = videoId ? `https://www.tiktok.com/embed/v2/${videoId}?lang=en` : null;
     const video = {
         url: cleanUrl,
         canonicalUrl: canonicalUrl || cleanUrl,
         proxyUrl,
         tfxktokUrl,
+        embedUrl,
         videoId,
         authorHandle: authorHandle || 'tiktok',
         authorName: authorName || authorHandle || 'TikTok',
@@ -1387,13 +1427,9 @@ async function fetchTikTokDetails(rawUrl) {
         videoUrl
     };
 
-    tiktokCache.set(cleanUrl, video);
+    setInTikTokCache(cleanUrl, video);
     if (canonicalUrl && canonicalUrl !== cleanUrl) {
-        tiktokCache.set(canonicalUrl, video);
-    }
-    if (tiktokCache.size > 500) {
-        const firstKey = tiktokCache.keys().next().value;
-        tiktokCache.delete(firstKey);
+        setInTikTokCache(canonicalUrl, video);
     }
 
     return video;
@@ -1401,12 +1437,13 @@ async function fetchTikTokDetails(rawUrl) {
 
 app.get('/api/tiktok/video', async (req, res) => {
     const rawUrl = req.query.url;
+    const forceFresh = req.query.fresh === '1' || req.query.fresh === 'true';
     if (!rawUrl) {
         return res.status(400).json({ error: 'Missing TikTok url' });
     }
 
     try {
-        const video = await fetchTikTokDetails(rawUrl);
+        const video = await fetchTikTokDetails(rawUrl, forceFresh);
         if (!video) {
             return res.status(404).json({ error: 'TikTok video not found' });
         }
