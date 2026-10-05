@@ -2744,8 +2744,7 @@ app.get('/api/user/watchlist', (req, res) => {
     if (!req.user) return res.json({ success: true, watchlist: [] });
     try {
         const watchlist = db.prepare(`
-            SELECT t.id, t.board, t.subject, t.name, t.comment, t.media_url, t.bumped_at, t.created_at,
-                   (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count
+            SELECT t.id, t.board, t.subject, t.name, t.comment, t.media_url, t.bumped_at, t.created_at, t.reply_count
             FROM watchlist w
             JOIN threads t ON t.id = w.thread_id
             WHERE w.user_id = ?
@@ -3688,7 +3687,7 @@ app.get('*', async (req, res) => {
 
         if (threadId) {
             try {
-                const thread = db.prepare('SELECT id, board, name, subject, comment, media_url, created_at, is_static, static_path, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = threads.id) as reply_count FROM threads WHERE id = ?').get(threadId);
+                const thread = db.prepare('SELECT id, board, name, subject, comment, media_url, created_at, is_static, static_path, reply_count FROM threads WHERE id = ?').get(threadId);
                 if (thread) {
                     if (thread.is_static && thread.static_path) {
                         const fullStaticPath = path.resolve(__dirname, thread.static_path);

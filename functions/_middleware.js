@@ -640,7 +640,7 @@ export async function onRequest(context) {
         // Check if thread is requested
         const threadId = url.searchParams.get('t') || url.searchParams.get('thread');
         if (threadId) {
-            const thread = await env.DB.prepare('SELECT id, board, name, subject, comment, media_url, created_at, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = threads.id) as reply_count FROM threads WHERE id = ?').bind(threadId).first();
+            const thread = await env.DB.prepare('SELECT id, board, name, subject, comment, media_url, created_at, reply_count FROM threads WHERE id = ?').bind(threadId).first();
             if (thread) {
                 const replyId = url.searchParams.get('r') || url.searchParams.get('reply');
                 let reply = null;

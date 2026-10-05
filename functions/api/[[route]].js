@@ -20,6 +20,7 @@ const BOARDS = {
 
 const AUTO_LOCK_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 const ARCHIVE_STATIC_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
+let lastD1AutoLockCheck = 0;
 
 async function runD1AutoLock(db) {
     if (!db) return;
@@ -506,10 +507,22 @@ export async function onRequest(context) {
     try {
         if (typeof caches !== 'undefined' && caches.default) {
             edgeCache = caches.default;
-            cacheKey = new Request(request.url, request);
+            // Clean cache key without auth/cookie variance for public endpoints
+            cacheKey = new Request(url.toString(), {
+                method: 'GET',
+                headers: { 'Accept': 'application/json' }
+            });
             if (isPublicCacheable) {
                 const cachedResp = await edgeCache.match(cacheKey);
                 if (cachedResp) {
+                    const clientEtag = request.headers.get('if-none-match');
+                    const cachedEtag = cachedResp.headers.get('etag');
+                    if (clientEtag && cachedEtag && clientEtag === cachedEtag) {
+                        return new Response(null, {
+                            status: 304,
+                            headers: cachedResp.headers
+                        });
+                    }
                     return cachedResp;
                 }
             }
@@ -524,8 +537,11 @@ export async function onRequest(context) {
     }
 
     const route = path[0] || '';
-    if (route !== 'proxy' && route !== 'pixiv' && route !== 'twitter' && route !== 'reddit' && route !== 'tiktok' && route !== 'upload') {
-        await ensureD1Schema(db);
+    // Only verify schema on write/mutation requests or when missing columns trigger a retry, preventing PRAGMA overhead on every GET read
+    if (method !== 'GET' && route !== 'proxy' && route !== 'pixiv' && route !== 'twitter' && route !== 'reddit' && route !== 'tiktok' && route !== 'upload') {
+        if (!d1SchemaMigrated) {
+            await ensureD1Schema(db);
+        }
     }
     const user = await getUser(request, db);
 
@@ -1830,8 +1846,6 @@ export async function onRequest(context) {
             const isArchive = url.searchParams.get('view') === 'archive';
             if (!board || !BOARDS[board]) return json({ error: 'Invalid board' }, 400);
 
-            await runD1AutoLock(db);
-
             // HTTP Caching & 304 Not Modified check via fast index lookup
             let metaSql = 'SELECT MAX(bumped_at) as max_bump, COUNT(*) as count FROM threads WHERE board = ?';
             if (isArchive) {
@@ -1857,7 +1871,8 @@ export async function onRequest(context) {
                 });
             }
 
-            let sql = `SELECT t.*, (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count FROM threads t WHERE t.board = ?`;
+            // Zero-overhead thread listing: use denormalized t.reply_count directly instead of scanning the replies table with correlated subqueries
+            let sql = `SELECT t.* FROM threads t WHERE t.board = ?`;
             if (isArchive) {
                 sql += ` AND (t.is_locked = 1 OR t.is_archived = 1) ORDER BY COALESCE(t.locked_at, t.bumped_at) DESC LIMIT 100`;
             } else {
@@ -1996,21 +2011,9 @@ export async function onRequest(context) {
             return resp;
         }
 
-        // 3.1 GET /api/live (Edge SSE Handshake)
+        // 3.1 GET /api/live (Edge notice: Serverless edge uses adaptive delta polling)
         if (route === 'live' && method === 'GET') {
-            const threadId = url.searchParams.get('thread_id');
-            const { readable, writable } = new TransformStream();
-            const writer = writable.getWriter();
-            const encoder = new TextEncoder();
-            writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'connected', thread_id: threadId, edge: true, time: Date.now() })}\n\n`));
-            return new Response(readable, {
-                headers: {
-                    'Content-Type': 'text/event-stream',
-                    'Cache-Control': 'no-cache, no-transform',
-                    'Connection': 'keep-alive',
-                    'Access-Control-Allow-Origin': '*'
-                }
-            });
+            return json({ sse_supported: false, message: 'Serverless edge environment: use adaptive delta polling' }, 200);
         }
 
         // 4. POST /api/threads
@@ -2069,6 +2072,16 @@ export async function onRequest(context) {
 
             if (user?.user_id) {
                 await awardD1UserXp(db, user.user_id, XP_RULES.THREAD_CREATION);
+            }
+
+            // Opportunistic background auto-lock check, throttled to at most once per 6 hours per isolate
+            if (Date.now() - lastD1AutoLockCheck > 6 * 3600 * 1000) {
+                lastD1AutoLockCheck = Date.now();
+                if (context && typeof context.waitUntil === 'function') {
+                    context.waitUntil(runD1AutoLock(db));
+                } else {
+                    runD1AutoLock(db).catch(() => {});
+                }
             }
 
             // Invalidate edge cache for this board
@@ -2423,8 +2436,7 @@ export async function onRequest(context) {
         if (route === 'user' && path[1] === 'watchlist' && method === 'GET') {
             if (!user) return json({ success: true, watchlist: [] });
             const list = (await db.prepare(`
-                SELECT t.id, t.board, t.subject, t.name, t.comment, t.media_url, t.bumped_at, t.created_at,
-                       (SELECT COUNT(*) FROM replies r WHERE r.thread_id = t.id) as reply_count
+                SELECT t.id, t.board, t.subject, t.name, t.comment, t.media_url, t.bumped_at, t.created_at, t.reply_count
                 FROM watchlist w
                 JOIN threads t ON t.id = w.thread_id
                 WHERE w.user_id = ?

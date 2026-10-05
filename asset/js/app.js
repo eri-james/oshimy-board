@@ -2912,6 +2912,12 @@ function recordUserActivity() {
     window.addEventListener(evt, recordUserActivity, { passive: true });
 });
 
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && isAutoUpdateEnabled) {
+        recordUserActivity();
+    }
+});
+
 function getAdaptiveInterval() {
     const idleMs = Date.now() - lastUserInteraction;
     // 30s for thread view, 45s for board view (Audit Recommendation C.1)
@@ -2929,6 +2935,7 @@ function getAdaptiveInterval() {
 // --- REAL-TIME SERVER-SENT EVENTS (SSE) PUSH ENGINE ---
 let activeThreadLiveSource = null;
 let liveReconnectTimeout = null;
+let isSseSupported = true; // Tracks whether SSE backend is active; disables on failure to prevent poll thrashing
 
 function stopThreadLiveStream() {
     if (liveReconnectTimeout) {
@@ -2945,7 +2952,7 @@ function stopThreadLiveStream() {
 
 function initThreadLiveStream(threadId) {
     stopThreadLiveStream();
-    if (!threadId || !isAutoUpdateEnabled || typeof EventSource === 'undefined') {
+    if (!threadId || !isAutoUpdateEnabled || typeof EventSource === 'undefined' || !isSseSupported) {
         scheduleNextAutoUpdate();
         return;
     }
@@ -2980,20 +2987,16 @@ function initThreadLiveStream(threadId) {
         };
 
         es.onerror = () => {
+            // If SSE is unsupported or disconnected (e.g. serverless edge), stop and disable it for session
+            // This prevents an infinite 15-second reconnect loop that generates continuous database queries
+            isSseSupported = false;
             updateLiveStatusUI(false);
             stopThreadLiveStream();
-            // Seamless fallback: resume adaptive delta polling
+            // Seamlessly fall back to quiet adaptive delta polling (?since=TIMESTAMP)
             scheduleNextAutoUpdate();
-            // Reconnect attempt after 15s if user remains on this thread
-            if (currentThreadId === threadId && isAutoUpdateEnabled) {
-                liveReconnectTimeout = setTimeout(() => {
-                    if (currentThreadId === threadId && !activeThreadLiveSource && isAutoUpdateEnabled) {
-                        initThreadLiveStream(threadId);
-                    }
-                }, 15000);
-            }
         };
     } catch (e) {
+        isSseSupported = false;
         updateLiveStatusUI(false);
         scheduleNextAutoUpdate();
     }
