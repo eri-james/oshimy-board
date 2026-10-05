@@ -3,6 +3,9 @@
 // Connected to Cloudflare D1 / SQLite REST API
 // ==========================================
 
+window._postFormLoadedAt = Date.now();
+window._qrLoadedAt = Date.now();
+
 let userWatchlistIds = new Set();
 
 // --- NSFW GATE & GLOBAL BLUR TOGGLE ---
@@ -1857,6 +1860,7 @@ function openQuickReply(threadId, quoteId = null) {
         if (typeof syncSpoilerToggleUI === 'function') syncSpoilerToggleUI('qr');
     }
 
+    window._qrLoadedAt = Date.now();
     dock.style.display = 'flex';
     dock.classList.remove('qr-minimized');
     const minBtn = document.getElementById('qrMinBtn');
@@ -2154,7 +2158,9 @@ async function submitReplyCore({ threadId, comment, name, media_url, source = 'm
                 media_url: mediaVal,
                 post_as_anonymous: identityPayload.post_as_anonymous,
                 show_vanity_flair: identityPayload.show_vanity_flair,
-                guest_flair: identityPayload.guest_flair
+                guest_flair: identityPayload.guest_flair,
+                _hp_company: document.getElementById('qrHpCompany')?.value || '',
+                _client_ts: window._qrLoadedAt || Date.now()
             }
         });
 
@@ -2419,7 +2425,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     media_url: formattedMediaUrl,
                     post_as_anonymous: identityPayload.post_as_anonymous,
                     show_vanity_flair: identityPayload.show_vanity_flair,
-                    guest_flair: identityPayload.guest_flair
+                    guest_flair: identityPayload.guest_flair,
+                    _hp_website: document.getElementById('hpWebsite')?.value || '',
+                    _client_ts: window._postFormLoadedAt || Date.now()
                 }
             });
 

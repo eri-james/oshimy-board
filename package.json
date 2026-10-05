@@ -7,10 +7,13 @@
     "dev": "node server.js",
     "start": "node server.js",
     "lint": "node --check server.js server/db.js server/gamification.js server/archive.js functions/api/[[route]].js",
-    "build": "node -e \"console.log('Build OK')\""
+    "build": "node build-assets.js && node -e \"console.log('Build OK')\""
   },
   "dependencies": {
     "compression": "^1.8.2",
     "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

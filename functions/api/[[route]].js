@@ -38,11 +38,82 @@ function json(data, status = 200, extraHeaders = {}) {
         status,
         headers: {
             'Content-Type': 'application/json',
+            'X-Content-Type-Options': 'nosniff',
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Headers': '*',
             ...extraHeaders
         }
     });
+}
+
+// Edge Subnet Normalization (IPv4 /24 and IPv6 /64)
+function getClientSubnetEdge(ipStr) {
+    if (!ipStr || typeof ipStr !== 'string') return '127.0.0.1/32';
+    const cleanIp = ipStr.replace(/^::ffff:/, '').split(',')[0].trim();
+    if (cleanIp.includes('.')) {
+        const parts = cleanIp.split('.');
+        if (parts.length === 4) return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+    }
+    if (cleanIp.includes(':')) {
+        const parts = cleanIp.split(':').filter(Boolean);
+        return `${parts.slice(0, 4).join(':')}::/64`;
+    }
+    return cleanIp;
+}
+
+// Edge in-isolate sliding rate limit store
+const rateLimitBucketsEdge = new Map();
+
+function checkRateLimitEdge(key, { maxRequests, windowMs, minCooldownMs = 0 }) {
+    const now = Date.now();
+    let bucket = rateLimitBucketsEdge.get(key);
+    if (!bucket) {
+        bucket = { timestamps: [], lastPostTime: 0, lastUpdated: now };
+        rateLimitBucketsEdge.set(key, bucket);
+    }
+    bucket.lastUpdated = now;
+
+    if (minCooldownMs > 0 && bucket.lastPostTime > 0) {
+        const elapsed = now - bucket.lastPostTime;
+        if (elapsed < minCooldownMs) {
+            const waitSec = Math.ceil((minCooldownMs - elapsed) / 1000);
+            return {
+                allowed: false,
+                retryAfter: waitSec,
+                reason: `Cooldown active. Please wait ${waitSec}s before posting again.`
+            };
+        }
+    }
+
+    bucket.timestamps = bucket.timestamps.filter(ts => now - ts < windowMs);
+
+    if (bucket.timestamps.length >= maxRequests) {
+        const oldest = bucket.timestamps[0];
+        const waitSec = Math.ceil((windowMs - (now - oldest)) / 1000);
+        return {
+            allowed: false,
+            retryAfter: Math.max(1, waitSec),
+            reason: `Rate limit reached. Please wait ${Math.max(1, waitSec)}s before trying again.`
+        };
+    }
+
+    bucket.timestamps.push(now);
+    bucket.lastPostTime = now;
+    return { allowed: true };
+}
+
+function verifyBotHoneypotEdge(body) {
+    if (!body || typeof body !== 'object') return true;
+    if (body._hp_website || body._hp_company) {
+        return false;
+    }
+    if (body._client_ts && typeof body._client_ts === 'number') {
+        const elapsed = Date.now() - body._client_ts;
+        if (elapsed < 500 && elapsed >= 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Find D1 binding across common casing/names
@@ -1928,8 +1999,27 @@ export async function onRequest(context) {
         // 4. POST /api/threads
         if (route === 'threads' && method === 'POST') {
             const body = await request.json();
+            if (!verifyBotHoneypotEdge(body)) {
+                return json({ error: 'Automated submission rejected by anti-spam filter.' }, 400);
+            }
+
+            const clientIp = request.headers.get('cf-connecting-ip') || 'anon';
+            const subnet = getClientSubnetEdge(clientIp);
+            const isStaff = user && (user.role === 'admin' || user.role === 'moderator');
+
+            if (!isStaff) {
+                const limit = checkRateLimitEdge('thread:' + (user?.user_id || subnet), { maxRequests: 6, windowMs: 600000, minCooldownMs: 8000 });
+                if (!limit.allowed) {
+                    return json({ error: limit.reason }, 429, { 'Retry-After': String(limit.retryAfter) });
+                }
+            }
+
             const { board, name, subject, comment, media_url, post_as_anonymous, show_vanity_flair, guest_flair } = body;
             if (!board || !BOARDS[board] || !comment?.trim()) return json({ error: 'Invalid input' }, 400);
+            if (comment.length > 15000) return json({ error: 'Comment exceeds maximum allowed length of 15,000 characters' }, 400);
+            if (subject && subject.length > 120) return json({ error: 'Subject exceeds maximum allowed length of 120 characters' }, 400);
+            if (name && name.length > 60) return json({ error: 'Name exceeds maximum allowed length of 60 characters' }, 400);
+            if (media_url && media_url.length > 2048) return json({ error: 'Media URL exceeds maximum allowed length' }, 400);
 
             const id = '-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
             const now = Date.now();
@@ -2001,8 +2091,26 @@ export async function onRequest(context) {
         // 5. POST /api/replies
         if (route === 'replies' && method === 'POST') {
             const body = await request.json();
+            if (!verifyBotHoneypotEdge(body)) {
+                return json({ error: 'Automated submission rejected by anti-spam filter.' }, 400);
+            }
+
+            const clientIp = request.headers.get('cf-connecting-ip') || 'anon';
+            const subnet = getClientSubnetEdge(clientIp);
+            const isStaff = user && (user.role === 'admin' || user.role === 'moderator');
+
+            if (!isStaff) {
+                const limit = checkRateLimitEdge('reply:' + (user?.user_id || subnet), { maxRequests: 30, windowMs: 600000, minCooldownMs: 3000 });
+                if (!limit.allowed) {
+                    return json({ error: limit.reason }, 429, { 'Retry-After': String(limit.retryAfter) });
+                }
+            }
+
             const { thread_id, name, comment, media_url, post_as_anonymous, show_vanity_flair, guest_flair } = body;
             if (!thread_id || !comment?.trim()) return json({ error: 'Missing comment or thread_id' }, 400);
+            if (comment.length > 15000) return json({ error: 'Comment exceeds maximum allowed length of 15,000 characters' }, 400);
+            if (name && name.length > 60) return json({ error: 'Name exceeds maximum allowed length of 60 characters' }, 400);
+            if (media_url && media_url.length > 2048) return json({ error: 'Media URL exceeds maximum allowed length' }, 400);
 
             const thread = await db.prepare('SELECT * FROM threads WHERE id = ?').bind(thread_id).first();
             if (!thread) return json({ error: 'Thread not found' }, 404);

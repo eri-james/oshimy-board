@@ -33,6 +33,28 @@ const PORT = 3000;
 app.set('trust proxy', true);
 app.use(compression());
 
+// Standard HTTP Security Hardening & Content Security Policy (CSP)
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+    res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://platform.twitter.com https://*.tiktok.com https://www.youtube.com https://s.ytimg.com; " +
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+        "font-src 'self' data: https://fonts.gstatic.com; " +
+        "img-src 'self' data: blob: https:; " +
+        "media-src 'self' data: blob: https:; " +
+        "connect-src 'self' https:; " +
+        "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://*.tiktok.com https://platform.twitter.com https://*.twitter.com https://*.x.com; " +
+        "frame-ancestors 'self' *; " +
+        "base-uri 'self';"
+    );
+    next();
+});
+
 // Cache directory for extracted video first-frame thumbnails
 const VIDEO_THUMBS_DIR = path.join(__dirname, 'cache', 'video_thumbs');
 if (!fs.existsSync(VIDEO_THUMBS_DIR)) {
@@ -219,6 +241,89 @@ function authMiddleware(req, res, next) {
 }
 
 app.use(authMiddleware);
+
+// Subnet normalization for IPv4 (/24) and IPv6 (/64) to prevent subnet-rotating spam
+function getClientSubnet(ipStr) {
+    if (!ipStr || typeof ipStr !== 'string') return '127.0.0.1/32';
+    const cleanIp = ipStr.replace(/^::ffff:/, '').split(',')[0].trim();
+    if (cleanIp.includes('.')) {
+        const parts = cleanIp.split('.');
+        if (parts.length === 4) {
+            return `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+        }
+    }
+    if (cleanIp.includes(':')) {
+        const parts = cleanIp.split(':').filter(Boolean);
+        const prefix = parts.slice(0, 4).join(':');
+        return `${prefix}::/64`;
+    }
+    return cleanIp;
+}
+
+// In-memory sliding rate limit store
+const rateLimitBuckets = new Map();
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, data] of rateLimitBuckets.entries()) {
+        if (now - data.lastUpdated > 15 * 60 * 1000) {
+            rateLimitBuckets.delete(key);
+        }
+    }
+}, 5 * 60 * 1000);
+
+function checkRateLimit(key, { maxRequests, windowMs, minCooldownMs = 0 }) {
+    const now = Date.now();
+    let bucket = rateLimitBuckets.get(key);
+    if (!bucket) {
+        bucket = { timestamps: [], lastPostTime: 0, lastUpdated: now };
+        rateLimitBuckets.set(key, bucket);
+    }
+    bucket.lastUpdated = now;
+
+    if (minCooldownMs > 0 && bucket.lastPostTime > 0) {
+        const elapsed = now - bucket.lastPostTime;
+        if (elapsed < minCooldownMs) {
+            const waitSec = Math.ceil((minCooldownMs - elapsed) / 1000);
+            return {
+                allowed: false,
+                retryAfter: waitSec,
+                reason: `Cooldown active. Please wait ${waitSec}s before posting again.`
+            };
+        }
+    }
+
+    bucket.timestamps = bucket.timestamps.filter(ts => now - ts < windowMs);
+
+    if (bucket.timestamps.length >= maxRequests) {
+        const oldest = bucket.timestamps[0];
+        const waitSec = Math.ceil((windowMs - (now - oldest)) / 1000);
+        return {
+            allowed: false,
+            retryAfter: Math.max(1, waitSec),
+            reason: `Rate limit reached. Please wait ${Math.max(1, waitSec)}s before trying again.`
+        };
+    }
+
+    bucket.timestamps.push(now);
+    bucket.lastPostTime = now;
+    return { allowed: true };
+}
+
+// Anti-Spam Bot Honeypot & Timing Verification
+function verifyBotHoneypot(body) {
+    if (!body || typeof body !== 'object') return true;
+    if (body._hp_website || body._hp_company) {
+        return false;
+    }
+    if (body._client_ts && typeof body._client_ts === 'number') {
+        const elapsed = Date.now() - body._client_ts;
+        if (elapsed < 500 && elapsed >= 0) {
+            return false;
+        }
+    }
+    return true;
+}
 
 // Helper: Calculate lightweight user perks sync data (unread notifs & watchlist count)
 // Uses indexed reply_mentions table to eliminate full table scans (Audit Finding 1 & Recommendation A.2)
@@ -1456,6 +1561,18 @@ app.get('/api/tiktok/video', async (req, res) => {
 
 // Stateless Media Upload Proxy (Catbox.moe Primary with userhash -> ImgBB Failover for images, Zero DB storage)
 app.post('/api/upload', async (req, res) => {
+    const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+    const subnet = getClientSubnet(clientIp);
+    const isStaff = req.user && (req.user.role === 'admin' || req.user.role === 'moderator');
+
+    if (!isStaff) {
+        const limit = checkRateLimit('upload:' + (req.user?.user_id || subnet), { maxRequests: 15, windowMs: 300000, minCooldownMs: 1000 });
+        if (!limit.allowed) {
+            res.setHeader('Retry-After', limit.retryAfter);
+            return res.status(429).json({ error: limit.reason });
+        }
+    }
+
     try {
         let buffer = null;
         let filename = '';
@@ -2072,6 +2189,23 @@ app.get('/api/thread', (req, res) => {
 
 // 4. Create New Thread
 app.post('/api/threads', (req, res) => {
+    // Anti-Spam Bot Honeypot & Timing Check
+    if (!verifyBotHoneypot(req.body)) {
+        return res.status(400).json({ error: 'Automated submission rejected by anti-spam filter.' });
+    }
+
+    const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+    const subnet = getClientSubnet(clientIp);
+    const isStaff = req.user && (req.user.role === 'admin' || req.user.role === 'moderator');
+
+    if (!isStaff) {
+        const limit = checkRateLimit('thread:' + (req.user?.user_id || subnet), { maxRequests: 6, windowMs: 600000, minCooldownMs: 8000 });
+        if (!limit.allowed) {
+            res.setHeader('Retry-After', limit.retryAfter);
+            return res.status(429).json({ error: limit.reason });
+        }
+    }
+
     const { board, name, subject, comment, media_url, show_vanity, show_vanity_flair, hide_identity, post_as_anonymous, guest_flair } = req.body;
     const hideId = hide_identity !== undefined ? Boolean(hide_identity) : Boolean(post_as_anonymous);
     const showVanity = show_vanity_flair !== undefined ? Boolean(show_vanity_flair) : (show_vanity !== false);
@@ -2082,11 +2216,22 @@ app.post('/api/threads', (req, res) => {
     if (!comment || !comment.trim()) {
         return res.status(400).json({ error: 'Comment is required' });
     }
+    if (comment.length > 15000) {
+        return res.status(400).json({ error: 'Comment exceeds maximum allowed length of 15,000 characters' });
+    }
+    if (subject && subject.length > 120) {
+        return res.status(400).json({ error: 'Subject exceeds maximum allowed length of 120 characters' });
+    }
+    if (name && name.length > 60) {
+        return res.status(400).json({ error: 'Name exceeds maximum allowed length of 60 characters' });
+    }
+    if (media_url && media_url.length > 2048) {
+        return res.status(400).json({ error: 'Media URL exceeds maximum allowed length' });
+    }
 
     try {
         const id = generateId();
         const now = Date.now();
-        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
         const ipHash = hashIp(clientIp);
 
         const posterName = getDefaultBoardName(board, name);
@@ -2145,6 +2290,23 @@ app.post('/api/threads', (req, res) => {
 
 // 5. Create Reply
 app.post('/api/replies', (req, res) => {
+    // Anti-Spam Bot Honeypot & Timing Check
+    if (!verifyBotHoneypot(req.body)) {
+        return res.status(400).json({ error: 'Automated submission rejected by anti-spam filter.' });
+    }
+
+    const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+    const subnet = getClientSubnet(clientIp);
+    const isStaff = req.user && (req.user.role === 'admin' || req.user.role === 'moderator');
+
+    if (!isStaff) {
+        const limit = checkRateLimit('reply:' + (req.user?.user_id || subnet), { maxRequests: 30, windowMs: 600000, minCooldownMs: 3000 });
+        if (!limit.allowed) {
+            res.setHeader('Retry-After', limit.retryAfter);
+            return res.status(429).json({ error: limit.reason });
+        }
+    }
+
     const { thread_id, board, name, comment, media_url, show_vanity, show_vanity_flair, hide_identity, post_as_anonymous, guest_flair } = req.body;
     const hideId = hide_identity !== undefined ? Boolean(hide_identity) : Boolean(post_as_anonymous);
     const showVanity = show_vanity_flair !== undefined ? Boolean(show_vanity_flair) : (show_vanity !== false);
@@ -2154,6 +2316,15 @@ app.post('/api/replies', (req, res) => {
     }
     if (!comment || !comment.trim()) {
         return res.status(400).json({ error: 'Comment is required' });
+    }
+    if (comment.length > 15000) {
+        return res.status(400).json({ error: 'Comment exceeds maximum allowed length of 15,000 characters' });
+    }
+    if (name && name.length > 60) {
+        return res.status(400).json({ error: 'Name exceeds maximum allowed length of 60 characters' });
+    }
+    if (media_url && media_url.length > 2048) {
+        return res.status(400).json({ error: 'Media URL exceeds maximum allowed length' });
     }
 
     try {
@@ -2167,7 +2338,6 @@ app.post('/api/replies', (req, res) => {
 
         const id = generateId();
         const now = Date.now();
-        const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
         const ipHash = hashIp(clientIp);
 
         const posterName = getDefaultBoardName(thread.board, name);
@@ -2352,9 +2522,20 @@ app.post('/api/reactions/toggle', (req, res) => {
 
 // 6. User Registration
 app.post('/api/auth/register', (req, res) => {
+    const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+    const subnet = getClientSubnet(clientIp);
+    const regLimit = checkRateLimit('register:' + subnet, { maxRequests: 4, windowMs: 1800000, minCooldownMs: 5000 });
+    if (!regLimit.allowed) {
+        res.setHeader('Retry-After', regLimit.retryAfter);
+        return res.status(429).json({ error: 'Registration rate limit exceeded. Please wait before creating another account.' });
+    }
+
     const { username, password } = req.body;
     if (!username || !username.trim() || !password || password.length < 4) {
         return res.status(400).json({ error: 'Username and password (min 4 chars) required.' });
+    }
+    if (username.trim().length > 32) {
+        return res.status(400).json({ error: 'Username cannot exceed 32 characters.' });
     }
 
     const cleanUser = username.trim();
@@ -2396,6 +2577,14 @@ app.post('/api/auth/register', (req, res) => {
 
 // 7. User Login
 app.post('/api/auth/login', (req, res) => {
+    const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1').split(',')[0].trim();
+    const subnet = getClientSubnet(clientIp);
+    const throttle = checkRateLimit('login_throttle:' + subnet, { maxRequests: 10, windowMs: 300000, minCooldownMs: 500 });
+    if (!throttle.allowed) {
+        res.setHeader('Retry-After', throttle.retryAfter);
+        return res.status(429).json({ error: 'Too many login attempts. Please wait 5 minutes before trying again.' });
+    }
+
     const { username, password } = req.body;
     if (!username || !password) {
         return res.status(400).json({ error: 'Username and password required.' });
@@ -2404,6 +2593,7 @@ app.post('/api/auth/login', (req, res) => {
     try {
         const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username.trim());
         if (!user || !verifyPassword(password, user.password_hash)) {
+            checkRateLimit('login_failed:' + subnet, { maxRequests: 5, windowMs: 300000 });
             return res.status(401).json({ error: 'Invalid username or password.' });
         }
 

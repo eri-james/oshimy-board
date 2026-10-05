@@ -580,6 +580,34 @@ async function resolveSocialMedia(rawUrl, origin) {
     };
 }
 
+// Attach standard HTTP security hardening headers to HTML responses
+function applySecurityHeaders(res) {
+    if (!res || !res.headers) return res;
+    const newHeaders = new Headers(res.headers);
+    newHeaders.set('X-Content-Type-Options', 'nosniff');
+    newHeaders.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    newHeaders.set('X-XSS-Protection', '1; mode=block');
+    newHeaders.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+    newHeaders.set(
+        'Content-Security-Policy',
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://platform.twitter.com https://*.tiktok.com https://www.youtube.com https://s.ytimg.com; " +
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+        "font-src 'self' data: https://fonts.gstatic.com; " +
+        "img-src 'self' data: blob: https:; " +
+        "media-src 'self' data: blob: https:; " +
+        "connect-src 'self' https:; " +
+        "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com https://*.tiktok.com https://platform.twitter.com https://*.twitter.com https://*.x.com; " +
+        "frame-ancestors 'self' *; " +
+        "base-uri 'self';"
+    );
+    return new Response(res.body, {
+        status: res.status,
+        statusText: res.statusText,
+        headers: newHeaders
+    });
+}
+
 export async function onRequest(context) {
     const { request, env, next } = context;
     const url = new URL(request.url);
@@ -596,7 +624,7 @@ export async function onRequest(context) {
     }
 
     if (!env || !env.DB) {
-        return response;
+        return applySecurityHeaders(response);
     }
 
     try {
@@ -676,7 +704,7 @@ export async function onRequest(context) {
                 const vidHeight = resolvedMedia.height || 720;
                 const vidType = resolvedMedia.videoType || 'video/mp4';
 
-                return new HTMLRewriter()
+                return applySecurityHeaders(new HTMLRewriter()
                     .on('head', {
                         element(el) {
                             if (isVideo) {
@@ -707,7 +735,7 @@ export async function onRequest(context) {
                     .on('meta[name="twitter:description"]', { element(el) { el.setAttribute('content', pageDesc); } })
                     .on('meta[name="twitter:image"]', { element(el) { el.setAttribute('content', displayImage); } })
                     .on('link[rel="canonical"]', { element(el) { el.setAttribute('href', canonicalUrl); } })
-                    .transform(response);
+                    .transform(response));
             }
         }
 
@@ -720,7 +748,7 @@ export async function onRequest(context) {
             const canonicalUrl = `${origin}/?b=${boardKey}`;
             const siteName = `OshiMY - /${boardKey}/`;
 
-            return new HTMLRewriter()
+            return applySecurityHeaders(new HTMLRewriter()
                 .on('title', { element(el) { el.setInnerContent(pageTitle); } })
                 .on('meta[name="description"]', { element(el) { el.setAttribute('content', pageDesc); } })
                 .on('meta[property="og:site_name"]', { element(el) { el.setAttribute('content', siteName); } })
@@ -732,18 +760,18 @@ export async function onRequest(context) {
                 .on('meta[name="twitter:description"]', { element(el) { el.setAttribute('content', pageDesc); } })
                 .on('meta[name="twitter:image"]', { element(el) { el.setAttribute('content', currentBanner); } })
                 .on('link[rel="canonical"]', { element(el) { el.setAttribute('href', canonicalUrl); } })
-                .transform(response);
+                .transform(response));
         }
 
         // Default Homepage
-        return new HTMLRewriter()
+        return applySecurityHeaders(new HTMLRewriter()
             .on('meta[property="og:image"]', { element(el) { el.setAttribute('content', currentBanner); } })
             .on('meta[name="twitter:image"]', { element(el) { el.setAttribute('content', currentBanner); } })
-            .transform(response);
+            .transform(response));
 
     } catch (e) {
         console.error('Error rewriting social metadata:', e);
-        return response;
+        return applySecurityHeaders(response);
     }
 }
 
