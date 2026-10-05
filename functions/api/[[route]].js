@@ -1996,6 +1996,23 @@ export async function onRequest(context) {
             return resp;
         }
 
+        // 3.1 GET /api/live (Edge SSE Handshake)
+        if (route === 'live' && method === 'GET') {
+            const threadId = url.searchParams.get('thread_id');
+            const { readable, writable } = new TransformStream();
+            const writer = writable.getWriter();
+            const encoder = new TextEncoder();
+            writer.write(encoder.encode(`data: ${JSON.stringify({ type: 'connected', thread_id: threadId, edge: true, time: Date.now() })}\n\n`));
+            return new Response(readable, {
+                headers: {
+                    'Content-Type': 'text/event-stream',
+                    'Cache-Control': 'no-cache, no-transform',
+                    'Connection': 'keep-alive',
+                    'Access-Control-Allow-Origin': '*'
+                }
+            });
+        }
+
         // 4. POST /api/threads
         if (route === 'threads' && method === 'POST') {
             const body = await request.json();

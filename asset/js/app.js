@@ -628,6 +628,9 @@ function cancelPendingNavFetch() {
         } catch (e) {}
         navAbortController = null;
     }
+    if (typeof stopThreadLiveStream === 'function') {
+        stopThreadLiveStream();
+    }
 }
 
 function isCatalogMode() {
@@ -1729,6 +1732,11 @@ async function loadThreadView(threadId, isSilent = false) {
                         setTimeout(() => targetEl.classList.remove('post-highlight-active'), 2500);
                     }
                 }, 150);
+            }
+
+            // Real-Time SSE Live Push Stream (Zero idle database reads)
+            if (!isSilent && !isArchived && isAutoUpdateEnabled) {
+                initThreadLiveStream(threadId);
             }
         }
     } catch (err) {
@@ -2918,12 +2926,141 @@ function getAdaptiveInterval() {
     return baseInterval;
 }
 
+// --- REAL-TIME SERVER-SENT EVENTS (SSE) PUSH ENGINE ---
+let activeThreadLiveSource = null;
+let liveReconnectTimeout = null;
+
+function stopThreadLiveStream() {
+    if (liveReconnectTimeout) {
+        clearTimeout(liveReconnectTimeout);
+        liveReconnectTimeout = null;
+    }
+    if (activeThreadLiveSource) {
+        try {
+            activeThreadLiveSource.close();
+        } catch (_) {}
+        activeThreadLiveSource = null;
+    }
+}
+
+function initThreadLiveStream(threadId) {
+    stopThreadLiveStream();
+    if (!threadId || !isAutoUpdateEnabled || typeof EventSource === 'undefined') {
+        scheduleNextAutoUpdate();
+        return;
+    }
+
+    try {
+        const liveUrl = (typeof API_BASE !== 'undefined' ? API_BASE : '/api') + `/live?thread_id=${encodeURIComponent(threadId)}`;
+        const es = new EventSource(liveUrl);
+        activeThreadLiveSource = es;
+
+        es.onopen = () => {
+            updateLiveStatusUI(true);
+        };
+
+        es.onmessage = (event) => {
+            if (!event || !event.data) return;
+            try {
+                const data = JSON.parse(event.data);
+                if (data.type === 'connected') {
+                    updateLiveStatusUI(true);
+                    return;
+                }
+                if (data.type === 'reply' && data.reply) {
+                    handleIncomingLiveReply(threadId, data.reply);
+                } else if (data.type === 'locked') {
+                    window.isCurrentThreadArchived = Boolean(data.is_locked);
+                    const formWrapper = document.getElementById('formWrapper');
+                    if (formWrapper) formWrapper.style.display = data.is_locked ? 'none' : 'block';
+                }
+            } catch (err) {
+                console.warn('[Live SSE] Error processing message:', err);
+            }
+        };
+
+        es.onerror = () => {
+            updateLiveStatusUI(false);
+            stopThreadLiveStream();
+            // Seamless fallback: resume adaptive delta polling
+            scheduleNextAutoUpdate();
+            // Reconnect attempt after 15s if user remains on this thread
+            if (currentThreadId === threadId && isAutoUpdateEnabled) {
+                liveReconnectTimeout = setTimeout(() => {
+                    if (currentThreadId === threadId && !activeThreadLiveSource && isAutoUpdateEnabled) {
+                        initThreadLiveStream(threadId);
+                    }
+                }, 15000);
+            }
+        };
+    } catch (e) {
+        updateLiveStatusUI(false);
+        scheduleNextAutoUpdate();
+    }
+}
+
+function handleIncomingLiveReply(threadId, reply) {
+    if (!reply || currentThreadId !== threadId) return;
+    const existing = document.getElementById('post_' + reply.id);
+    if (existing) return; // already in DOM
+
+    const repliesContainer = document.getElementById('repliesContainer');
+    if (!repliesContainer) return;
+
+    const temp = document.createElement('div');
+    temp.innerHTML = renderReplyCard(reply, threadId, false);
+    const card = temp.firstElementChild;
+    if (card) {
+        card.classList.add('new-reply-flash');
+        repliesContainer.appendChild(card);
+
+        // Update backlinks and hydrate embeds
+        if (typeof generateBacklinks === 'function') generateBacklinks();
+        if (typeof hydratePixivEmbeds === 'function') hydratePixivEmbeds();
+        if (typeof hydrateTwitterEmbeds === 'function') hydrateTwitterEmbeds();
+        if (typeof hydrateRedditEmbeds === 'function') hydrateRedditEmbeds();
+        if (typeof hydrateTikTokEmbeds === 'function') hydrateTikTokEmbeds();
+
+        // Update reply count badge in header
+        const countSpan = document.getElementById('threadReplyCount');
+        if (countSpan) {
+            const currentCount = parseInt(countSpan.innerText.replace(/[^0-9]/g, '') || '0', 10);
+            countSpan.innerText = `(${currentCount + 1} replies)`;
+        }
+
+        // Discreet toast notification
+        if (typeof showToast === 'function') {
+            const shortId = reply.id ? reply.id.substring(1, 9) : '';
+            showToast(`⚡ New reply >>${shortId}`, 3000, 'info');
+        }
+    }
+}
+
+function updateLiveStatusUI(isConnected) {
+    const btn = document.getElementById('autoUpdateToggle');
+    if (!btn) return;
+    if (!isAutoUpdateEnabled) {
+        btn.innerText = "Auto-Update: Off";
+        btn.style.color = "#888";
+        return;
+    }
+    if (isConnected && currentThreadId) {
+        btn.innerHTML = `<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#22c55e; margin-right:4px; box-shadow:0 0 6px #22c55e;"></span>Live: Push (SSE)`;
+        btn.style.color = '#22c55e';
+    } else {
+        updateAutoUpdateToggleLabel(getAdaptiveInterval());
+    }
+}
+
 function updateAutoUpdateToggleLabel(intervalMs) {
     const btn = document.getElementById('autoUpdateToggle');
     if (!btn) return;
     if (!isAutoUpdateEnabled) {
         btn.innerText = "Auto-Update: Off";
         btn.style.color = "#888";
+    } else if (currentThreadId && activeThreadLiveSource) {
+        btn.innerHTML = `<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#22c55e; margin-right:4px; box-shadow:0 0 6px #22c55e;"></span>Live: Push (SSE)`;
+        btn.style.color = '#22c55e';
     } else {
         const sec = Math.round(intervalMs / 1000);
         const isIdle = intervalMs > (currentThreadId ? 30000 : 45000);
@@ -2939,6 +3076,12 @@ function scheduleNextAutoUpdate(immediate = false) {
     }
     if (!isAutoUpdateEnabled) {
         updateAutoUpdateToggleLabel(0);
+        return;
+    }
+
+    // If viewing a thread and SSE live stream is active, skip background polling queries!
+    if (currentThreadId && activeThreadLiveSource) {
+        updateLiveStatusUI(true);
         return;
     }
 
@@ -2970,12 +3113,17 @@ function toggleAutoUpdate() {
     isAutoUpdateEnabled = !isAutoUpdateEnabled;
     if (isAutoUpdateEnabled) {
         lastUserInteraction = Date.now();
-        scheduleNextAutoUpdate(true);
+        if (currentThreadId) {
+            initThreadLiveStream(currentThreadId);
+        } else {
+            scheduleNextAutoUpdate(true);
+        }
     } else {
         if (activePollTimeout) {
             clearTimeout(activePollTimeout);
             activePollTimeout = null;
         }
+        stopThreadLiveStream();
         updateAutoUpdateToggleLabel(0);
     }
 }

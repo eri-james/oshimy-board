@@ -2187,6 +2187,64 @@ app.get('/api/thread', (req, res) => {
     }
 });
 
+// Real-Time Server-Sent Events (SSE) Live Thread Push Notification Store
+const threadLiveClients = new Map();
+
+function broadcastLiveEvent(threadId, eventObj) {
+    if (!threadId) return;
+    const subscribers = threadLiveClients.get(threadId);
+    if (!subscribers || subscribers.size === 0) return;
+    const payload = `data: ${JSON.stringify(eventObj)}\n\n`;
+    for (const client of subscribers) {
+        try {
+            client.write(payload);
+        } catch (_) {
+            subscribers.delete(client);
+        }
+    }
+}
+
+// 3.1. SSE Live Thread Stream
+app.get('/api/live', (req, res) => {
+    const threadId = req.query.thread_id;
+    if (!threadId) {
+        return res.status(400).json({ error: 'Missing thread_id' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof res.flushHeaders === 'function') {
+        res.flushHeaders();
+    }
+
+    res.write(`data: ${JSON.stringify({ type: 'connected', thread_id: threadId, time: Date.now() })}\n\n`);
+
+    if (!threadLiveClients.has(threadId)) {
+        threadLiveClients.set(threadId, new Set());
+    }
+    const subscribers = threadLiveClients.get(threadId);
+    subscribers.add(res);
+
+    // Heartbeat ping every 25 seconds to keep connection alive through proxies
+    const pingInterval = setInterval(() => {
+        try {
+            res.write(': ping\n\n');
+        } catch (_) {
+            clearInterval(pingInterval);
+        }
+    }, 25000);
+
+    req.on('close', () => {
+        clearInterval(pingInterval);
+        subscribers.delete(res);
+        if (subscribers.size === 0) {
+            threadLiveClients.delete(threadId);
+        }
+    });
+});
+
 // 4. Create New Thread
 app.post('/api/threads', (req, res) => {
     // Anti-Spam Bot Honeypot & Timing Check
@@ -2437,6 +2495,9 @@ app.post('/api/replies', (req, res) => {
         }
 
         res.json({ success: true, reply: created });
+
+        // Real-Time SSE Broadcast to active thread viewers (Push model)
+        broadcastLiveEvent(thread_id, { type: 'reply', thread_id, reply: created });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -2888,6 +2949,7 @@ app.post('/api/admin/lock', (req, res) => {
         }
 
         res.json({ success: true, is_locked: newLocked, is_archived: newLocked });
+        broadcastLiveEvent(thread_id, { type: 'locked', thread_id, is_locked: newLocked });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
