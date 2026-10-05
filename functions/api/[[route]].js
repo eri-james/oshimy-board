@@ -2023,7 +2023,6 @@ export async function onRequest(context) {
 
             const id = '-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
             const now = Date.now();
-            const clientIp = request.headers.get('cf-connecting-ip') || 'anon';
             const posterName = resolveAuthorName(name, board);
             const posterSubject = (subject?.trim() || '');
             const posterMedia = (media_url?.trim() || '');
@@ -2120,7 +2119,6 @@ export async function onRequest(context) {
 
             const id = '-' + Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
             const now = Date.now();
-            const clientIp = request.headers.get('cf-connecting-ip') || 'anon';
             const posterName = resolveAuthorName(name, thread.board);
             const posterMedia = (media_url?.trim() || '');
             const hideIdentity = Boolean(post_as_anonymous);
