@@ -928,6 +928,8 @@ function getPostIdentityPayload(rawName) {
 
 function renderPosterIdBadge(posterId) {
     if (!posterId) return '';
+    const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'mod' || currentUser.role === 'moderator');
+    if (!isAdmin) return '';
     const clean = String(posterId).substring(0, 8);
     let hash = 0;
     for (let i = 0; i < clean.length; i++) {
@@ -935,7 +937,7 @@ function renderPosterIdBadge(posterId) {
     }
     const hue = Math.abs(hash) % 360;
     const isActive = activeHighlightedPosterId === clean ? ' poster-id-active' : '';
-    return `<span class="poster-id-pill${isActive}" data-poster-id="${escapeHtml(clean)}" onclick="highlightPosterId('${escapeHtml(clean)}', event)" style="--pid-hue: ${hue};" title="Anonymous Thread ID (Click to highlight all posts by ID: ${escapeHtml(clean)})">ID: ${escapeHtml(clean)}</span>`;
+    return `<span class="poster-id-pill${isActive}" data-poster-id="${escapeHtml(clean)}" onclick="highlightPosterId('${escapeHtml(clean)}', event)" style="--pid-hue: ${hue};" title="Poster ID (Admin view: ${escapeHtml(clean)})">ID: ${escapeHtml(clean)}</span>`;
 }
 
 function highlightPosterId(posterId, event) {
@@ -2519,10 +2521,14 @@ async function initAuth() {
 
     try {
         const data = await apiFetch('/auth/me');
+        const prevRole = currentUser ? currentUser.role : null;
         currentUser = data.user;
         updateAuthUI(currentUser);
         syncUserPerks();
         if (typeof initGamification === 'function') initGamification();
+        if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'mod' || currentUser.role === 'moderator') && prevRole !== currentUser.role) {
+            router();
+        }
     } catch {
         localStorage.removeItem('myvt_token');
         authToken = null;

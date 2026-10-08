@@ -2040,11 +2040,12 @@ app.get('/api/threads', (req, res) => {
 
         const threads = db.prepare(query).all(board);
 
-        // Initialize preview_replies array and thread-scoped poster_id on all threads
+        // Initialize preview_replies array and thread-scoped poster_id on all threads (visible to staff only)
+        const isStaff = req.user && (req.user.role === 'admin' || req.user.role === 'moderator' || req.user.role === 'mod');
         const threadIpMap = new Map();
         for (const th of threads) {
             th.preview_replies = [];
-            th.poster_id = generatePosterId(th.ip_hash, th.id);
+            th.poster_id = isStaff ? generatePosterId(th.ip_hash, th.id) : null;
             th.is_op = true;
             threadIpMap.set(th.id, th.ip_hash);
         }
@@ -2068,7 +2069,7 @@ app.get('/api/threads', (req, res) => {
 
             const replyMap = new Map();
             for (const r of previewReplies) {
-                r.poster_id = generatePosterId(r.ip_hash, r.thread_id);
+                r.poster_id = isStaff ? generatePosterId(r.ip_hash, r.thread_id) : null;
                 const opIp = threadIpMap.get(r.thread_id);
                 r.is_op = Boolean(r.ip_hash && opIp && r.ip_hash === opIp);
                 if (!replyMap.has(r.thread_id)) {
@@ -2119,9 +2120,10 @@ app.get('/api/thread', (req, res) => {
                 });
             }
 
+            const isStaff = req.user && (req.user.role === 'admin' || req.user.role === 'moderator' || req.user.role === 'mod');
             const opRow = db.prepare('SELECT ip_hash FROM threads WHERE id = ?').get(threadId);
             for (const r of replies) {
-                r.poster_id = generatePosterId(r.ip_hash, threadId);
+                r.poster_id = isStaff ? generatePosterId(r.ip_hash, threadId) : null;
                 r.is_op = Boolean(r.ip_hash && opRow?.ip_hash && r.ip_hash === opRow.ip_hash);
             }
 
@@ -2150,7 +2152,8 @@ app.get('/api/thread', (req, res) => {
             });
         }
 
-        thread.poster_id = generatePosterId(thread.ip_hash, thread.id);
+        const isStaff = req.user && (req.user.role === 'admin' || req.user.role === 'moderator' || req.user.role === 'mod');
+        thread.poster_id = isStaff ? generatePosterId(thread.ip_hash, thread.id) : null;
         thread.is_op = true;
 
         // HTTP Caching & 304 Not Modified based on thread bumped_at, lock/pin status, and reactions
@@ -2169,7 +2172,7 @@ app.get('/api/thread', (req, res) => {
         `).all(threadId);
 
         for (const r of replies) {
-            r.poster_id = generatePosterId(r.ip_hash, thread.id);
+            r.poster_id = isStaff ? generatePosterId(r.ip_hash, thread.id) : null;
             r.is_op = Boolean(r.ip_hash && thread.ip_hash && r.ip_hash === thread.ip_hash);
         }
 
@@ -2314,6 +2317,7 @@ app.post('/api/threads', (req, res) => {
             `).run(id, board, posterName, posterSubject, comment.trim(), posterMedia, ipHash, userId, role, displayTitle, now, now);
         }
 
+        const isStaff = req.user && (req.user.role === 'admin' || req.user.role === 'moderator' || req.user.role === 'mod');
         const created = {
             id,
             board,
@@ -2322,7 +2326,7 @@ app.post('/api/threads', (req, res) => {
             comment: comment.trim(),
             media_url: posterMedia,
             ip_hash: ipHash,
-            poster_id: generatePosterId(ipHash, id),
+            poster_id: isStaff ? generatePosterId(ipHash, id) : null,
             is_op: true,
             user_id: userId,
             role,
@@ -2472,6 +2476,7 @@ app.post('/api/replies', (req, res) => {
         }
 
         // Construct reply in memory - eliminates redundant read query (Audit Recommendation A.5)
+        const isStaff = req.user && (req.user.role === 'admin' || req.user.role === 'moderator' || req.user.role === 'mod');
         const created = {
             id,
             thread_id,
@@ -2480,7 +2485,7 @@ app.post('/api/replies', (req, res) => {
             comment: comment.trim(),
             media_url: posterMedia,
             ip_hash: ipHash,
-            poster_id: generatePosterId(ipHash, thread_id),
+            poster_id: isStaff ? generatePosterId(ipHash, thread_id) : null,
             is_op: Boolean(ipHash && thread.ip_hash && ipHash === thread.ip_hash),
             user_id: userId,
             role,

@@ -210,11 +210,11 @@ async function generatePosterIdEdge(ipHash, threadId) {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 8);
 }
 
-async function attachPosterIdsEdge(postList, fallbackThreadId = null) {
+async function attachPosterIdsEdge(postList, fallbackThreadId = null, isStaff = false) {
     if (!Array.isArray(postList)) return postList;
     await Promise.all(postList.map(async (p) => {
         const tid = p.thread_id || fallbackThreadId || p.id;
-        p.poster_id = await generatePosterIdEdge(p.ip_hash || 'anon', tid);
+        p.poster_id = isStaff ? await generatePosterIdEdge(p.ip_hash || 'anon', tid) : null;
         if (!p.reactions) p.reactions = '{}';
     }));
     return postList;
@@ -497,7 +497,9 @@ export async function onRequest(context) {
     }
 
     // Cloudflare Edge Cache API (Audit Recommendation B.1)
-    const isPublicCacheable = method === 'GET' && (
+    // Guest public requests without Authorization header are edge-cacheable; authenticated/staff requests bypass edge cache
+    const hasAuthHeader = Boolean(request.headers.get('Authorization'));
+    const isPublicCacheable = !hasAuthHeader && method === 'GET' && (
         path[0] === 'threads' || 
         (path[0] === 'thread' && !url.searchParams.has('since')) ||
         path[0] === 'boards'
@@ -544,6 +546,7 @@ export async function onRequest(context) {
         }
     }
     const user = await getUser(request, db);
+    const isStaff = user && (user.role === 'admin' || user.role === 'moderator' || user.role === 'mod');
 
     try {
         // Offloaded Image & Video Upload Proxy (Catbox.moe permanent primary with userhash + ImgBB fallback for images)
@@ -1883,7 +1886,7 @@ export async function onRequest(context) {
             const threads = list.results || [];
 
             await Promise.all(threads.map(async (th) => {
-                th.poster_id = await generatePosterIdEdge(th.ip_hash || 'anon', th.id);
+                th.poster_id = isStaff ? await generatePosterIdEdge(th.ip_hash || 'anon', th.id) : null;
                 if (!th.reactions) th.reactions = '{}';
                 th.preview_replies = [];
                 if (isCatalog && th.comment && th.comment.length > 220) {
@@ -1911,7 +1914,7 @@ export async function onRequest(context) {
                 const replyMap = new Map();
                 const prevResults = prev.results || [];
                 await Promise.all(prevResults.map(async (r) => {
-                    r.poster_id = await generatePosterIdEdge(r.ip_hash || 'anon', r.thread_id);
+                    r.poster_id = isStaff ? await generatePosterIdEdge(r.ip_hash || 'anon', r.thread_id) : null;
                     if (!r.reactions) r.reactions = '{}';
                 }));
                 for (const r of prevResults) {
@@ -1949,7 +1952,7 @@ export async function onRequest(context) {
             // Delta Polling Optimization (Audit Recommendation C.2)
             if (since > 0) {
                 const repliesRes = await db.prepare('SELECT * FROM replies WHERE thread_id = ? AND created_at > ? ORDER BY created_at ASC').bind(id, since).all();
-                const replies = await attachPosterIdsEdge(repliesRes.results || [], id);
+                const replies = await attachPosterIdsEdge(repliesRes.results || [], id, isStaff);
                 if (replies.length === 0) {
                     return json({
                         success: true,
@@ -1970,7 +1973,7 @@ export async function onRequest(context) {
 
             const thread = await db.prepare('SELECT * FROM threads WHERE id = ?').bind(id).first();
             if (!thread) return json({ error: 'Not found' }, 404);
-            thread.poster_id = await generatePosterIdEdge(thread.ip_hash || 'anon', thread.id);
+            thread.poster_id = isStaff ? await generatePosterIdEdge(thread.ip_hash || 'anon', thread.id) : null;
             if (!thread.reactions) thread.reactions = '{}';
 
             const etag = `W/"tr-${thread.id}-${thread.bumped_at}-${thread.is_pinned}-${thread.is_locked}"`;
@@ -1987,7 +1990,7 @@ export async function onRequest(context) {
             }
 
             const rawReplies = (await db.prepare('SELECT * FROM replies WHERE thread_id = ? ORDER BY created_at ASC').bind(id).all()).results || [];
-            const replies = await attachPosterIdsEdge(rawReplies, id);
+            const replies = await attachPosterIdsEdge(rawReplies, id, isStaff);
             const totalReplies = thread.reply_count || replies.length;
 
             const responseData = { 
@@ -2101,7 +2104,7 @@ export async function onRequest(context) {
                 comment: comment.trim(),
                 media_url: posterMedia,
                 ip_hash: clientIp,
-                poster_id: await generatePosterIdEdge(clientIp, id),
+                poster_id: isStaff ? await generatePosterIdEdge(clientIp, id) : null,
                 user_id: user?.user_id || null,
                 role: visibleRole,
                 display_title: visibleTitle,
@@ -2246,7 +2249,7 @@ export async function onRequest(context) {
                 comment: comment.trim(),
                 media_url: posterMedia,
                 ip_hash: clientIp,
-                poster_id: await generatePosterIdEdge(clientIp, thread_id),
+                poster_id: isStaff ? await generatePosterIdEdge(clientIp, thread_id) : null,
                 user_id: user?.user_id || null,
                 role: visibleRole,
                 display_title: visibleTitle,
